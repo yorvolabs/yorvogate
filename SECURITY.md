@@ -29,7 +29,9 @@ Please give us a reasonable chance to fix the issue before you disclose it publi
 
 ## Supported versions
 
-YorvoGate is in early development and hasn't had a release yet. Until 1.0, security fixes go only into the latest code on the `main` branch.
+Until 1.0, security fixes go into the latest release only: update to it. After 1.0, the latest minor version receives security fixes, and the previous minor receives them for six months after its successor is released.
+
+Releases are signed: check the signature names the version you install (see "Installing" in the [README](README.md)).
 
 ## Scope
 

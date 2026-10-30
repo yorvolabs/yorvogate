@@ -88,6 +88,25 @@ jobs:
       - name: ShellCheck
         run: docker run --rm -v "$PWD:/m:ro" koalaman/shellcheck-alpine:v0.11.0 sh -c 'shellcheck -s sh $(find /m -name "*.sh")'
 
+  image:
+    name: Image
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build it
+        run: docker build --pull --build-arg VERSION=ci -t yorvogate:ci .
+      - name: It runs, as the user it says, with no shell
+        run: |
+          [ "$(docker run --rm yorvogate:ci version)" = "yorvogate ci" ]
+          [ "$(docker image inspect yorvogate:ci --format '{{.Config.User}}')" = "65532:65532" ]
+          ! docker run --rm --entrypoint sh yorvogate:ci -c true 2>/dev/null
+      - name: No known flaw with a fix in it
+        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock:ro aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c image --quiet --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 yorvogate:ci
+
   mutation:
     name: Mutation testing
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
