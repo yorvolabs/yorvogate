@@ -13,7 +13,15 @@ failed=0
 
 say() { printf '%s\n' "$*"; }
 ok() { passed=$((passed + 1)); say "  ok   $1"; }
-ko() { failed=$((failed + 1)); say "  FAIL $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/       /' | head -5; }
+ko() {
+	failed=$((failed + 1))
+	say "  FAIL $1"
+	[ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/       /' | head -5
+	# On GitHub, each failure is an annotation too: readable without the job's log.
+	if [ "${GITHUB_ACTIONS:-}" = true ]; then
+		printf '::error title=Conformance::%s: %s\n' "$1" "$(printf '%s' "${2:-}" | tr '\n' ' ' | cut -c1-300)"
+	fi
+}
 
 # The real Docker, straight (to set up and to check what exists)
 direct() { env -u DOCKER_HOST -u DOCKER_CONFIG docker "$@"; }
@@ -81,6 +89,7 @@ cleanup() {
 trap cleanup EXIT
 cleanup
 
+say "== Docker $(direct version --format '{{.Server.Version}} (API {{.Server.APIVersion}})'), Compose $(docker compose version --short)"
 say "== Setting up: YorvoGate, scopes jane and blog"
 mkdir -p "$dir/scopes"
 for scope in jane blog; do
