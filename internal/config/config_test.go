@@ -44,6 +44,11 @@ func TestAValidConfiguration(t *testing.T) {
 		t.Error("allow: write allows writes, read only reads, nothing else")
 	}
 
+	withContainers := strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {capabilities: [NET_BIND_SERVICE], drop_all_capabilities: true, no_new_privileges: true, max_memory: 1073741824, max_pids: 512, protected_images: [quire-sites/]}", 1)
+	if _, err := Parse([]byte(withContainers)); err != nil {
+		t.Errorf("a scoped listener's containers: %v", err)
+	}
+
 	if n, _ := c.Listeners[1].Network(); n != [2]string{"unix", "/run/yorvogate/sites.sock"} {
 		t.Errorf("network %v", n)
 	}
@@ -51,29 +56,37 @@ func TestAValidConfiguration(t *testing.T) {
 
 func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 	cases := map[string]string{
-		"an unknown key":             strings.Replace(valid, "upstream:", "upstreem: x\nupstream:", 1),
-		"an unknown listener key":    strings.Replace(valid, "mode: scoped", "mode: scoped\n    tls: true", 1),
-		"two documents":              valid + "\n---\nupstream: unix:///x\n",
-		"upstream over TCP":          strings.Replace(valid, "unix:///var/run/docker.sock", "tcp://127.0.0.1:2375", 1),
-		"upstream not absolute":      strings.Replace(valid, "unix:///var/run/docker.sock", "unix://docker.sock", 1),
-		"an unknown mode":            strings.Replace(valid, "mode: scoped", "mode: open", 1),
-		"an unknown group":           strings.Replace(valid, "exec: write", "everything: write", 1),
-		"an unknown access":          strings.Replace(valid, "exec: write", "exec: all", 1),
-		"scopes on a trusted one":    strings.Replace(valid, "mode: trusted", "mode: trusted\n    scopes: /x", 1),
-		"allow on a scoped one":      strings.Replace(valid, "mode: scoped", "mode: scoped\n    allow: {system: read}", 1),
-		"relative scopes":            strings.Replace(valid, "/etc/yorvogate/scopes", "scopes", 1),
-		"scopes not clean":           strings.Replace(valid, "/etc/yorvogate/scopes", "/etc/../scopes", 1),
-		"the same address twice":     strings.Replace(valid, "unix:///run/yorvogate/sites.sock", "tcp://0.0.0.0:2375", 1),
-		"the same name twice":        strings.Replace(valid, "name: sites", "name: server", 1),
-		"a name with spaces":         strings.Replace(valid, "name: sites", "name: my sites", 1),
-		"an address without a port":  strings.Replace(valid, "tcp://0.0.0.0:2375", "tcp://0.0.0.0", 1),
-		"an http address":            strings.Replace(valid, "tcp://0.0.0.0:2375", "http://0.0.0.0:2375", 1),
-		"a version newer than known": valid + "api: {max: '1.57'}\n",
-		"a version older than known": valid + "api: {min: '1.40'}\n",
-		"min above max":              valid + "api: {min: '1.50', max: '1.45'}\n",
-		"a version that isn't one":   valid + "api: {min: 'latest'}\n",
-		"a tiny body limit":          valid + "body_limit: 10\n",
-		"no listeners":               "upstream: unix:///var/run/docker.sock\n",
+		"an unknown key":                 strings.Replace(valid, "upstream:", "upstreem: x\nupstream:", 1),
+		"an unknown listener key":        strings.Replace(valid, "mode: scoped", "mode: scoped\n    tls: true", 1),
+		"two documents":                  valid + "\n---\nupstream: unix:///x\n",
+		"upstream over TCP":              strings.Replace(valid, "unix:///var/run/docker.sock", "tcp://127.0.0.1:2375", 1),
+		"upstream not absolute":          strings.Replace(valid, "unix:///var/run/docker.sock", "unix://docker.sock", 1),
+		"an unknown mode":                strings.Replace(valid, "mode: scoped", "mode: open", 1),
+		"an unknown group":               strings.Replace(valid, "exec: write", "everything: write", 1),
+		"an unknown access":              strings.Replace(valid, "exec: write", "exec: all", 1),
+		"scopes on a trusted one":        strings.Replace(valid, "mode: trusted", "mode: trusted\n    scopes: /x", 1),
+		"allow on a scoped one":          strings.Replace(valid, "mode: scoped", "mode: scoped\n    allow: {system: read}", 1),
+		"relative scopes":                strings.Replace(valid, "/etc/yorvogate/scopes", "scopes", 1),
+		"scopes not clean":               strings.Replace(valid, "/etc/yorvogate/scopes", "/etc/../scopes", 1),
+		"the same address twice":         strings.Replace(valid, "unix:///run/yorvogate/sites.sock", "tcp://0.0.0.0:2375", 1),
+		"the same name twice":            strings.Replace(valid, "name: sites", "name: server", 1),
+		"a name with spaces":             strings.Replace(valid, "name: sites", "name: my sites", 1),
+		"an address without a port":      strings.Replace(valid, "tcp://0.0.0.0:2375", "tcp://0.0.0.0", 1),
+		"an http address":                strings.Replace(valid, "tcp://0.0.0.0:2375", "http://0.0.0.0:2375", 1),
+		"a version newer than known":     valid + "api: {max: '1.57'}\n",
+		"a version older than known":     valid + "api: {min: '1.40'}\n",
+		"min above max":                  valid + "api: {min: '1.50', max: '1.45'}\n",
+		"a version that isn't one":       valid + "api: {min: 'latest'}\n",
+		"a tiny body limit":              valid + "body_limit: 10\n",
+		"no listeners":                   "upstream: unix:///var/run/docker.sock\n",
+		"containers on a trusted one":    strings.Replace(valid, "mode: trusted", "mode: trusted\n    containers: {max_pids: 10}", 1),
+		"a capability with CAP_":         strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {capabilities: [CAP_CHOWN]}", 1),
+		"all capabilities":               strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {capabilities: [ALL]}", 1),
+		"a lowercase capability":         strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {capabilities: [chown]}", 1),
+		"too little memory":              strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {max_memory: 1024}", 1),
+		"negative pids":                  strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {max_pids: -1}", 1),
+		"a protected image not a prefix": strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {protected_images: [quire-sites]}", 1),
+		"an unknown container key":       strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {privileged: true}", 1),
 	}
 
 	for name, content := range cases {

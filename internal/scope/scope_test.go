@@ -89,15 +89,22 @@ func TestChangesNeedNoRestart(t *testing.T) {
 
 func TestScopeFilesAreChecked(t *testing.T) {
 	cases := map[string]string{
-		"an unknown key":        strings.Replace(jane(), `"prefixes"`, `"privileged": true, "prefixes"`, 1),
-		"two objects":           jane() + jane(),
-		"a token in clear":      strings.Replace(jane(), digest(token), token, 1),
-		"an uppercase digest":   strings.Replace(jane(), digest(token), strings.ToUpper(digest(token)), 1),
-		"no owner label":        strings.Replace(jane(), `"com.docker.compose.project"`, `""`, 1),
-		"an owner value of any": strings.Replace(jane(), `"value": "jane"`, `"value": "*"`, 1),
-		"no prefixes":           strings.Replace(jane(), `["jane-", "jane_"]`, `[]`, 1),
-		"a prefix of any name":  strings.Replace(jane(), `"jane-"`, `"jane"`, 1),
-		"an empty prefix":       strings.Replace(jane(), `"jane-"`, `""`, 1),
+		"an unknown key":         strings.Replace(jane(), `"prefixes"`, `"privileged": true, "prefixes"`, 1),
+		"two objects":            jane() + jane(),
+		"a token in clear":       strings.Replace(jane(), digest(token), token, 1),
+		"an uppercase digest":    strings.Replace(jane(), digest(token), strings.ToUpper(digest(token)), 1),
+		"no owner label":         strings.Replace(jane(), `"com.docker.compose.project"`, `""`, 1),
+		"an owner value of any":  strings.Replace(jane(), `"value": "jane"`, `"value": "*"`, 1),
+		"no prefixes":            strings.Replace(jane(), `["jane-", "jane_"]`, `[]`, 1),
+		"a prefix of any name":   strings.Replace(jane(), `"jane-"`, `"jane"`, 1),
+		"an empty prefix":        strings.Replace(jane(), `"jane-"`, `""`, 1),
+		"an image not a prefix":  strings.Replace(jane(), `"prefixes"`, `"images": ["quire-sites/jane"], "prefixes"`, 1),
+		"a container pattern":    strings.Replace(jane(), `"prefixes"`, `"containers": ["*"], "prefixes"`, 1),
+		"a network pattern":      strings.Replace(jane(), `"prefixes"`, `"networks": {"quire-*": {}}, "prefixes"`, 1),
+		"an alias with a space":  strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"aliases": ["a b"]}}, "prefixes"`, 1),
+		"an address of a range":  strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"addresses": ["10.0.0.0/8"]}}, "prefixes"`, 1),
+		"an address unshortened": strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"addresses": ["2001:db8:0:0::1"]}}, "prefixes"`, 1),
+		"a network key unknown":  strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"mac": "x"}}, "prefixes"`, 1),
 	}
 
 	for name, content := range cases {
@@ -131,5 +138,27 @@ func TestOnlyPlainFilesOnlyItsOwnerWrites(t *testing.T) {
 
 	if _, err := NewStore(dir).Authenticate("linked", token); err == nil {
 		t.Error("a link")
+	}
+}
+
+func TestWhatAScopeMayUse(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"images": ["quire-sites/jane/"], "containers": ["buildx_buildkit_jane-*", "jane-tools"], "networks": {"quire-link-jane": {"aliases": ["jane.example.quire.internal"], "addresses": ["10.213.0.4"]}}, "prefixes"`, 1))
+
+	s, err := NewStore(dir).Authenticate("jane", token)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !s.Uses("buildx_buildkit_jane-0") || !s.Uses("jane-tools") || s.Uses("buildx_buildkit_jane-") || s.Uses("jane-tools-2") || s.Uses("buildx_buildkit_blog-0") {
+		t.Error("uses only the containers its scope names")
+	}
+
+	if !s.OwnsImage("quire-sites/jane/php-prod") || s.OwnsImage("quire-sites/jane/") || s.OwnsImage("quire-sites/janet/php") || s.OwnsImage("quire-sites/blog/php") {
+		t.Error("owns only images in its namespaces")
+	}
+
+	if s.Networks["quire-link-jane"].Addresses[0] != "10.213.0.4" {
+		t.Error("its shared network")
 	}
 }

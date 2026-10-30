@@ -30,6 +30,7 @@ type Gate struct {
 	config   *config.Config
 	listener config.Listener
 	scopes   *scope.Store
+	docker   *Docker
 	upstream *Upstream
 	log      *slog.Logger
 }
@@ -39,6 +40,7 @@ func New(c *config.Config, l config.Listener, upstream *Upstream, log *slog.Logg
 	g := &Gate{config: c, listener: l, upstream: upstream, log: log.With("listener", l.Name)}
 	if l.Mode == config.Scoped {
 		g.scopes = scope.NewStore(l.Scopes)
+		g.docker = NewDocker(c.UpstreamSocket())
 	}
 
 	return g
@@ -89,14 +91,14 @@ func (g *Gate) decide(r *http.Request, entry *slog.Logger) (*http.Request, error
 		return nil, refuse(http.StatusBadRequest, "%v", err)
 	}
 
-	if req.Endpoint.Upgrade && !upgrading(r) {
-		return nil, refuse(http.StatusBadRequest, "%s is a stream: it's allowed only as an HTTP upgrade", req.Endpoint.Name)
-	}
-
 	switch g.listener.Mode {
 	case config.Trusted:
 		if !g.listener.Allows(req.Endpoint) {
 			return nil, refuse(http.StatusForbidden, "%s isn't allowed on this listener", req.Endpoint.Name)
+		}
+
+		if err := upgradeOnly(r, req.Endpoint); err != nil {
+			return nil, err
 		}
 
 		entry.Info("allowed", "endpoint", req.Endpoint.Name)
@@ -120,14 +122,34 @@ func (g *Gate) decide(r *http.Request, entry *slog.Logger) (*http.Request, error
 			return nil, err
 		}
 
-		checked, err := scoped(req, s, body)
+		decision := &scoped{
+			ctx: r.Context(), req: req, scope: s, policy: g.listener.Containers, docker: g.docker,
+			path: r.URL.EscapedPath(), query: r.URL.Query(), upgrading: upgrading(r),
+		}
+		if req.Version != nil {
+			decision.version = req.Version.String()
+		}
+
+		checked, err := decision.decide(body)
 		if err != nil {
 			return nil, err
 		}
 
-		entry.Info("allowed", "endpoint", req.Endpoint.Name)
+		if err := upgradeOnly(r, req.Endpoint); err != nil {
+			return nil, err
+		}
 
-		return withBody(withoutGateHeaders(r), checked), nil
+		entry.Info("allowed", "endpoint", req.Endpoint.Name)
+		out := withoutGateHeaders(r)
+		out.URL.Path, out.URL.RawPath = decision.path, ""
+		out.URL.RawQuery = decision.query.Encode()
+
+		// A stream (an archive put into one of its containers) goes as it came.
+		if req.Endpoint.Stream {
+			return out, nil
+		}
+
+		return withBody(out, checked), nil
 	}
 
 	return nil, refuse(http.StatusInternalServerError, "the listener has no mode")
@@ -153,19 +175,14 @@ func (g *Gate) readBody(r *http.Request, e *route.Endpoint) ([]byte, error) {
 	return body, nil
 }
 
-// scoped is a scoped listener's policy: what a scope may do, and the body to forward. Until the
-// rules for each endpoint are in place, a scope may only ask whether Docker answers, and its version.
-func scoped(req route.Request, s *scope.Scope, body []byte) ([]byte, error) {
-	switch req.Endpoint.Name {
-	case "system.ping", "system.version":
-		if len(body) != 0 {
-			return nil, refuse(http.StatusBadRequest, "%s has no body", req.Endpoint.Name)
-		}
-
-		return nil, nil
+// upgradeOnly refuses a stream asked for without an HTTP upgrade: YorvoGate passes streams both ways
+// only once Docker has switched protocols.
+func upgradeOnly(r *http.Request, e *route.Endpoint) error {
+	if e.Upgrade && !upgrading(r) {
+		return refuse(http.StatusBadRequest, "%s is a stream: it's allowed only as an HTTP upgrade", e.Name)
 	}
 
-	return nil, refuse(http.StatusForbidden, "%s isn't allowed for scope %s", req.Endpoint.Name, s.Name)
+	return nil
 }
 
 // upgrading tells whether a request asks for an HTTP upgrade (Docker's hijacked streams).
