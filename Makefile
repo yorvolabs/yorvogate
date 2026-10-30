@@ -2,8 +2,14 @@
 
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.9.0
+GREMLINS := github.com/go-gremlins/gremlins/cmd/gremlins@v0.5.1
 
-.PHONY: check format lint test vulnerabilities build
+# How long each fuzz target runs (make fuzz FUZZTIME=10m)
+FUZZTIME ?= 30s
+# The least share of mutants the tests must kill, per package
+EFFICACY ?= 90
+
+.PHONY: check format lint test vulnerabilities build fuzz mutation
 
 check: format lint test vulnerabilities
 
@@ -24,3 +30,18 @@ vulnerabilities:
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/yorvogate ./cmd/yorvogate
+
+# Each fuzz target in turn (Go fuzzes one target at a time)
+fuzz:
+	go test -run '^$$' -fuzz '^FuzzParse$$' -fuzztime $(FUZZTIME) ./internal/route
+	go test -run '^$$' -fuzz '^FuzzCreateContainer$$' -fuzztime $(FUZZTIME) ./internal/gate
+	go test -run '^$$' -fuzz '^FuzzListFilters$$' -fuzztime $(FUZZTIME) ./internal/gate
+	go test -run '^$$' -fuzz '^FuzzArchiveNames$$' -fuzztime $(FUZZTIME) ./internal/gate
+
+# Mutation testing: each package's tests must kill at least EFFICACY% of the mutants they cover. One
+# worker: in parallel, the gate's tests slow each other down, and mutants that time out don't count
+# (efficacy looks higher than it is). Without Go's test cache, which leaves gremlins no coverage.
+mutation:
+	for p in ./internal/route ./internal/config ./internal/scope ./internal/gate ./cmd/yorvogate; do \
+		GOFLAGS=-count=1 go run $(GREMLINS) unleash --workers 1 --timeout-coefficient 10 --threshold-efficacy $(EFFICACY) $$p || exit 1; \
+	done

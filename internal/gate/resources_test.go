@@ -133,10 +133,18 @@ func TestImages(t *testing.T) {
 	blogID := "sha256:" + strings.Repeat("3", 64)
 	leftover := strings.Repeat("4", 12)
 
-	// The list: another scope's images and nameless leftovers aren't in it.
+	// The list: another scope's images and nameless leftovers aren't in it; a shared image another
+	// scope also tagged is, without that scope's name.
 	status, answer := send(t, server, "GET", "/v1.56/images/json", "", asJane)
-	if status != 200 || strings.Contains(answer, "blog") || strings.Contains(answer, strings.Repeat("4", 64)) || !strings.Contains(answer, "alpine:3.22") || !strings.Contains(answer, "quire-sites/jane/php-prod") {
+	if status != 200 || strings.Contains(answer, "blog") || strings.Contains(answer, strings.Repeat("4", 64)) || !strings.Contains(answer, "alpine:3.22") || !strings.Contains(answer, "quire-sites/jane/php-prod") || !strings.Contains(answer, "busybox:1") {
 		t.Errorf("list: %d %s", status, answer)
+	}
+
+	// Tagging a shared image into a namespace doesn't take it from anyone else.
+	for _, path := range []string{"/v1.56/images/busybox:1/json", "/v1.56/images/sha256:" + strings.Repeat("5", 64) + "/json"} {
+		if status, answer := send(t, server, "GET", path, "", asJane); status != 200 {
+			t.Errorf("%s: %d %s", path, status, answer)
+		}
 	}
 
 	for _, c := range [][3]string{
@@ -183,7 +191,7 @@ type entry struct {
 	link          bool
 }
 
-func archive(t *testing.T, entries ...entry) []byte {
+func archive(t testing.TB, entries ...entry) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	w := tar.NewWriter(&buf)
@@ -266,5 +274,125 @@ func TestLoadingAnArchiveChecksItsNames(t *testing.T) {
 
 	if d.count() != before {
 		t.Errorf("%d archives reached Docker", d.count()-before)
+	}
+}
+
+// The edges of each limit, and what a listener without limits allows.
+func TestLimitsAtTheirEdges(t *testing.T) {
+	d := startDocker(t)
+	server := gate(t, d, "sites")
+	create := func(body map[string]any) (int, string) {
+		return send(t, server, "POST", "/v1.56/containers/create?name=jane-edge-1", encode(body), asJane)
+	}
+
+	for name, body := range map[string]map[string]any{
+		"memory at the limit":         set(compose(), "HostConfig.Memory", 1<<30),
+		"processes at the limit":      set(compose(), "HostConfig.PidsLimit", 512),
+		"its own volume, bound":       set(compose(), "HostConfig.Binds", []any{"jane_data:/data:ro"}),
+		"the local driver, named":     set(compose(), "HostConfig.Mounts", []any{map[string]any{"Type": "volume", "Source": "jane_data", "Target": "/x", "VolumeOptions": map[string]any{"DriverConfig": map[string]any{"Name": "local"}}}}),
+		"a subpath inside the volume": set(compose(), "HostConfig.Mounts", []any{map[string]any{"Type": "volume", "Source": "jane_data", "Target": "/x", "VolumeOptions": map[string]any{"Subpath": "uploads/2026"}}}),
+		"an anonymous volume":         set(compose(), "HostConfig.Mounts", []any{map[string]any{"Type": "volume", "Target": "/cache"}}),
+		"its own cgroup namespace":    set(compose(), "HostConfig.CgroupnsMode", "private"),
+	} {
+		if status, answer := create(body); status != 200 {
+			t.Errorf("%s: %d %s", name, status, answer)
+		}
+	}
+
+	for name, body := range map[string]map[string]any{
+		"memory a byte over":           set(compose(), "HostConfig.Memory", 1<<30+1),
+		"processes one over":           set(compose(), "HostConfig.PidsLimit", 513),
+		"another volume driver":        set(compose(), "HostConfig.Mounts", []any{map[string]any{"Type": "volume", "Source": "jane_data", "Target": "/x", "VolumeOptions": map[string]any{"DriverConfig": map[string]any{"Name": "nfs"}}}}),
+		"an absolute subpath":          set(compose(), "HostConfig.Mounts", []any{map[string]any{"Type": "volume", "Source": "jane_data", "Target": "/x", "VolumeOptions": map[string]any{"Subpath": "/etc"}}}),
+		"a subpath that isn't clean":   set(compose(), "HostConfig.Mounts", []any{map[string]any{"Type": "volume", "Source": "jane_data", "Target": "/x", "VolumeOptions": map[string]any{"Subpath": "a/../../b"}}}),
+		"a target that isn't absolute": set(compose(), "HostConfig.Mounts", []any{map[string]any{"Type": "tmpfs", "Target": "tmp"}}),
+		"a tmpfs with a source":        set(compose(), "HostConfig.Mounts", []any{map[string]any{"Type": "tmpfs", "Source": "/etc", "Target": "/x"}}),
+		"unlimited processes (0)":      set(compose(), "HostConfig.PidsLimit", 0),
+		"its prefix, another's volume": set(compose(), "HostConfig.Mounts", []any{map[string]any{"Type": "volume", "Source": "jane_stolen", "Target": "/x"}}),
+		"the same, bound":              set(compose(), "HostConfig.Binds", []any{"jane_stolen:/x"}),
+	} {
+		if status, answer := create(body); status != http.StatusForbidden {
+			t.Errorf("%s: %d %s", name, status, answer)
+		}
+	}
+
+	for body, want := range map[string]int{
+		`{"Memory":1073741824}`: 200,
+		`{"PidsLimit":512}`:     200,
+		`{"Memory":1073741825}`: 403,
+		`{"PidsLimit":513}`:     403,
+		`{"PidsLimit":0}`:       403, // 0 is unlimited, to Docker
+		`{"Memory":-1}`:         403,
+	} {
+		if status, answer := send(t, server, "POST", "/v1.56/containers/jane-php-1/update", body, asJane); status != want {
+			t.Errorf("update %s: %d %s", body, status, answer)
+		}
+	}
+
+	// A listener with no limits set: Docker's defaults, but never the host's.
+	loose := gate(t, d, "loose")
+	free := set(set(set(set(compose(), "HostConfig.Memory", nil), "HostConfig.PidsLimit", nil), "HostConfig.CapDrop", nil), "HostConfig.SecurityOpt", nil)
+	free = set(free, "HostConfig.CapAdd", nil)
+	free = set(free, "HostConfig.Ulimits", nil)
+
+	if status, answer := send(t, loose, "POST", "/v1.56/containers/create?name=jane-free-1", encode(free), asJane); status != 200 {
+		t.Errorf("no limits where none are asked: %d %s", status, answer)
+	}
+
+	if status, answer := send(t, loose, "POST", "/v1.56/containers/jane-php-1/update", `{"PidsLimit":-1,"Memory":8589934592}`, asJane); status != 200 {
+		t.Errorf("no limits where none are asked, updated: %d %s", status, answer)
+	}
+
+	for name, body := range map[string]map[string]any{
+		"a capability":      set(free, "HostConfig.CapAdd", []any{"NET_BIND_SERVICE"}),
+		"privileged":        set(free, "HostConfig.Privileged", true),
+		"a ulimit":          set(free, "HostConfig.Ulimits", []any{map[string]any{"Name": "nofile", "Soft": 1, "Hard": 1}}),
+		"a log driver":      set(free, "HostConfig.LogConfig", map[string]any{"Type": "syslog"}),
+		"a security option": set(free, "HostConfig.SecurityOpt", []any{"label=disable"}),
+	} {
+		if status, answer := send(t, loose, "POST", "/v1.56/containers/create?name=jane-free-1", encode(body), asJane); status != http.StatusForbidden {
+			t.Errorf("%s, with no list: %d %s", name, status, answer)
+		}
+	}
+}
+
+func TestEdgesOfImagesAndArchives(t *testing.T) {
+	d := startDocker(t)
+	server := gate(t, d, "sites")
+
+	// Another scope's image, by a name that isn't in its namespace (a digest reference)
+	ref := "mirror.example/anything@sha256:" + strings.Repeat("3", 64)
+	if status, answer := send(t, server, "GET", "/v1.56/images/"+ref+"/json", "", asJane); status != http.StatusNotFound {
+		t.Errorf("another's image by digest: %d %s", status, answer)
+	}
+
+	// A build's leftover, by a digest reference: anyone's, so no one's to read
+	leftover := "anything@sha256:" + strings.Repeat("4", 64)
+	if status, answer := send(t, server, "GET", "/v1.56/images/"+leftover+"/json", "", asJane); status != http.StatusNotFound {
+		t.Errorf("a leftover by digest: %d %s", status, answer)
+	}
+
+	// An archive exactly at the limit is read; a byte over isn't.
+	exact := bytes.Repeat([]byte{0}, 1<<20)
+	if status, answer := send(t, server, "POST", "/v1.56/images/load", string(exact), asJane); status != 200 {
+		t.Errorf("at the limit: %d %s", status, answer)
+	}
+}
+
+func TestStreamsOnAScopedListener(t *testing.T) {
+	d := startDocker(t)
+	server := gate(t, d, "sites")
+
+	if status, answer := send(t, server, "POST", "/v1.56/exec/exec-jane/start", `{"Detach":false}`, asJane); status != http.StatusBadRequest || !strings.Contains(message(t, answer), "only as an HTTP upgrade") {
+		t.Errorf("attached, without an upgrade: %d %s", status, answer)
+	}
+
+	if status, _ := send(t, server, "POST", "/v1.56/exec/exec-jane/start", `{"Detach":true,"Tty":true}`, asJane); status != 200 || !strings.Contains(d.last().body, `"Detach":true`) || !strings.Contains(d.last().body, `"Tty":true`) {
+		t.Errorf("detached: %d, forwarded %s", status, d.last().body)
+	}
+
+	// "Connection: Upgrade" without an Upgrade header isn't an upgrade.
+	if status, answer := send(t, server, "POST", "/v1.56/containers/jane-php-1/attach?stream=1", "", map[string]string{"X-YorvoGate-Scope": "jane", "X-YorvoGate-Token": token, "Connection": "Upgrade"}); status != http.StatusBadRequest {
+		t.Errorf("half an upgrade: %d %s", status, answer)
 	}
 }

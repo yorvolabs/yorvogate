@@ -81,9 +81,18 @@ func TestChangesNeedNoRestart(t *testing.T) {
 		t.Errorf("the new token: %v", err)
 	}
 
+	// Changed without a new time (a copy that kept it): its size still tells
+	info, _ := os.Stat(path)
+	write(t, dir, "jane", strings.Replace(jane(), digest(token), digest("token-three"), 1)+"\n")
+	_ = os.Chtimes(path, info.ModTime(), info.ModTime())
+
+	if _, err := store.Authenticate("jane", "token-three"); err != nil {
+		t.Errorf("changed, same time: %v", err)
+	}
+
 	_ = os.Remove(path)
 
-	if _, err := store.Authenticate("jane", "a-new-token"); !errors.Is(err, ErrUnknown) {
+	if _, err := store.Authenticate("jane", "token-three"); !errors.Is(err, ErrUnknown) {
 		t.Error("a removed scope still works")
 	}
 }
@@ -185,5 +194,20 @@ func TestSubnets(t *testing.T) {
 	free, _ := NewStore(dir).Authenticate("free", token)
 	if free.HasSubnets() || !free.Contains(netip.MustParsePrefix("172.20.0.0/16")) {
 		t.Error("a scope without subnets takes Docker's")
+	}
+}
+
+// A DNS name is at most 253 characters (labels of up to 63).
+func TestAliasLengths(t *testing.T) {
+	label := strings.Repeat("a", 63)
+	longest := label + "." + label + "." + label + "." + strings.Repeat("b", 61)
+
+	for alias, valid := range map[string]bool{longest: true, longest + "b": false} {
+		dir := t.TempDir()
+		write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"aliases": ["`+alias+`"]}}, "prefixes"`, 1))
+
+		if _, err := NewStore(dir).Authenticate("jane", token); (err == nil) != valid {
+			t.Errorf("%d characters: %v", len(alias), err)
+		}
 	}
 }

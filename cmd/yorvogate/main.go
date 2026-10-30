@@ -64,7 +64,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 0
 	case "serve":
 		log := slog.New(slog.NewJSONHandler(stderr, nil))
-		if err := serve(*path, log); err != nil {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+
+		if err := serve(ctx, *path, log); err != nil {
 			log.Error("stopped", "error", err)
 
 			return 1
@@ -110,14 +113,12 @@ func check(path string, stdout io.Writer) error {
 	return nil
 }
 
-func serve(path string, log *slog.Logger) error {
+// serve listens until the context ends (SIGINT or SIGTERM), then lets requests finish.
+func serve(ctx context.Context, path string, log *slog.Logger) error {
 	c, err := config.Load(path)
 	if err != nil {
 		return err
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	upstream := gate.NewUpstream(c.UpstreamSocket(), log)
 	servers := make([]*http.Server, 0, len(c.Listeners))

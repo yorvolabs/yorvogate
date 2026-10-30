@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -300,8 +301,7 @@ func (c *Containers) check() error {
 }
 
 func (c *Containers) empty() bool {
-	return len(c.Capabilities)+len(c.SecurityOptions)+len(c.Runtimes)+len(c.LogDrivers)+len(c.Ulimits)+len(c.ProtectedImages) == 0 &&
-		!c.DropAllCapabilities && !c.NoNewPrivileges && c.MaxMemory == 0 && c.MaxPids == 0
+	return reflect.ValueOf(*c).IsZero()
 }
 
 // Network splits the address into Go's network and address ("tcp", "10.0.0.2:2375").

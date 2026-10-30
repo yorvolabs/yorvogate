@@ -32,6 +32,7 @@ func TestEndpointsAreFound(t *testing.T) {
 		{"POST", "/v1.56/networks/jane_default/connect", "network.connect", map[string]string{"id": "jane_default"}},
 		{"PUT", "/v1.56/containers/abc/archive", "container.archive-put", map[string]string{"id": "abc"}},
 		{"POST", "/v1.56/grpc", "session.grpc", nil},
+		{"GET", "/v1.56/containers/a!b~c/json", "container.inspect", map[string]string{"id": "a!b~c"}},
 	}
 
 	for _, c := range cases {
@@ -125,6 +126,10 @@ func TestEveryEndpointIsReachableAndInAGroup(t *testing.T) {
 }
 
 func TestVersions(t *testing.T) {
+	if v, err := ParseVersion("1.0"); err != nil || v != (Version{1, 0}) {
+		t.Errorf("1.0: %v %v", v, err)
+	}
+
 	v, err := ParseVersion("1.56")
 	if err != nil || v != (Version{1, 56}) || v.String() != "1.56" {
 		t.Fatalf("1.56: %v %v", v, err)

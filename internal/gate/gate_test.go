@@ -39,6 +39,7 @@ const (
 type docker struct {
 	mu        sync.Mutex
 	forwarded []seen
+	dropped   int
 	socket    string
 }
 
@@ -59,13 +60,15 @@ var (
 
 	containers = []fakeObject{{janePHP, "jane-php-1", jane}, {blogPHP, "blog-php-1", blog}, {janeBuilder, "buildx_buildkit_jane-0", nil}}
 	networks   = []fakeObject{{janeNet, "jane_default", jane}, {blogNet, "blog_default", blog}, {linkNet, "quire-link-jane", nil}}
-	volumes    = []fakeObject{{"jane_data", "jane_data", jane}, {"blog_data", "blog_data", blog}}
-	execs      = map[string]string{"exec-jane": janePHP, "exec-blog": blogPHP}
-	images     = []fakeImage{
+	// jane_stolen has jane's prefix but blog's label: a name doesn't make a volume jane's.
+	volumes = []fakeObject{{"jane_data", "jane_data", jane}, {"blog_data", "blog_data", blog}, {"jane_stolen", "jane_stolen", blog}}
+	execs   = map[string]string{"exec-jane": janePHP, "exec-blog": blogPHP}
+	images  = []fakeImage{
 		{"sha256:" + strings.Repeat("1", 64), []string{"alpine:3.22"}},
 		{"sha256:" + strings.Repeat("2", 64), []string{"quire-sites/jane/php-prod:latest"}},
 		{"sha256:" + strings.Repeat("3", 64), []string{"quire-sites/blog/php-prod:latest"}},
-		{"sha256:" + strings.Repeat("4", 64), nil}, // a build's leftover, anyone's
+		{"sha256:" + strings.Repeat("4", 64), nil},                                               // a build's leftover, anyone's
+		{"sha256:" + strings.Repeat("5", 64), []string{"busybox:1", "quire-sites/blog/tools:1"}}, // shared, also tagged by blog
 	}
 
 	inspection  = regexp.MustCompile(`^/v[0-9.]+/(containers|networks|volumes|exec)/([^/]+)(/json)?$`)
@@ -80,6 +83,10 @@ type fakeImage struct {
 func findImage(ref string) *fakeImage {
 	for i := range images {
 		img := &images[i]
+		if _, digest, ok := strings.Cut(ref, "@"); ok && digest == img.id {
+			return img
+		}
+
 		if img.id == ref || strings.TrimPrefix(img.id, "sha256:")[:12] == strings.TrimPrefix(ref, "sha256:") {
 			return img
 		}
@@ -104,7 +111,7 @@ func find(objects []fakeObject, key string) *fakeObject {
 	return nil
 }
 
-func startDocker(t *testing.T) *docker {
+func startDocker(t testing.TB) *docker {
 	t.Helper()
 	d := &docker{socket: filepath.Join(t.TempDir(), "docker.sock")}
 
@@ -123,6 +130,10 @@ func startDocker(t *testing.T) *docker {
 		body, _ := io.ReadAll(r.Body)
 		d.mu.Lock()
 		d.forwarded = append(d.forwarded, seen{r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Clone(), string(body)})
+		if len(d.forwarded) > 1000 {
+			d.forwarded = d.forwarded[len(d.forwarded)-100:]
+			d.dropped += 900
+		}
 		d.mu.Unlock()
 
 		if r.Header.Get("Upgrade") == "tcp" {
@@ -229,7 +240,7 @@ func (d *docker) count() int {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	return len(d.forwarded)
+	return d.dropped + len(d.forwarded)
 }
 
 const scopeFile = `{
@@ -243,7 +254,7 @@ const scopeFile = `{
 }`
 
 // gate serves one listener in front of the fake Docker.
-func gate(t *testing.T, d *docker, listener string) *httptest.Server {
+func gate(t testing.TB, d *docker, listener string) *httptest.Server {
 	t.Helper()
 	scopes := t.TempDir()
 	sum := sha256.Sum256([]byte(token))
@@ -273,6 +284,10 @@ listeners:
       max_memory: 1073741824
       max_pids: 512
       protected_images: [quire-sites/]
+  - name: loose
+    address: tcp://127.0.0.1:2377
+    mode: scoped
+    scopes: ` + scopes + `
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +310,7 @@ listeners:
 
 var asJane = map[string]string{"X-YorvoGate-Scope": "jane", "X-YorvoGate-Token": token}
 
-func send(t *testing.T, server *httptest.Server, method, path, body string, header map[string]string) (int, string) {
+func send(t testing.TB, server *httptest.Server, method, path, body string, header map[string]string) (int, string) {
 	t.Helper()
 	req, _ := http.NewRequest(method, server.URL+path, strings.NewReader(body))
 	for k, v := range header {

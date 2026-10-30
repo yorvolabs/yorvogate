@@ -4,7 +4,7 @@
 
 Access to the Docker API is root on the machine: whoever can create a container can create one that mounts `/`, runs privileged, or joins the host's namespaces. Proxies that filter by path (allow "containers", deny "swarm") don't change that, since every escape is in the body of a request they allow. YorvoGate reads every request, its body included, the way Docker reads it, and lets through only what its policy allows, **per client**: a client can be limited to its own containers, volumes, networks and images, created only in ways that can't reach the host.
 
-> **Status:** early development, nothing to install yet. What works: trusted listeners (endpoint allowlists), and scoped listeners with authenticated scopes and their rules for containers, exec, networks, volumes and images (image archives' names checked before they're loaded); real Docker Compose runs through it. Next: fuzzing, conformance tests against a real Docker in CI, and the first release.
+> **Status:** early development, nothing to install yet. What works: trusted listeners (endpoint allowlists), and scoped listeners with authenticated scopes and their rules for containers, exec, networks, volumes and images (image archives' names checked before they're loaded); real Docker Compose runs through it. Tested by fuzzing, mutation testing and a conformance suite against a real Docker in CI. Next: the first release.
 
 ## How it works
 
@@ -61,6 +61,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Everything runs in Docker:
 ```bash
 export HOST_UID=$(id -u) HOST_GID=$(id -g)
 docker compose -f compose.dev.yaml run --rm go make check   # format, vet, staticcheck, tests (race), govulncheck
+docker compose -f compose.dev.yaml run --rm go make build && test/conformance/run.sh   # against a real Docker
 ```
 
 ## Security
