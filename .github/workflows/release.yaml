@@ -56,7 +56,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for check in 'Format, vet, staticcheck, tests, govulncheck' 'Fuzzing' 'Conformance (a real Docker, real Compose)' 'Shell scripts' 'Image'; do
-            for attempt in $(seq 60); do
+            for _ in $(seq 60); do
               conclusion=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq ".check_runs | map(select(.name == \"$check\")) | sort_by(.started_at) | last | if . == null then \"missing\" else (.conclusion // \"running\") end")
               [ "$conclusion" = running ] || [ "$conclusion" = missing ] || break
               sleep 30
@@ -90,8 +90,21 @@ jobs:
           sbom: true
 
       - name: No known flaw with a fix in it
-        # Before it's signed: an image that fails here never checks out.
-        run: docker run --rm aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c image --quiet --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$IMAGE@${{ steps.image.outputs.digest }}"
+        # Before it's signed: an image that fails here never checks out. Signed in (a new package may
+        # still be private), its database from Google's mirror first (ghcr.io limits anonymous
+        # downloads), and what it said an annotation.
+        env:
+          TRIVY_USERNAME: ${{ github.actor }}
+          TRIVY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! out=$(docker run --rm -e TRIVY_USERNAME -e TRIVY_PASSWORD aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c image \
+              --quiet --db-repository mirror.gcr.io/aquasec/trivy-db,ghcr.io/aquasecurity/trivy-db \
+              --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 "$IMAGE@${{ steps.image.outputs.digest }}" 2>&1); then
+            printf '%s\n' "$out"
+            echo "::error title=Image scan::$(printf '%s' "$out" | grep -E 'FATAL|CRITICAL|HIGH|error' | head -5 | tr '\n' ' ' | cut -c1-900)"
+            exit 1
+          fi
+          printf '%s\n' "$out"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
