@@ -1,0 +1,21 @@
+# YorvoGate in front of Docker for an orchestrator and its tenants. See docs/configuration.md.
+upstream: unix:///var/run/docker.sock
+
+listeners:
+  # The orchestrator's own operations: trusted (it's root-equivalent anyway).
+  - name: orchestrator
+    address: tcp://10.10.0.2:2375
+    mode: trusted
+    allow:
+      system: read
+      containers: write
+      exec: write
+      images: write
+      networks: write
+      volumes: write
+
+  # Each tenant's Compose runs: one scope per tenant, in /etc/yorvogate/scopes/<name>.json.
+  - name: tenants
+    address: unix:///run/yorvogate/tenants.sock
+    mode: scoped
+    scopes: /etc/yorvogate/scopes
