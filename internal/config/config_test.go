@@ -30,7 +30,7 @@ func TestAValidConfiguration(t *testing.T) {
 		t.Errorf("versions %s–%s", lo, hi)
 	}
 
-	if c.BodyLimit != DefaultBodyLimit || c.UpstreamSocket() != "/var/run/docker.sock" {
+	if c.BodyLimit != DefaultBodyLimit || c.LoadLimit != DefaultLoadLimit || c.UpstreamSocket() != "/var/run/docker.sock" {
 		t.Errorf("defaults: %d %s", c.BodyLimit, c.UpstreamSocket())
 	}
 
@@ -87,6 +87,8 @@ func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 		"negative pids":                  strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {max_pids: -1}", 1),
 		"a protected image not a prefix": strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {protected_images: [quire-sites]}", 1),
 		"an unknown container key":       strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {privileged: true}", 1),
+		"a tiny load limit":              valid + "load_limit: 1024\n",
+		"a huge load limit":              valid + "load_limit: 300000000000\n",
 	}
 
 	for name, content := range cases {

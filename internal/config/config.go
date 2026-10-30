@@ -31,6 +31,9 @@ const (
 
 	// DefaultBodyLimit is the largest body read whole (a container's configuration is a few KiB).
 	DefaultBodyLimit = 1 << 20
+
+	// DefaultLoadLimit is the largest image archive a scope loads.
+	DefaultLoadLimit = 8 << 30
 )
 
 // Config is the whole configuration.
@@ -41,6 +44,9 @@ type Config struct {
 	API APIRange `yaml:"api"`
 	// BodyLimit is the largest request body read whole, in bytes.
 	BodyLimit int64 `yaml:"body_limit"`
+	// LoadLimit is the largest image archive a scope loads, in bytes: it's kept on disk while its
+	// names are checked.
+	LoadLimit int64 `yaml:"load_limit"`
 	// Listeners are where clients connect.
 	Listeners []Listener `yaml:"listeners"`
 
@@ -177,6 +183,14 @@ func (c *Config) check() error {
 
 	if c.BodyLimit < 4096 || c.BodyLimit > 64<<20 {
 		return errors.New("body_limit: between 4096 bytes and 64 MiB")
+	}
+
+	if c.LoadLimit == 0 {
+		c.LoadLimit = DefaultLoadLimit
+	}
+
+	if c.LoadLimit < 1<<20 || c.LoadLimit > 256<<30 {
+		return errors.New("load_limit: between 1 MiB and 256 GiB")
 	}
 
 	if len(c.Listeners) == 0 {

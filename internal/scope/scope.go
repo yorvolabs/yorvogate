@@ -42,6 +42,11 @@ type Scope struct {
 	// Containers are containers it may use that aren't its own by label (e.g. its BuildKit
 	// builder), by name; a trailing "*" matches any end ("buildx_buildkit_jane-*").
 	Containers []string `json:"containers,omitempty"`
+	// Subnets, when set, are where its networks' addresses must be: each network it creates names
+	// its subnet, inside one of these.
+	Subnets []string `json:"subnets,omitempty"`
+
+	subnets []netip.Prefix
 }
 
 // Network is what a scope may have on a shared network.
@@ -219,6 +224,15 @@ func (s *Scope) check() error {
 		}
 	}
 
+	for _, sn := range s.Subnets {
+		prefix, err := netip.ParsePrefix(sn)
+		if err != nil || prefix.Masked() != prefix || prefix.String() != sn {
+			return fmt.Errorf("subnets: %q must be a network in CIDR form (e.g. 10.213.0.32/27)", sn)
+		}
+
+		s.subnets = append(s.subnets, prefix)
+	}
+
 	for _, p := range s.Prefixes {
 		if !validPrefix.MatchString(p) {
 			return fmt.Errorf("prefixes: %q must end with a separator (- _ or .) so no other name starts with it", p)
@@ -233,6 +247,26 @@ func (s *Scope) Owns(labels map[string]string) bool {
 	value, ok := labels[s.Owner.Key]
 
 	return ok && value == s.Owner.Value
+}
+
+// Contains tells whether a subnet is inside one of the scope's (true when it has none).
+func (s *Scope) Contains(subnet netip.Prefix) bool {
+	if len(s.subnets) == 0 {
+		return true
+	}
+
+	for _, own := range s.subnets {
+		if own.Contains(subnet.Addr()) && own.Bits() <= subnet.Bits() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// HasSubnets tells whether its networks must name subnets of its own.
+func (s *Scope) HasSubnets() bool {
+	return len(s.subnets) > 0
 }
 
 // Uses tells whether a container that isn't its own by label is one it may use, by name.
