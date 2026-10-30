@@ -20,6 +20,42 @@ a scope's client ─ scoped listener ──┘
 - **Read the way Docker reads it.** Bodies are decoded into the Docker Engine's own API types, with unknown fields refused, then re-encoded: what was checked is exactly what Docker gets, whatever the keys' case or duplicates. Paths must be canonical and carry an API version YorvoGate knows (1.44 to 1.56); an endpoint it doesn't know is refused, so a newer Docker's new endpoints stay closed until they're reviewed.
 - **Fail-closed and said:** every refusal is a Docker-style error (`{"message": "yorvogate: …"}`) that clients show, and every decision is logged as JSON.
 
+## Installing
+
+The image, `ghcr.io/yorvolabs/yorvogate`, for x86_64 and arm64: the static binary on distroless, as a user without privileges. It reaches Docker's socket through the socket's group:
+
+```yaml
+services:
+  yorvogate:
+    image: ghcr.io/yorvolabs/yorvogate:0.1.0   # better: by its digest, from the release notes
+    group_add: ["${DOCKER_GID}"]                # stat -c %g /var/run/docker.sock
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./yorvogate.yaml:/etc/yorvogate/yorvogate.yaml:ro
+      - ./scopes:/etc/yorvogate/scopes:ro
+```
+
+Or a binary from the [releases](https://github.com/yorvolabs/yorvogate/releases) (Linux, x86_64 and arm64), with `SHA256SUMS` and its signature.
+
+**Check what you install.** Each release is signed by this repository's release workflow, for its own tag (Sigstore, keyless). Check the signature names the version you install: a signature of another release (an older one, with its known flaws) doesn't check out.
+
+```bash
+version=0.1.0
+cosign verify ghcr.io/yorvolabs/yorvogate:$version \
+  --certificate-identity "https://github.com/yorvolabs/yorvogate/.github/workflows/release.yaml@refs/tags/v$version" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "https://github.com/yorvolabs/yorvogate/.github/workflows/release.yaml@refs/tags/v$version" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+The binaries are reproducible: built from the tag (`make dist VERSION=$version` in the development container), they have the same checksums.
+
 ## Configuration
 
 ```yaml

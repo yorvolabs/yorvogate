@@ -9,7 +9,10 @@ FUZZTIME ?= 30s
 # The least share of mutants the tests must kill, per package
 EFFICACY ?= 90
 
-.PHONY: check format lint test vulnerabilities build fuzz mutation
+# The version a release's binaries say they are (make dist VERSION=1.2.3)
+VERSION ?= dev
+
+.PHONY: check format lint test vulnerabilities build fuzz mutation dist
 
 check: format lint test vulnerabilities
 
@@ -45,3 +48,14 @@ mutation:
 	for p in ./internal/route ./internal/config ./internal/scope ./internal/gate ./cmd/yorvogate; do \
 		GOFLAGS=-count=1 go run $(GREMLINS) unleash --workers 1 --timeout-coefficient 10 --threshold-efficacy $(EFFICACY) $$p || exit 1; \
 	done
+
+# A release's binaries (Linux, x86_64 and arm64), reproducible, and their SHA256SUMS
+dist:
+	rm -rf dist && mkdir -p dist
+	for arch in amd64 arm64; do \
+		CGO_ENABLED=0 GOOS=linux GOARCH=$$arch go build -trimpath -buildvcs=false -ldflags "-s -w -buildid= -X main.version=$(VERSION)" \
+			-o dist/yorvogate ./cmd/yorvogate && \
+		tar -C dist --owner=0 --group=0 --numeric-owner --mtime='2026-01-01 00:00Z' -czf dist/yorvogate-$(VERSION)-linux-$$arch.tar.gz yorvogate && \
+		rm dist/yorvogate || exit 1; \
+	done
+	cd dist && sha256sum yorvogate-*.tar.gz > SHA256SUMS
