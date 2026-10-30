@@ -13,9 +13,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -32,6 +34,22 @@ type Scope struct {
 	// Prefixes are what the names of its containers, networks and volumes start with ("jane-",
 	// "jane_"). Each ends with "-", "_" or ".", so "jane" never matches "janet".
 	Prefixes []string `json:"prefixes"`
+	// Images are the image name prefixes that are its own ("quire-sites/jane/"): it may name images
+	// there even where the listener protects their namespace.
+	Images []string `json:"images,omitempty"`
+	// Networks are shared networks it may join, besides its own, with what it may have there.
+	Networks map[string]Network `json:"networks,omitempty"`
+	// Containers are containers it may use that aren't its own by label (e.g. its BuildKit
+	// builder), by name; a trailing "*" matches any end ("buildx_buildkit_jane-*").
+	Containers []string `json:"containers,omitempty"`
+}
+
+// Network is what a scope may have on a shared network.
+type Network struct {
+	// Aliases it may take there (its DNS names); none if empty.
+	Aliases []string `json:"aliases,omitempty"`
+	// Addresses it may ask for there; none if empty (Docker assigns one).
+	Addresses []string `json:"addresses,omitempty"`
 }
 
 // Label is a Docker label and its value.
@@ -46,6 +64,9 @@ var (
 	validValue  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 	validPrefix = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}[-_.]$`)
 	validDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	validImage  = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,254}/$`)
+	validObject = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\*?$`)
+	validAlias  = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
 )
 
 // ErrUnknown is a scope with no file, or a token that doesn't match it.
@@ -168,6 +189,36 @@ func (s *Scope) check() error {
 		return errors.New("prefixes: at least one")
 	}
 
+	for _, i := range s.Images {
+		if !validImage.MatchString(i) {
+			return fmt.Errorf("images: %q must be an image name prefix ending with /", i)
+		}
+	}
+
+	for _, c := range s.Containers {
+		if !validObject.MatchString(c) {
+			return fmt.Errorf("containers: %q must be a container's name, or its start followed by *", c)
+		}
+	}
+
+	for name, n := range s.Networks {
+		if !validObject.MatchString(name) || strings.HasSuffix(name, "*") {
+			return fmt.Errorf("networks: %q isn't a network's name", name)
+		}
+
+		for _, a := range n.Aliases {
+			if !validAlias.MatchString(a) || len(a) > 253 {
+				return fmt.Errorf("networks.%s.aliases: %q isn't a DNS name", name, a)
+			}
+		}
+
+		for _, a := range n.Addresses {
+			if ip, err := netip.ParseAddr(a); err != nil || ip.String() != a || ip.Zone() != "" {
+				return fmt.Errorf("networks.%s.addresses: %q isn't an IP address (as Go writes it)", name, a)
+			}
+		}
+	}
+
 	for _, p := range s.Prefixes {
 		if !validPrefix.MatchString(p) {
 			return fmt.Errorf("prefixes: %q must end with a separator (- _ or .) so no other name starts with it", p)
@@ -182,6 +233,32 @@ func (s *Scope) Owns(labels map[string]string) bool {
 	value, ok := labels[s.Owner.Key]
 
 	return ok && value == s.Owner.Value
+}
+
+// Uses tells whether a container that isn't its own by label is one it may use, by name.
+func (s *Scope) Uses(name string) bool {
+	for _, c := range s.Containers {
+		if start, ok := strings.CutSuffix(c, "*"); ok {
+			if strings.HasPrefix(name, start) && len(name) > len(start) {
+				return true
+			}
+		} else if name == c {
+			return true
+		}
+	}
+
+	return false
+}
+
+// OwnsImage tells whether an image name is in one of its own namespaces.
+func (s *Scope) OwnsImage(image string) bool {
+	for _, i := range s.Images {
+		if strings.HasPrefix(image, i) && len(image) > len(i) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Names tells whether a name starts with one of the scope's prefixes.

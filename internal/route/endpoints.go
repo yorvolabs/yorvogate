@@ -55,7 +55,8 @@ var table = func() []Endpoint {
 
 		// Exec
 		write("exec.create", "POST", "/containers/{id}/exec", Exec),
-		upgrade(write("exec.start", "POST", "/exec/{id}/start", Exec)),
+		// An upgrade when it attaches; a detached exec ("docker exec -d") is a plain request.
+		write("exec.start", "POST", "/exec/{id}/start", Exec),
 		write("exec.resize", "POST", "/exec/{id}/resize", Exec),
 		read("exec.inspect", "GET", "/exec/{id}/json", Exec),
 

@@ -62,6 +62,34 @@ type Listener struct {
 	Allow map[string]string `yaml:"allow"`
 	// Scopes (scoped): the folder of scope files, one "<name>.json" per scope.
 	Scopes string `yaml:"scopes"`
+	// Containers (scoped): what every scope's containers may ask of the host.
+	Containers Containers `yaml:"containers"`
+}
+
+// Containers is what a scoped listener lets its scopes' containers ask of the host. What isn't listed
+// is refused: a privileged container, host mounts, host namespaces and devices are never allowed.
+type Containers struct {
+	// Capabilities that may be added (e.g. NET_BIND_SERVICE); none by default.
+	Capabilities []string `yaml:"capabilities"`
+	// DropAllCapabilities requires every container to drop all capabilities first (CapDrop: ALL).
+	DropAllCapabilities bool `yaml:"drop_all_capabilities"`
+	// NoNewPrivileges requires "no-new-privileges" among its security options.
+	NoNewPrivileges bool `yaml:"no_new_privileges"`
+	// SecurityOptions allowed, exactly as written ("no-new-privileges" always is).
+	SecurityOptions []string `yaml:"security_options"`
+	// Runtimes allowed besides Docker's default; none by default.
+	Runtimes []string `yaml:"runtimes"`
+	// LogDrivers allowed besides Docker's default (json-file, local, none by default).
+	LogDrivers []string `yaml:"log_drivers"`
+	// Ulimits that may be set, by name (e.g. nofile, nproc); none by default.
+	Ulimits []string `yaml:"ulimits"`
+	// MaxMemory, in bytes: when set, every container has a memory limit at most this.
+	MaxMemory int64 `yaml:"max_memory"`
+	// MaxPids: when set, every container has a process limit at most this.
+	MaxPids int64 `yaml:"max_pids"`
+	// ProtectedImages are image name prefixes (e.g. "quire-sites/") no scope may use but within its
+	// own namespaces (its scope file's "images").
+	ProtectedImages []string `yaml:"protected_images"`
 }
 
 var name = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -202,11 +230,64 @@ func (l *Listener) check() error {
 		if len(l.Allow) != 0 || !filepath.IsAbs(l.Scopes) || filepath.Clean(l.Scopes) != l.Scopes {
 			return errors.New("a scoped listener has scopes, an absolute folder (and no allow)")
 		}
+
+		if err := l.Containers.check(); err != nil {
+			return fmt.Errorf("containers: %w", err)
+		}
 	default:
 		return fmt.Errorf("mode: %q must be trusted or scoped", l.Mode)
 	}
 
+	if l.Mode == Trusted && !l.Containers.empty() {
+		return errors.New("containers: only a scoped listener has them")
+	}
+
 	return nil
+}
+
+var (
+	capability = regexp.MustCompile(`^[A-Z][A-Z_]{1,31}$`)
+	plainName  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	imagePart  = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,254}/$`)
+)
+
+func (c *Containers) check() error {
+	for _, cap := range c.Capabilities {
+		if !capability.MatchString(cap) || strings.HasPrefix(cap, "CAP_") || cap == "ALL" {
+			return fmt.Errorf("capabilities: %q must be one capability's name, without CAP_ (e.g. NET_BIND_SERVICE)", cap)
+		}
+	}
+
+	for _, list := range [][]string{c.Runtimes, c.LogDrivers, c.Ulimits} {
+		for _, n := range list {
+			if !plainName.MatchString(n) {
+				return fmt.Errorf("%q isn't a name of a runtime, log driver or ulimit", n)
+			}
+		}
+	}
+
+	for _, o := range c.SecurityOptions {
+		if o == "" || strings.ContainsAny(o, " \t\n") {
+			return fmt.Errorf("security_options: %q", o)
+		}
+	}
+
+	if c.MaxMemory < 0 || c.MaxPids < 0 || (c.MaxMemory > 0 && c.MaxMemory < 6<<20) {
+		return errors.New("max_memory (at least 6 MiB, Docker's minimum) and max_pids can't be negative")
+	}
+
+	for _, p := range c.ProtectedImages {
+		if !imagePart.MatchString(p) {
+			return fmt.Errorf("protected_images: %q must be an image name prefix ending with /", p)
+		}
+	}
+
+	return nil
+}
+
+func (c *Containers) empty() bool {
+	return len(c.Capabilities)+len(c.SecurityOptions)+len(c.Runtimes)+len(c.LogDrivers)+len(c.Ulimits)+len(c.ProtectedImages) == 0 &&
+		!c.DropAllCapabilities && !c.NoNewPrivileges && c.MaxMemory == 0 && c.MaxPids == 0
 }
 
 // Network splits the address into Go's network and address ("tcp", "10.0.0.2:2375").
