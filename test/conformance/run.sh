@@ -10,7 +10,7 @@ if [ ! -x bin/yorvogate ]; then
 	exit 1
 fi
 
-exec docker run --rm \
+exec docker run --rm -e GITHUB_ACTIONS \
 	-v /var/run/docker.sock:/var/run/docker.sock \
 	-v "$PWD/bin:/yorvogate:ro" \
 	-v "$PWD/test/conformance:/conformance:ro" \

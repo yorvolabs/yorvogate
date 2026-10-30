@@ -13,7 +13,15 @@ failed=0
 
 say() { printf '%s\n' "$*"; }
 ok() { passed=$((passed + 1)); say "  ok   $1"; }
-ko() { failed=$((failed + 1)); say "  FAIL $1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/       /' | head -5; }
+ko() {
+	failed=$((failed + 1))
+	say "  FAIL $1"
+	[ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/       /' | head -5
+	# On GitHub, each failure is an annotation too: readable without the job's log.
+	if [ "${GITHUB_ACTIONS:-}" = true ]; then
+		printf '::error title=Conformance::%s: %s\n' "$1" "$(printf '%s' "${2:-}" | tr '\n' ' ' | cut -c1-300)"
+	fi
+}
 
 # The real Docker, straight (to set up and to check what exists)
 direct() { env -u DOCKER_HOST -u DOCKER_CONFIG docker "$@"; }
@@ -56,8 +64,11 @@ request() {
 	sleep 2
 }
 
+# raw SCOPE METHOD PATH [BODY]: the answer's status, then YorvoGate's message if there's one.
 raw() {
-	request "$@" | nc 127.0.0.1 2376 | head -1 | cut -d' ' -f2
+	answer=$(request "$@" | nc 127.0.0.1 2376)
+	printf '%s' "$answer" | head -1 | cut -d' ' -f2
+	printf '%s' "$answer" | grep -o '"message":"[^"]*"' | head -1
 }
 
 # status NAME WANT SCOPE METHOD PATH [BODY]: a raw request must get that status.
@@ -65,8 +76,9 @@ status() {
 	name=$1
 	want=$2
 	shift 2
-	got=$(raw "$@")
-	if [ "$got" = "$want" ]; then ok "$name"; else ko "$name (status $got, want $want)"; fi
+	answer=$(raw "$@")
+	got=$(printf '%s\n' "$answer" | head -1)
+	if [ "$got" = "$want" ]; then ok "$name"; else ko "$name (status $got, want $want)" "$(printf '%s\n' "$answer" | tail -n +2)"; fi
 }
 
 cleanup() {
@@ -81,6 +93,7 @@ cleanup() {
 trap cleanup EXIT
 cleanup
 
+say "== Docker $(direct version --format '{{.Server.Version}} (API {{.Server.APIVersion}})'), Compose $(docker compose version --short)"
 say "== Setting up: YorvoGate, scopes jane and blog"
 mkdir -p "$dir/scopes"
 for scope in jane blog; do
@@ -185,6 +198,7 @@ refused "tag blog's image" "No such image" as jane docker tag ygc-blog/app:1 ygc
 refused "retag a shared name" "image namespaces" as jane docker tag alpine:3.22 alpine:yorvogate-hijack
 refused "remove a shared image" "image namespaces" as jane docker rmi alpine:3.22
 refused "push" "isn't allowed" as jane docker push ygc-jane/app:1
+refused "a privileged exec" "a privileged exec isn't allowed" as jane docker exec --privileged ygc-jane-app-1 true
 
 say "== What reaches the host is refused (Compose)"
 refused "privileged" "Privileged isn't allowed" as jane docker compose -p ygc-jane -f "$(hostile privileged '    privileged: true')" up -d
@@ -221,7 +235,6 @@ status "an endpoint YorvoGate doesn't know" 403 jane GET /v1.56/containers/ygc-j
 status "BuildKit's gRPC" 403 jane POST /v1.56/grpc
 status "a build" 403 jane POST /v1.56/build
 status "the swarm" 403 jane GET /v1.56/swarm
-status "a privileged exec" 403 jane POST /v1.56/containers/ygc-jane-app-1/exec '{"Cmd":["true"],"Privileged":true}'
 status "no token" 401 nobody GET /v1.56/version
 
 say "== Nothing was left behind"
