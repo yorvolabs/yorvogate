@@ -4,6 +4,8 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-30
+
 The first release.
 
 ### Added
@@ -17,3 +19,6 @@ The first release.
   - Images: names written only in its own namespaces (tag, load, delete); none of another scope's read; image archives' names checked before Docker loads them.
 - **Every decision logged** as JSON; every refusal a Docker-style error that says why.
 - **Releases:** an image for x86_64 and arm64 (static, on distroless, as a user without privileges), signed with Sigstore, with its SBOM and build provenance; reproducible binaries with signed checksums.
+
+[Unreleased]: https://github.com/yorvolabs/yorvogate/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/yorvolabs/yorvogate/releases/tag/v0.1.0
