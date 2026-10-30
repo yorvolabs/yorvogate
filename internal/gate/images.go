@@ -34,9 +34,11 @@ func (s *scoped) image(image string) error {
 }
 
 // readsImage checks an image the scope reads (inspects, saves, tags from): Docker is asked which
-// image the name or ID is, and none of its names may be in another scope's protected namespace (its
-// layers hold that scope's code, its configuration its environment). An image with no name at all
-// (a build's leftover) may be anyone's: it's read by its name only.
+// image the name or ID is. The name it's read by may not be in another scope's protected namespace,
+// and the image needs at least one name the scope may see: an image all of whose names are another
+// scope's is that scope's (its layers hold its code, its configuration its environment), however it's
+// referred to; one tagged both "alpine" and into a scope's namespace is still alpine for everyone. An
+// image with no name at all (a build's leftover) may be anyone's: it isn't read.
 func (s *scoped) readsImage(ref string) error {
 	missing := refuse(http.StatusNotFound, "No such image: %s", ref)
 
@@ -53,17 +55,25 @@ func (s *scoped) readsImage(ref string) error {
 		return missing
 	}
 
-	if imageID.MatchString(ref) && len(img.Tags) == 0 {
+	// By name, ID or digest ("anything@sha256:…"): an image with no name the scope may see isn't read.
+	if len(s.visible(img.Tags)) == 0 {
 		return missing
 	}
 
-	for _, tag := range img.Tags {
-		if s.image(tag) != nil {
-			return missing
+	return nil
+}
+
+// visible are the names of an image the scope may see: not in another scope's protected namespace.
+func (s *scoped) visible(tags []string) []string {
+	var seen []string
+
+	for _, tag := range tags {
+		if s.image(tag) == nil {
+			seen = append(seen, tag)
 		}
 	}
 
-	return nil
+	return seen
 }
 
 // ownsImageName checks a name a scope writes (tags, loads, deletes): in one of its own namespaces
@@ -119,8 +129,8 @@ func (s *scoped) tag() error {
 	return s.ownsImageName(target, "image.tag")
 }
 
-// images filters an image list's answer: an image with a name in another scope's protected namespace,
-// or with no name at all, isn't listed.
+// images filters an image list's answer: an image is listed with the names the scope may see, and not
+// at all when it has none (another scope's, or a nameless leftover).
 func (s *scoped) images(body []byte) ([]byte, error) {
 	var list []map[string]json.RawMessage
 	if err := json.Unmarshal(body, &list); err != nil {
@@ -133,14 +143,8 @@ func (s *scoped) images(body []byte) ([]byte, error) {
 		var tags []string
 		_ = json.Unmarshal(img["RepoTags"], &tags)
 
-		visible := len(tags) > 0
-		for _, tag := range tags {
-			if s.image(tag) != nil {
-				visible = false
-			}
-		}
-
-		if visible {
+		if seen := s.visible(tags); len(seen) > 0 {
+			img["RepoTags"], _ = json.Marshal(seen)
 			kept = append(kept, img)
 		}
 	}
