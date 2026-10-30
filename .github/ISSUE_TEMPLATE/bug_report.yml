@@ -1,0 +1,16 @@
+name: Bug report
+description: Something doesn't work as documented (not a security issue).
+labels: [bug]
+body:
+  - type: textarea
+    attributes:
+      label: What happened
+      description: The request (method, path, body), what YorvoGate answered or logged, and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Setup
+      description: "`yorvogate version`, Docker's version (`docker version`), the client (Docker CLI, Compose, an SDK) and the relevant part of the configuration."
+    validations:
+      required: true

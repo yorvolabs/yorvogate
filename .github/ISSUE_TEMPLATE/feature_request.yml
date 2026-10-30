@@ -1,0 +1,14 @@
+name: Feature request
+description: A problem YorvoGate could solve.
+labels: [enhancement]
+body:
+  - type: textarea
+    attributes:
+      label: The problem
+      description: What you're trying to do, and what stands in the way.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Ideas
+      description: How it could work, if you have an idea (optional).
