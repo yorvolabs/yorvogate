@@ -105,7 +105,7 @@ jobs:
           [ "$(docker image inspect yorvogate:ci --format '{{.Config.User}}')" = "65532:65532" ]
           ! docker run --rm --entrypoint sh yorvogate:ci -c true 2>/dev/null
       - name: No known flaw with a fix in it
-        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock:ro aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c image --quiet --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 yorvogate:ci
+        run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock:ro aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c image --quiet --db-repository mirror.gcr.io/aquasec/trivy-db,ghcr.io/aquasecurity/trivy-db --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 yorvogate:ci
 
   mutation:
     name: Mutation testing
