@@ -18,7 +18,9 @@ What YorvoGate holds, so you can tell a vulnerability from a limit, and set it u
 4. It can't make YorvoGate read a request one way and Docker another: bodies are decoded with Docker's own types and the same decoder, unknown fields are refused, and what's forwarded is the re-encoded value that was checked. Paths must be canonical (no dot segments, empty segments or percent-encoding) and carry an API version YorvoGate knows.
 5. It can't act as another scope: each request proves its scope with a token, compared in constant time with the hash in the scope's file; a client learns nothing about which scopes exist.
 
-> Today (early development), a scoped listener's rules cover containers, exec, joining networks, and reading networks, volumes and images ([configuration](configuration.md#what-a-scope-may-do)); creating networks and volumes, and the rest of images, are refused until their rules are written and tested.
+> What a scope may do, endpoint by endpoint: [configuration](configuration.md#what-a-scope-may-do).
+
+**Names are owned.** Docker names images globally: a scope that retags or loads an image as `postgres:18` would change what every other container that names it runs next. So a scope writes image names (tag, load, delete) only in its own namespaces, and reads none in another's protected namespace.
 
 ## Out of scope
 

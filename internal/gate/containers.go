@@ -451,17 +451,6 @@ func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(str
 	}
 }
 
-// image checks an image a container runs: never one in a protected namespace that isn't its own.
-func (s *scoped) image(image string) error {
-	for _, p := range s.policy.ProtectedImages {
-		if strings.HasPrefix(image, p) && !s.scope.OwnsImage(image) {
-			return fmt.Errorf("the image %s is in a protected namespace (%s) that isn't its own", image, p)
-		}
-	}
-
-	return nil
-}
-
 // updateContainer checks new limits for a running container, as create does.
 func (s *scoped) updateContainer(body []byte) ([]byte, error) {
 	var req container.UpdateConfig

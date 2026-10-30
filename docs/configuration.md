@@ -10,6 +10,7 @@ api:                                    # Docker API versions accepted (optional
   max: "1.56"                           # the newest; at most what this build knows
 
 body_limit: 1048576                     # the largest body read whole, in bytes (4096 to 64 MiB)
+load_limit: 8589934592                  # the largest image archive a scope loads (1 MiB to 256 GiB)
 
 listeners:                              # at least one
   - name: orchestrator                  # lowercase letters, digits and dashes; in logs
@@ -61,10 +62,18 @@ A container's configuration is read field by field with Docker's own types: each
 | Containers: update | New limits, checked as at create |
 | Containers, networks, volumes: list; containers: prune | Only its own: its owner label is added to the request's filters |
 | Exec: create, start, resize, inspect | In its own containers only, never privileged |
-| Networks: inspect, connect, disconnect | Its own, and the shared networks its scope names (with only its aliases and addresses there) |
-| Volumes: inspect | Its own |
-| Images: list, inspect, history | Yes, but not images in a protected namespace that isn't its own |
-| Everything else | No (networks, volumes and images to come) |
+| Networks: create | A bridge of its own: its name and owner label, no driver options, the default IPAM, inside its `subnets` when it has some |
+| Networks: inspect, connect, disconnect | Its own, and the shared networks its scope names (with only its aliases and addresses there); a shared network's inspection lists only its own containers |
+| Networks: delete; volumes: inspect, delete | Its own |
+| Networks, volumes: prune | Only its own (its owner label is added to the filters) |
+| Volumes: create | A local volume of its own: its name and owner label, no driver options (with them, a local volume mounts any host path) |
+| Images: list | Without other scopes' images (any name in a protected namespace not its own) and without nameless leftovers |
+| Images: inspect, history, save, distribution | By name or ID, unless one of the image's names is in another's protected namespace |
+| Images: pull | From a registry, by name, not into another's protected namespace; never an import (`fromSrc`) |
+| Images: tag, delete | Only names in its own image namespaces (its scope file's `images`): any other name may be another's to run |
+| Images: load | The archive is kept on disk (up to `load_limit`) while every name it gives (Docker's `manifest.json` and `repositories`, the OCI `index.json`) is checked: only names in its own namespaces. Plain, gzip and bzip2 archives (xz and zstd are refused) |
+| Images: search | Yes |
+| Everything else | No: push, prune, commit, import, build, events, auth, plugins, swarm, BuildKit sessions |
 
 Another scope's objects are answered as Docker answers objects that don't exist. A request names its object by the full ID YorvoGate checked, so what Docker acts on is what was checked.
 
@@ -99,7 +108,8 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
   "prefixes": ["jane-", "jane_"],
   "images": ["registry.example.com/tenants/jane/"],
   "networks": {"edge-jane": {"aliases": ["jane.example.internal"], "addresses": ["10.213.0.4"]}},
-  "containers": ["buildx_buildkit_jane-*"]
+  "containers": ["buildx_buildkit_jane-*"],
+  "subnets": ["10.213.0.32/27"]
 }
 ```
 
@@ -108,6 +118,7 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 - `prefixes`: what its containers', networks' and volumes' names start with. Each ends with `-`, `_` or `.`, so `jane-` never matches `janet-…`.
 - `images` (optional): its own image namespaces, as prefixes ending with `/`: it may use images there even where the listener protects them.
 - `networks` (optional): shared networks it may join besides its own, each with the `aliases` it may take and the `addresses` it may ask for there (none if left out).
+- `subnets` (optional): where its networks' addresses must be, in CIDR form: each network it creates names its subnet, inside one of these (otherwise Docker picks from its own pools).
 - `containers` (optional): containers it may use without carrying its label, by name, a trailing `*` matching any end (e.g. its BuildKit builder, created by the orchestrator).
 
 A client sends its scope with each request. With the Docker CLI or Compose, through its `config.json` (`DOCKER_CONFIG` pointing at the scope's own folder):

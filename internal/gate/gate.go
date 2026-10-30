@@ -5,6 +5,7 @@ package gate
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,7 +63,11 @@ func refuse(status int, format string, args ...any) *refusal {
 func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	entry := g.log.With("method", r.Method, "path", r.URL.EscapedPath())
 
-	forward, err := g.decide(r, entry)
+	forward, done, err := g.decide(r, entry)
+	if done != nil {
+		defer done()
+	}
+
 	if err != nil {
 		var refused *refusal
 		if !errors.As(err, &refused) {
@@ -78,53 +83,64 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.upstream.Forward(w, forward)
 }
 
-// decide returns the request to forward (with what YorvoGate checked as its body), or why not.
-func (g *Gate) decide(r *http.Request, entry *slog.Logger) (*http.Request, error) {
+// decide returns the request to forward (with what YorvoGate checked as its body), and what to do
+// once it's forwarded; or why not.
+func (g *Gate) decide(r *http.Request, entry *slog.Logger) (*http.Request, func(), error) {
+	forward, decision, err := g.decided(r, entry)
+	if decision == nil {
+		return forward, nil, err
+	}
+
+	return forward, decision.cleanup, err
+}
+
+func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *scoped, error) {
 	lowest, highest := g.config.Versions()
 
 	req, err := route.Parse(r.Method, r.URL.EscapedPath(), lowest, highest)
 	if err != nil {
 		if errors.Is(err, route.ErrUnknown) {
-			return nil, refuse(http.StatusForbidden, "%v", err)
+			return nil, nil, refuse(http.StatusForbidden, "%v", err)
 		}
 
-		return nil, refuse(http.StatusBadRequest, "%v", err)
+		return nil, nil, refuse(http.StatusBadRequest, "%v", err)
 	}
 
 	switch g.listener.Mode {
 	case config.Trusted:
 		if !g.listener.Allows(req.Endpoint) {
-			return nil, refuse(http.StatusForbidden, "%s isn't allowed on this listener", req.Endpoint.Name)
+			return nil, nil, refuse(http.StatusForbidden, "%s isn't allowed on this listener", req.Endpoint.Name)
 		}
 
 		if err := upgradeOnly(r, req.Endpoint); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		entry.Info("allowed", "endpoint", req.Endpoint.Name)
 
 		// A trusted client's body goes as it came (streams included).
-		return withoutGateHeaders(r), nil
+		return withoutGateHeaders(r), nil, nil
 	case config.Scoped:
 		s, err := g.scopes.Authenticate(r.Header.Get(ScopeHeader), r.Header.Get(TokenHeader))
 		if err != nil {
 			if errors.Is(err, scope.ErrUnknown) {
-				return nil, refuse(http.StatusUnauthorized, "no such scope, or not its token")
+				return nil, nil, refuse(http.StatusUnauthorized, "no such scope, or not its token")
 			}
 
-			return nil, err
+			return nil, nil, err
 		}
 
 		entry = entry.With("scope", s.Name)
 
 		body, err := g.readBody(r, req.Endpoint)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		decision := &scoped{
 			ctx: r.Context(), req: req, scope: s, policy: g.listener.Containers, docker: g.docker,
 			path: r.URL.EscapedPath(), query: r.URL.Query(), upgrading: upgrading(r),
+			stream: r.Body, loadLimit: g.config.LoadLimit,
 		}
 		if req.Version != nil {
 			decision.version = req.Version.String()
@@ -132,11 +148,11 @@ func (g *Gate) decide(r *http.Request, entry *slog.Logger) (*http.Request, error
 
 		checked, err := decision.decide(body)
 		if err != nil {
-			return nil, err
+			return nil, decision, err
 		}
 
 		if err := upgradeOnly(r, req.Endpoint); err != nil {
-			return nil, err
+			return nil, decision, err
 		}
 
 		entry.Info("allowed", "endpoint", req.Endpoint.Name)
@@ -144,15 +160,27 @@ func (g *Gate) decide(r *http.Request, entry *slog.Logger) (*http.Request, error
 		out.URL.Path, out.URL.RawPath = decision.path, ""
 		out.URL.RawQuery = decision.query.Encode()
 
-		// A stream (an archive put into one of its containers) goes as it came.
-		if req.Endpoint.Stream {
-			return out, nil
+		if decision.answer != nil {
+			out = out.WithContext(context.WithValue(out.Context(), answerKey{}, decision.answer))
 		}
 
-		return withBody(out, checked), nil
+		switch {
+		case decision.forwardBody != nil:
+			// What was checked in place of what came (an archive kept on disk)
+			out.Body, out.ContentLength = decision.forwardBody, decision.forwardLength
+			out.TransferEncoding = nil
+			out.Header.Del("Transfer-Encoding")
+
+			return out, decision, nil
+		case req.Endpoint.Stream:
+			// A stream YorvoGate doesn't read (an archive put into one of its containers) goes as it came.
+			return out, decision, nil
+		}
+
+		return withBody(out, checked), decision, nil
 	}
 
-	return nil, refuse(http.StatusInternalServerError, "the listener has no mode")
+	return nil, nil, refuse(http.StatusInternalServerError, "the listener has no mode")
 }
 
 // readBody reads a body whole, up to the limit. A stream isn't read here: its endpoint's rule decides

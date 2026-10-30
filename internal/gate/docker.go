@@ -90,6 +90,27 @@ func (d *Docker) Volume(ctx context.Context, version, name string) (*object, err
 	return &object{ID: answer.Name, Name: answer.Name, Labels: answer.Labels}, nil
 }
 
+// image is what YorvoGate needs to know of an image: its ID and names.
+type image struct {
+	ID   string
+	Tags []string
+}
+
+// Image looks an image up by name or ID; nil when there's none.
+func (d *Docker) Image(ctx context.Context, version, ref string) (*image, error) {
+	var answer struct {
+		ID       string `json:"Id"`
+		RepoTags []string
+	}
+
+	found, err := d.get(ctx, version, "/images/"+ref+"/json", &answer)
+	if !found || err != nil {
+		return nil, err
+	}
+
+	return &image{ID: answer.ID, Tags: answer.RepoTags}, nil
+}
+
 // ExecContainer is the ID of the container an exec runs in; "" when there's no such exec.
 func (d *Docker) ExecContainer(ctx context.Context, version, id string) (string, error) {
 	var answer struct {

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,6 +106,8 @@ func TestScopeFilesAreChecked(t *testing.T) {
 		"an address of a range":  strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"addresses": ["10.0.0.0/8"]}}, "prefixes"`, 1),
 		"an address unshortened": strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"addresses": ["2001:db8:0:0::1"]}}, "prefixes"`, 1),
 		"a network key unknown":  strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"mac": "x"}}, "prefixes"`, 1),
+		"a subnet not a network": strings.Replace(jane(), `"prefixes"`, `"subnets": ["10.213.0.33/27"], "prefixes"`, 1),
+		"an address as a subnet": strings.Replace(jane(), `"prefixes"`, `"subnets": ["10.213.0.32"], "prefixes"`, 1),
 	}
 
 	for name, content := range cases {
@@ -160,5 +163,27 @@ func TestWhatAScopeMayUse(t *testing.T) {
 
 	if s.Networks["quire-link-jane"].Addresses[0] != "10.213.0.4" {
 		t.Error("its shared network")
+	}
+}
+
+func TestSubnets(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"subnets": ["10.213.0.32/27", "fd00:213::/64"], "prefixes"`, 1))
+
+	s, err := NewStore(dir).Authenticate("jane", token)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for subnet, inside := range map[string]bool{"10.213.0.32/27": true, "10.213.0.48/28": true, "10.213.0.0/24": false, "10.213.0.64/27": false, "fd00:213::/80": true, "fd00:214::/64": false} {
+		if s.Contains(netip.MustParsePrefix(subnet)) != inside || !s.HasSubnets() {
+			t.Errorf("%s: inside %v", subnet, !inside)
+		}
+	}
+
+	write(t, dir, "free", jane())
+	free, _ := NewStore(dir).Authenticate("free", token)
+	if free.HasSubnets() || !free.Contains(netip.MustParsePrefix("172.20.0.0/16")) {
+		t.Error("a scope without subnets takes Docker's")
 	}
 }

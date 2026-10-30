@@ -61,9 +61,38 @@ var (
 	networks   = []fakeObject{{janeNet, "jane_default", jane}, {blogNet, "blog_default", blog}, {linkNet, "quire-link-jane", nil}}
 	volumes    = []fakeObject{{"jane_data", "jane_data", jane}, {"blog_data", "blog_data", blog}}
 	execs      = map[string]string{"exec-jane": janePHP, "exec-blog": blogPHP}
+	images     = []fakeImage{
+		{"sha256:" + strings.Repeat("1", 64), []string{"alpine:3.22"}},
+		{"sha256:" + strings.Repeat("2", 64), []string{"quire-sites/jane/php-prod:latest"}},
+		{"sha256:" + strings.Repeat("3", 64), []string{"quire-sites/blog/php-prod:latest"}},
+		{"sha256:" + strings.Repeat("4", 64), nil}, // a build's leftover, anyone's
+	}
 
-	inspection = regexp.MustCompile(`^/v[0-9.]+/(containers|networks|volumes|exec)/([^/]+)(/json)?$`)
+	inspection  = regexp.MustCompile(`^/v[0-9.]+/(containers|networks|volumes|exec)/([^/]+)(/json)?$`)
+	imageLookup = regexp.MustCompile(`^/v[0-9.]+/images/(.+)/json$`)
 )
+
+type fakeImage struct {
+	id   string
+	tags []string
+}
+
+func findImage(ref string) *fakeImage {
+	for i := range images {
+		img := &images[i]
+		if img.id == ref || strings.TrimPrefix(img.id, "sha256:")[:12] == strings.TrimPrefix(ref, "sha256:") {
+			return img
+		}
+
+		for _, tag := range img.tags {
+			if tag == ref || strings.TrimSuffix(tag, ":latest") == ref {
+				return img
+			}
+		}
+	}
+
+	return nil
+}
 
 func find(objects []fakeObject, key string) *fakeObject {
 	for i := range objects {
@@ -107,7 +136,24 @@ func startDocker(t *testing.T) *docker {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true}`))
+
+		// Answers a rule changes: the image list, and the shared network with every scope on it
+		switch r.URL.Path {
+		case "/v1.56/images/json":
+			list := []map[string]any{}
+			for _, img := range images {
+				list = append(list, map[string]any{"Id": img.id, "RepoTags": img.tags})
+			}
+
+			_ = json.NewEncoder(w).Encode(list)
+		case "/v1.56/networks/" + linkNet:
+			_ = json.NewEncoder(w).Encode(map[string]any{"Name": "quire-link-jane", "Id": linkNet, "Containers": map[string]any{
+				janePHP: map[string]any{"Name": "jane-php-1", "IPv4Address": "10.213.0.4/27"},
+				blogPHP: map[string]any{"Name": "blog-php-1", "IPv4Address": "10.213.0.5/27"},
+			}})
+		default:
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		}
 	})}
 
 	go func() { _ = server.Serve(listener) }()
@@ -118,6 +164,19 @@ func startDocker(t *testing.T) *docker {
 
 // inspect answers YorvoGate's lookups, as Docker's inspect endpoints do.
 func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
+	if m := imageLookup.FindStringSubmatch(r.URL.Path); m != nil {
+		img := findImage(m[1])
+		if img == nil {
+			http.Error(w, `{"message":"No such image"}`, http.StatusNotFound)
+
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"Id": img.id, "RepoTags": img.tags})
+
+		return
+	}
+
 	m := inspection.FindStringSubmatch(r.URL.Path)
 	if m == nil {
 		http.Error(w, `{"message":"unexpected lookup"}`, http.StatusInternalServerError)
@@ -179,7 +238,8 @@ const scopeFile = `{
 	"prefixes": ["jane-", "jane_"],
 	"images": ["quire-sites/jane/"],
 	"networks": {"quire-link-jane": {"aliases": ["jane.example.quire.internal"], "addresses": ["10.213.0.4"]}},
-	"containers": ["buildx_buildkit_jane-*"]
+	"containers": ["buildx_buildkit_jane-*"],
+	"subnets": ["10.213.0.32/27", "10.213.0.64/27"]
 }`
 
 // gate serves one listener in front of the fake Docker.
@@ -195,6 +255,7 @@ func gate(t *testing.T, d *docker, listener string) *httptest.Server {
 	c, err := config.Parse([]byte(`
 upstream: unix://` + d.socket + `
 body_limit: 4096
+load_limit: 1048576
 listeners:
   - name: server
     address: tcp://127.0.0.1:2375
@@ -347,6 +408,8 @@ func TestAScopeIsRefusedWhatNoRuleAllows(t *testing.T) {
 
 	for _, c := range [][2]string{
 		{"POST", "/v1.56/images/x/push"},
+		{"POST", "/v1.56/images/prune"},
+		{"PUT", "/v1.56/volumes/jane_data"},
 		{"POST", "/v1.56/build"},
 		{"GET", "/v1.56/events"},
 		{"POST", "/v1.56/auth"},

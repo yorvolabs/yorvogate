@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -31,6 +32,16 @@ type scoped struct {
 
 	// Whether the request asks for an HTTP upgrade
 	upgrading bool
+
+	// A stream's body (an image archive), the most read of it, and what's forwarded in its place
+	stream        io.Reader
+	loadLimit     int64
+	forwardBody   io.ReadCloser
+	forwardLength int64
+	// Done once the request is forwarded (e.g. an archive's copy removed)
+	cleanup func()
+	// Changes Docker's answer before the client sees it (e.g. other scopes' objects left out)
+	answer func([]byte) ([]byte, error)
 }
 
 // container endpoints that act on one container and take no body: allowed on the scope's own
@@ -52,7 +63,7 @@ func (s *scoped) decide(body []byte) ([]byte, error) {
 
 	// Docker reads the first of a repeated parameter; a check could read another.
 	for key, values := range s.query {
-		if len(values) > 1 {
+		if len(values) > 1 && !(name == "image.save-many" && key == "names") {
 			return nil, refuse(http.StatusBadRequest, "the parameter %q is given more than once", key)
 		}
 	}
@@ -64,10 +75,45 @@ func (s *scoped) decide(body []byte) ([]byte, error) {
 		return nil, s.ownOnly()
 	case name == "network.inspect":
 		_, err := s.network()
+		s.answer = s.sharedContainers
 
 		return nil, err
-	case name == "volume.inspect":
+	case name == "network.create":
+		return s.createNetwork(body)
+	case name == "network.delete":
+		return nil, s.ownNetwork()
+	case name == "network.prune" || name == "volume.prune":
+		return nil, s.ownOnly()
+	case name == "volume.inspect" || name == "volume.delete":
 		return nil, s.volume()
+	case name == "volume.create":
+		return s.createVolume(body)
+	case name == "image.create":
+		return nil, s.pull()
+	case name == "image.tag":
+		return nil, s.tag()
+	case name == "image.delete":
+		return nil, s.ownsImageName(s.req.Params["name"], "image.delete")
+	case name == "image.save":
+		return nil, s.readsImage(s.req.Params["name"])
+	case name == "image.save-many":
+		for _, n := range s.query["names"] {
+			if err := s.readsImage(n); err != nil {
+				return nil, err
+			}
+		}
+
+		return nil, nil
+	case name == "image.search":
+		return nil, nil
+	case name == "image.load":
+		return nil, s.load()
+	case name == "distribution.inspect":
+		if err := s.image(s.req.Params["name"]); err != nil {
+			return nil, refuse(http.StatusNotFound, "No such image: %s", s.req.Params["name"])
+		}
+
+		return nil, nil
 	case name == "container.create":
 		return s.createContainer(body)
 	case onOwnContainer[name] || name == "container.archive-put":
@@ -103,14 +149,12 @@ func (s *scoped) decide(body []byte) ([]byte, error) {
 	case name == "exec.resize" || name == "exec.inspect":
 		return nil, s.exec()
 	case name == "image.list":
+		s.answer = s.images
+
 		return nil, nil
 	case name == "image.inspect" || name == "image.history":
 		// Another scope's image holds its code, and its configuration its environment.
-		if err := s.image(s.req.Params["name"]); err != nil {
-			return nil, refuse(http.StatusNotFound, "No such image: %s", s.req.Params["name"])
-		}
-
-		return nil, nil
+		return nil, s.readsImage(s.req.Params["name"])
 	case name == "network.connect":
 		return s.connect(body)
 	case name == "network.disconnect":
@@ -123,7 +167,7 @@ func (s *scoped) decide(body []byte) ([]byte, error) {
 // The endpoints whose body YorvoGate reads (a JSON value); any other has none.
 var takesBody = map[string]bool{
 	"container.create": true, "container.update": true, "exec.create": true, "exec.start": true,
-	"network.connect": true, "network.disconnect": true,
+	"network.connect": true, "network.disconnect": true, "network.create": true, "volume.create": true,
 }
 
 // container checks that the container the path names is the scope's (by its label, or one its scope
