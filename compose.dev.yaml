@@ -1,9 +1,24 @@
 # Working on YorvoGate: Go and its tools in a container, the module cache in a volume.
 #   docker compose -f compose.dev.yaml run --rm go make check
 services:
+  # A new volume is root's: handed to the user who runs the checks before "go" starts (Compose runs
+  # it first, by itself), again whole only when that user changes.
+  cache:
+    image: golang:1.27.3-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385
+    user: "0:0"
+    command:
+      - sh
+      - -c
+      - mkdir -p /cache/build /cache/mod && if [ "$$(stat -c %u:%g /cache)" != "${HOST_UID:-1000}:${HOST_GID:-1000}" ]; then chown -R "${HOST_UID:-1000}:${HOST_GID:-1000}" /cache; fi
+    volumes:
+      - cache:/cache
+
   go:
     image: golang:1.27.3-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    depends_on:
+      cache:
+        condition: service_completed_successfully
     working_dir: /src
     environment:
       HOME: /tmp
