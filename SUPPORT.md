@@ -5,4 +5,4 @@
 - **Feature requests:** open an issue describing the problem you want to solve.
 - **Security issues:** follow the [security policy](SECURITY.md); don't open a public issue.
 
-YorvoGate is in early development and maintained by a small team, so answers can take a few days.
+YorvoGate is young and maintained by a small team, so answers can take a few days.
