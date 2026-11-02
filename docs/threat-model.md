@@ -13,7 +13,7 @@ What YorvoGate holds, so you can tell a vulnerability from a limit, and set it u
 **A client of a scoped listener**, whatever requests it sends, however it writes them. Whatever it asks:
 
 1. It can't get root on the host, or out of a container's isolation, through the Docker API: no privileged containers, host mounts, host namespaces, devices, capabilities beyond the listener's list, kernel parameters, unconfined security profiles or unmasked `/proc` paths.
-2. It can't read, change or join another scope's containers, volumes, networks or images, nor shared networks beyond what its scope names, with only its own aliases.
+2. It can't read, change or join another scope's containers, volumes, networks or images, nor shared networks beyond what its scope names, with only its own aliases. Its builders are reached only by `buildctl dial-stdio`, and only while they're rootless and unprivileged.
 3. It can't use an endpoint its policy doesn't name; endpoints YorvoGate doesn't know (a newer Docker's) are refused.
 4. It can't make YorvoGate read a request one way and Docker another: bodies are decoded with Docker's own types and the same decoder, unknown fields are refused, and what's forwarded is the re-encoded value that was checked. Parameters are read only from the query, as checked: a scope's form body (`application/x-www-form-urlencoded`, `multipart/*`) is refused, since Docker would read parameters from it over the query, and Docker gets a `Content-Type` YorvoGate sets, never the client's. Paths must be canonical (no dot segments, empty segments or percent-encoding) and carry an API version YorvoGate knows.
 5. It can't act as another scope: each request proves its scope with a token, compared in constant time with the hash in the scope's file; a client learns nothing about which scopes exist. On a listener with [scope sockets](configuration.md#scope-sockets), the socket a request comes on is its scope, and a request that names another scope is refused.
@@ -25,6 +25,7 @@ What YorvoGate holds, so you can tell a vulnerability from a limit, and set it u
 ## Out of scope
 
 - A flaw in Docker, runc or the kernel, and what runs inside an allowed container.
+- A flaw in BuildKit, reached through a builder's `buildctl dial-stdio` (it runs rootless and unprivileged, which limits what one can do).
 - Anyone who can reach Docker's socket directly, or write the configuration or scope files.
 - Anyone who can open a scope's socket: they are that scope. Keep the `scope_sockets` folder out of clients' reach, and give each client only its own socket.
 - Resource use through allowed requests (how many containers a scope creates, how much it pulls).

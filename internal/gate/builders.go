@@ -1,0 +1,171 @@
+package gate
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"slices"
+	"strings"
+
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/mount"
+)
+
+// A scope's builder is a BuildKit container the orchestrator created. A scope may only inspect it and
+// reach BuildKit through it with "buildctl dial-stdio" (what buildx's remote driver runs), and only
+// while the builder has the configuration below: rootless, unprivileged, nothing of the host's.
+
+// dialStdio tells whether a command is BuildKit's dial-stdio, exactly.
+func dialStdio(cmd []string) bool {
+	return slices.Equal(cmd, []string{"buildctl", "dial-stdio"})
+}
+
+// dialStdioFields are what an exec of dial-stdio may set: what "docker exec -i" sends.
+var dialStdioFields = fields("Cmd", "AttachStdin", "AttachStdout", "AttachStderr", "ConsoleSize", "DetachKeys")
+
+// createDialStdio checks an exec created in a builder: buildctl dial-stdio and nothing else.
+func (s *scoped) createDialStdio(body []byte) ([]byte, error) {
+	var req container.ExecCreateRequest
+	if err := decode(body, &req); err != nil {
+		return nil, err
+	}
+
+	if !dialStdio(req.Cmd) {
+		return nil, refuse(http.StatusForbidden, "exec.create: in builder %s, only buildctl dial-stdio is allowed", s.builderName)
+	}
+
+	if f := unset(req, dialStdioFields); len(f) > 0 {
+		return nil, refuse(http.StatusForbidden, "exec.create: in builder %s, %s isn't allowed", s.builderName, strings.Join(f, ", "))
+	}
+
+	return json.Marshal(req)
+}
+
+// builderUser tells whether an exec's user, as Docker reports it, is the builder's own.
+func builderUser(c *object, user string) bool {
+	return user == "" || (c.inspection != nil && c.inspection.Config != nil && user == c.inspection.Config.User)
+}
+
+// notOnBuilder refuses anything else on a builder.
+func (s *scoped) notOnBuilder() error {
+	return refuse(http.StatusForbidden, "%s isn't allowed on builder %s: a builder may only be inspected, and reached with buildctl dial-stdio", s.req.Endpoint.Name, s.builderName)
+}
+
+// ownContainer checks that the container the path names is the scope's own (a builder isn't).
+func (s *scoped) ownContainer() error {
+	builder, err := s.container()
+	if err == nil && builder {
+		return s.notOnBuilder()
+	}
+
+	return err
+}
+
+// builder checks a builder's configuration, as Docker has it now: anything that would give the
+// scope more than BuildKit's own unprivileged process is refused, naming what.
+func (s *scoped) builder(c *object) error {
+	s.builderName = c.Name
+
+	if s.anyBuilder {
+		return nil
+	}
+
+	if problems := builderProblems(c.inspection, s.builderProfiles); len(problems) > 0 {
+		return refuse(http.StatusForbidden, "builder %s isn't configured as a builder must be: %s", c.Name, strings.Join(problems, "; "))
+	}
+
+	return nil
+}
+
+func builderProblems(c *container.InspectResponse, profiles []string) []string {
+	if c == nil || c.HostConfig == nil || c.Config == nil {
+		return []string{"its configuration couldn't be read"}
+	}
+
+	h := c.HostConfig
+
+	var problems []string
+
+	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+
+	if h.Privileged {
+		add("it's privileged")
+	}
+
+	if len(h.CapAdd) > 0 {
+		add("it adds capabilities (%s)", strings.Join(h.CapAdd, ", "))
+	}
+
+	if len(h.Devices) > 0 || len(h.DeviceRequests) > 0 || len(h.DeviceCgroupRules) > 0 {
+		add("it has devices")
+	}
+
+	// "-v name:/path" is a named volume, which Docker keeps among the binds; "-v /x:/path" a host path.
+	for _, b := range h.Binds {
+		if source, _, _ := strings.Cut(b, ":"); strings.ContainsAny(source, "/\\") || source == "" || strings.HasPrefix(source, ".") || strings.HasPrefix(source, "~") {
+			add("it binds the host path %q", source)
+		}
+	}
+
+	for _, m := range h.Mounts {
+		if m.Type != mount.TypeVolume && m.Type != mount.TypeTmpfs {
+			add("it mounts %q as %s (only volumes and tmpfs)", m.Source, m.Type)
+		}
+	}
+
+	for _, m := range c.Mounts {
+		if m.Type != mount.TypeVolume && m.Type != mount.TypeTmpfs {
+			add("it has a %s mount at %s (only volumes and tmpfs)", m.Type, m.Destination)
+		}
+	}
+
+	if h.PidMode.IsHost() || h.IpcMode.IsHost() || h.UTSMode.IsHost() || h.UsernsMode.IsHost() || h.CgroupnsMode.IsHost() || h.NetworkMode.IsHost() {
+		add("it shares the host's namespaces")
+	}
+
+	if h.PidMode.IsContainer() || h.IpcMode.IsContainer() || h.NetworkMode.IsContainer() || len(h.VolumesFrom) > 0 {
+		add("it joins another container (PidMode, IpcMode, NetworkMode or VolumesFrom)")
+	}
+
+	if len(h.PortBindings) > 0 || h.PublishAllPorts {
+		add("it publishes ports")
+	}
+
+	if len(h.Sysctls) > 0 {
+		add("it sets kernel parameters (Sysctls)")
+	}
+
+	if user, _, _ := strings.Cut(strings.TrimSpace(c.Config.User), ":"); user == "" || user == "0" || user == "root" {
+		add("it runs as root (User %q): a builder runs as an unprivileged user, as BuildKit's rootless image does", c.Config.User)
+	}
+
+	for _, o := range h.SecurityOpt {
+		if !builderOption(o, profiles) {
+			add("the security option %q isn't allowed (seccomp=unconfined, systempaths=unconfined, no-new-privileges, apparmor=<one of the listener's builder_apparmor_profiles>)", o)
+		}
+	}
+
+	return problems
+}
+
+// builderOption tells whether a builder may have a security option, as Docker takes it ("key=value"
+// or "key:value").
+func builderOption(o string, profiles []string) bool {
+	i := strings.IndexAny(o, "=:")
+	if i < 0 {
+		return o == "no-new-privileges"
+	}
+
+	key, value := o[:i], o[i+1:]
+
+	switch key {
+	case "seccomp", "systempaths":
+		return value == "unconfined"
+	case "no-new-privileges":
+		return value == "true"
+	case "apparmor":
+		return slices.Contains(profiles, value)
+	}
+
+	return false
+}

@@ -155,14 +155,14 @@ func TestOnlyPlainFilesOnlyItsOwnerWrites(t *testing.T) {
 
 func TestWhatAScopeMayUse(t *testing.T) {
 	dir := t.TempDir()
-	write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"images": ["quire-sites/jane/"], "containers": ["buildx_buildkit_jane-*", "jane-tools"], "networks": {"quire-link-jane": {"aliases": ["jane.example.quire.internal"], "addresses": ["10.213.0.4"]}}, "prefixes"`, 1))
+	write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"images": ["quire-sites/jane/"], "builders": ["buildx_buildkit_jane0", "jane-tools"], "networks": {"quire-link-jane": {"aliases": ["jane.example.quire.internal"], "addresses": ["10.213.0.4"]}}, "prefixes"`, 1))
 
 	s, err := NewStore(dir).Authenticate("jane", token)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !s.Uses("buildx_buildkit_jane-0") || !s.Uses("jane-tools") || s.Uses("buildx_buildkit_jane-") || s.Uses("jane-tools-2") || s.Uses("buildx_buildkit_blog-0") {
+	if !s.Builds("buildx_buildkit_jane0") || !s.Builds("jane-tools") || s.Builds("buildx_buildkit_jane") || s.Builds("jane-tools-2") || s.Builds("buildx_buildkit_blog0") {
 		t.Error("uses only the containers its scope names")
 	}
 
@@ -352,5 +352,36 @@ func TestATokenIsOptionalOnlyWithASocket(t *testing.T) {
 	names, invalid, err := store.Scopes()
 	if err != nil || strings.Join(names, ",") != "blog,jane" || len(invalid) != 1 || invalid["bad"] == nil {
 		t.Errorf("valid %v, invalid %v, %v", names, invalid, err)
+	}
+}
+
+// Builders are exact names, each one scope's; 0.1's "containers" is refused, saying why.
+func TestBuilders(t *testing.T) {
+	for content, want := range map[string]string{
+		strings.Replace(jane(), `"prefixes"`, `"containers": ["buildx_buildkit_jane-*"], "prefixes"`, 1): "replaced by builders",
+		strings.Replace(jane(), `"prefixes"`, `"builders": ["buildx_buildkit_jane-*"], "prefixes"`, 1):   "no wildcard",
+		strings.Replace(jane(), `"prefixes"`, `"builders": ["../x"], "prefixes"`, 1):                     "no wildcard",
+	} {
+		dir := t.TempDir()
+		write(t, dir, "jane", content)
+
+		if _, err := NewStore(dir).Get("jane"); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", content, err)
+		}
+	}
+
+	dir := t.TempDir()
+	write(t, dir, "jane", strings.Replace(scopeFile("jane", "jane", "quire-sites/jane/"), `"prefixes"`, `"builders": ["bk-jane"], "prefixes"`, 1))
+	past := time.Now().Add(-time.Hour)
+	_ = os.Chtimes(filepath.Join(dir, "jane.json"), past, past)
+	write(t, dir, "blog", strings.Replace(scopeFile("blog", "blog", "quire-sites/blog/"), `"prefixes"`, `"builders": ["bk-jane"], "prefixes"`, 1))
+
+	store := NewStore(dir)
+	if _, err := store.Get("jane"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Get("blog"); err == nil || !strings.Contains(err.Error(), `builders: "bk-jane" is scope jane's already`) {
+		t.Errorf("a builder of two scopes: %v", err)
 	}
 }

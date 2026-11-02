@@ -143,6 +143,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 
 		decision := &scoped{
 			ctx: r.Context(), req: req, scope: s, policy: g.listener.Containers, docker: g.docker,
+			builderProfiles: g.listener.BuilderAppArmorProfiles, anyBuilder: g.listener.AllowPrivilegedBuilders,
 			path: r.URL.EscapedPath(), query: r.URL.Query(), upgrading: upgrading(r),
 			stream: r.Body, hasBody: r.ContentLength != 0, loadLimit: g.config.LoadLimit,
 		}

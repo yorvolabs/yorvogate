@@ -38,6 +38,8 @@ listeners:                              # at least one
     socket_group: quire                 # who may connect (optional; YorvoGate's own group if left out)
     mode: scoped
     scopes: /etc/yorvogate/sites
+    builder_apparmor_profiles: [yorvogate-buildkit-rootless]  # profiles a builder may run under
+    # allow_privileged_builders: true   # any builder, privileged included: the scope is root on the host
 ```
 
 ## Scope sockets
@@ -76,7 +78,8 @@ A container's configuration is read field by field with Docker's own types: each
 |---|---|
 | `_ping`, `version`, `info` | Yes |
 | Containers: create | With the rules above; its name starts with a prefix of its scope, it carries the owner label |
-| Containers: inspect, logs, stats, start, stop, kill, wait, attach, archive, delete, rename… | Its own only (by the owner label, or named in its scope's `containers`); a rename keeps a name of its own |
+| Containers: inspect, logs, stats, start, stop, kill, wait, attach, archive, delete, rename… | Its own only (by the owner label); a rename keeps a name of its own. Its builders: inspect only |
+| Exec: create, start | In its own containers, never privileged. In its builders, only `buildctl dial-stdio` (no resize, no inspect) |
 | Containers: update | New limits, checked as at create |
 | Containers, networks, volumes: list; containers: prune | Only its own: its owner label is added to the request's filters |
 | Exec: create, start, resize, inspect | In its own containers only, never privileged |
@@ -126,7 +129,7 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
   "prefixes": ["jane-", "jane_"],
   "images": ["registry.example.com/tenants/jane/"],
   "networks": {"edge-jane": {"aliases": ["jane.example.internal"], "addresses": ["10.213.0.4"]}},
-  "containers": ["buildx_buildkit_jane-*"],
+  "builders": ["buildkit-jane"],
   "subnets": ["10.213.0.32/27"]
 }
 ```
@@ -141,7 +144,45 @@ Scopes' names may nest, as Compose projects' do (sites `jane` and `jane-blog`): 
 One case is left to the orchestrator: if tenant `jane` has a Compose service named `blog-php` before a scope `jane-blog` exists, its container `jane-blog-php-1` is jane's. Once `jane-blog` arrives, `jane-blog`'s Compose project can't take that name. Nothing crosses between the scopes, since ownership is by label, but it's a denial of service. An orchestrator that lets tenants pick nested names should refuse dashes in service names.
 - `networks` (optional): shared networks it may join besides its own, each with the `aliases` it may take and the `addresses` it may ask for there (none if left out).
 - `subnets` (optional): where its networks' addresses must be, in CIDR form: each network it creates names its subnet, inside one of these (otherwise Docker picks from its own pools).
-- `containers` (optional): containers it may use without carrying its label, by name, a trailing `*` matching any end (e.g. its BuildKit builder, created by the orchestrator).
+- `builders` (optional): its BuildKit builders, by exact name (no wildcard), each one scope's only. See [builders](#builders). 0.1's `containers` key is refused: a container a scope "used" was fully its own, privileged or not.
+
+## Builders
+
+A scope builds images through a BuildKit builder the orchestrator runs for it: a container named in the scope's `builders`. The scope reaches BuildKit through it and nothing more:
+
+- It may inspect the builder, create an exec of exactly `buildctl dial-stdio` (no user, environment, working directory or TTY), and start that exec. That's all buildx's `remote` driver sends. Everything else is refused: other commands, exec resize and inspect, archive, attach, logs, start, stop, delete, and joining its namespaces or volumes (`PidMode`, `IpcMode`, `NetworkMode: container:…`, `VolumesFrom`). A builder is never one of the scope's own containers, whatever its labels.
+- YorvoGate inspects the builder on each use, and accepts it only if it's configured as below. Otherwise every use is refused, naming what failed:
+  - not privileged; no added capabilities; no devices, device requests or device cgroup rules;
+  - no binds or host paths (volumes and tmpfs only); no host namespaces (PID, IPC, UTS, user, cgroup, network `host`), and none of another container's; no published ports; no `Sysctls`;
+  - it runs as a user other than root (`moby/buildkit:<version>-rootless` runs as `1000:1000`);
+  - its security options only `seccomp=unconfined`, `systempaths=unconfined`, `no-new-privileges`, and `apparmor=<a profile in the listener's builder_apparmor_profiles>`. YorvoGate sees only a profile's name, so the operator vouches for each name listed. `apparmor=unconfined` is accepted only if listed.
+- These options widen the kernel's attack surface for an unprivileged, capability-less process: the accepted risk of builds on a shared kernel.
+- `allow_privileged_builders: true` accepts any builder. A privileged builder is root on the host for whoever can exec into it: never for tenants.
+
+The orchestrator creates the builder on its trusted listener (buildx's `docker-container` driver always makes privileged builders), with BuildKit's rootless image, pinned:
+
+```sh
+docker run -d --name buildkit-jane \
+  --security-opt seccomp=unconfined \
+  --security-opt apparmor=yorvogate-buildkit-rootless \
+  --security-opt systempaths=unconfined \
+  -v buildkit-jane-state:/home/user/.local/share/buildkit \
+  moby/buildkit:v0.34.0-rootless@sha256:65eca3c01cd1180c8f64565c4e3c5983af5145818b0e6fa863385d099eb73855
+```
+
+Don't add `no-new-privileges`: it breaks rootless BuildKit (`newuidmap: Could not set caps`).
+
+On Ubuntu 24.04 and later, unprivileged user namespaces are restricted by AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`), and rootless BuildKit doesn't start under `apparmor=unconfined`. Load the profile in [`examples/apparmor/yorvogate-buildkit-rootless`](../examples/apparmor/yorvogate-buildkit-rootless): it grants only `userns`. Prefer it to setting that sysctl to 0, which lifts the restriction for every process on the host.
+
+The scope uses the builder with buildx's `remote` driver, on its own [socket](#scope-sockets) (buildx sends no header tokens on its own connections). In the scope's `DOCKER_CONFIG`, a context whose endpoint is the scope's socket must be both the current context and the builder's, since `--load` sends the image to the current endpoint (where `image.load` checks its names against the scope's `images`):
+
+```sh
+export DOCKER_CONFIG=/srv/scopes/jane/docker
+docker context create scope --docker host=unix:///run/yorvogate/sites/jane.sock
+docker context use scope
+docker buildx create --name jane --driver remote 'docker-container://buildkit-jane?context=scope'
+docker buildx build --builder jane --load -t registry.example.com/tenants/jane/app:1 .
+```
 
 On a listener with an address, a client sends its scope with each request. With the Docker CLI or Compose, through its `config.json` (`DOCKER_CONFIG` pointing at the scope's own folder):
 

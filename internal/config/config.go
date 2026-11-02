@@ -77,6 +77,12 @@ type Listener struct {
 	Scopes string `yaml:"scopes"`
 	// Containers (scoped): what every scope's containers may ask of the host.
 	Containers Containers `yaml:"containers"`
+	// BuilderAppArmorProfiles (scoped) are the AppArmor profiles a scope's builder may run under
+	// ("apparmor=<name>"). YorvoGate sees only a profile's name: the operator vouches for each.
+	BuilderAppArmorProfiles []string `yaml:"builder_apparmor_profiles"`
+	// AllowPrivilegedBuilders (scoped) accepts a scope's builder whatever its configuration,
+	// privileged included: the scope is then root on the host. Never for tenants.
+	AllowPrivilegedBuilders bool `yaml:"allow_privileged_builders"`
 }
 
 // Containers is what a scoped listener lets its scopes' containers ask of the host. What isn't listed
@@ -281,12 +287,18 @@ func (l *Listener) check() error {
 		if err := l.Containers.check(); err != nil {
 			return fmt.Errorf("containers: %w", err)
 		}
+
+		for _, p := range l.BuilderAppArmorProfiles {
+			if !profile.MatchString(p) {
+				return fmt.Errorf("builder_apparmor_profiles: %q isn't an AppArmor profile's name", p)
+			}
+		}
 	default:
 		return fmt.Errorf("mode: %q must be trusted or scoped", l.Mode)
 	}
 
-	if l.Mode == Trusted && !l.Containers.empty() {
-		return errors.New("containers: only a scoped listener has them")
+	if l.Mode == Trusted && (!l.Containers.empty() || len(l.BuilderAppArmorProfiles) > 0 || l.AllowPrivilegedBuilders) {
+		return errors.New("containers, builder_apparmor_profiles and allow_privileged_builders: only a scoped listener has them")
 	}
 
 	return nil
@@ -296,6 +308,7 @@ var (
 	capability = regexp.MustCompile(`^[A-Z][A-Z_]{1,31}$`)
 	plainName  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	imagePart  = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,254}/$`)
+	profile    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 )
 
 func (c *Containers) check() error {

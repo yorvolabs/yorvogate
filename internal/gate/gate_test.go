@@ -42,6 +42,31 @@ type docker struct {
 	forwarded []seen
 	dropped   int
 	socket    string
+	// jane's builder as Docker has it: rootless, as a builder must be, unless a test changes it
+	builder map[string]any
+}
+
+// rootlessBuilder is a builder's inspection as the orchestrator creates it (measured on the droplet):
+// BuildKit's rootless image, under the host's AppArmor profile for it, its state in a volume.
+func rootlessBuilder() map[string]any {
+	return map[string]any{
+		"Id": janeBuilder, "Name": "/buildx_buildkit_jane0",
+		"Config": map[string]any{"User": "1000:1000", "Labels": nil},
+		"HostConfig": map[string]any{
+			"SecurityOpt": []string{"seccomp=unconfined", "apparmor=yorvogate-buildkit-rootless", "systempaths=unconfined"},
+			"NetworkMode": "bridge",
+			"Mounts":      []map[string]any{{"Type": "volume", "Source": "buildx_buildkit_jane0_state", "Target": "/home/user/.local/share/buildkit"}},
+		},
+		"Mounts": []map[string]any{{"Type": "volume", "Name": "buildx_buildkit_jane0_state", "Destination": "/home/user/.local/share/buildkit"}},
+	}
+}
+
+// setBuilder changes jane's builder's inspection, at a path ("HostConfig.Privileged").
+func (d *docker) setBuilder(path string, value any) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.builder = set(d.builder, path, value)
 }
 
 type seen struct {
@@ -60,12 +85,19 @@ var (
 	blog = map[string]string{"com.docker.compose.project": "blog"}
 
 	// jane-blog-php-1 starts with jane's prefix, but it's scope jane-blog's (a site nested in jane's name).
-	containers = []fakeObject{{janePHP, "jane-php-1", jane}, {blogPHP, "blog-php-1", blog}, {janeBuilder, "buildx_buildkit_jane-0", nil}, {nestedPHP, "jane-blog-php-1", map[string]string{"com.docker.compose.project": "jane-blog"}}}
+	containers = []fakeObject{{janePHP, "jane-php-1", jane}, {blogPHP, "blog-php-1", blog}, {janeBuilder, "buildx_buildkit_jane0", nil}, {nestedPHP, "jane-blog-php-1", map[string]string{"com.docker.compose.project": "jane-blog"}}}
 	networks   = []fakeObject{{janeNet, "jane_default", jane}, {blogNet, "blog_default", blog}, {linkNet, "quire-link-jane", nil}}
 	// jane_stolen has jane's prefix but blog's label: a name doesn't make a volume jane's.
 	volumes = []fakeObject{{"jane_data", "jane_data", jane}, {"blog_data", "blog_data", blog}, {"jane_stolen", "jane_stolen", blog}}
-	execs   = map[string]string{"exec-jane": janePHP, "exec-blog": blogPHP}
-	images  = []fakeImage{
+	execs   = map[string]string{"exec-jane": janePHP, "exec-blog": blogPHP, "exec-dial": janeBuilder, "exec-dial-as-docker-says": janeBuilder, "exec-shell": janeBuilder, "exec-dial-root": janeBuilder}
+	// What each exec runs (the others, a shell)
+	execCommands = map[string]map[string]any{
+		"exec-dial": {"entrypoint": "buildctl", "arguments": []string{"dial-stdio"}},
+		// As Docker 29.9.2 reports it: the container's user, privileged false
+		"exec-dial-as-docker-says": {"tty": false, "entrypoint": "buildctl", "arguments": []string{"dial-stdio"}, "privileged": false, "user": "1000:1000"},
+		"exec-dial-root":           {"entrypoint": "buildctl", "arguments": []string{"dial-stdio"}, "user": "0"},
+	}
+	images = []fakeImage{
 		{"sha256:" + strings.Repeat("1", 64), []string{"alpine:3.22"}},
 		{"sha256:" + strings.Repeat("2", 64), []string{"quire-sites/jane/php-prod:latest"}},
 		{"sha256:" + strings.Repeat("3", 64), []string{"quire-sites/blog/php-prod:latest"}},
@@ -127,7 +159,7 @@ func find(objects []fakeObject, key string) *fakeObject {
 
 func startDocker(t testing.TB) *docker {
 	t.Helper()
-	d := &docker{socket: filepath.Join(t.TempDir(), "docker.sock")}
+	d := &docker{socket: filepath.Join(t.TempDir(), "docker.sock"), builder: rootlessBuilder()}
 
 	listener, err := net.Listen("unix", d.socket)
 	if err != nil {
@@ -227,7 +259,12 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 	switch m[1] {
 	case "containers":
 		if o := find(containers, m[2]); o != nil {
-			answer = map[string]any{"Id": o.id, "Name": "/" + o.name, "Config": map[string]any{"Labels": o.labels}}
+			answer = map[string]any{"Id": o.id, "Name": "/" + o.name, "Config": map[string]any{"Labels": o.labels}, "HostConfig": map[string]any{}}
+			if o.id == janeBuilder {
+				d.mu.Lock()
+				answer = d.builder
+				d.mu.Unlock()
+			}
 		}
 	case "networks":
 		if o := find(networks, m[2]); o != nil {
@@ -239,7 +276,12 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 		}
 	case "exec":
 		if c, ok := execs[m[2]]; ok {
-			answer = map[string]any{"ID": m[2], "ContainerID": c}
+			process := execCommands[m[2]]
+			if process == nil {
+				process = map[string]any{"entrypoint": "sh", "arguments": []string{"-c", "id"}}
+			}
+
+			answer = map[string]any{"ID": m[2], "ContainerID": c, "ProcessConfig": process}
 		}
 	}
 
@@ -276,7 +318,7 @@ const scopeFile = `{
 	"prefixes": ["jane-", "jane_"],
 	"images": ["quire-sites/jane/"],
 	"networks": {"quire-link-jane": {"aliases": ["jane.example.quire.internal"], "addresses": ["10.213.0.4"]}},
-	"containers": ["buildx_buildkit_jane-*"],
+	"builders": ["buildx_buildkit_jane0"],
 	"subnets": ["10.213.0.32/27", "10.213.0.64/27"]
 }`
 
@@ -309,6 +351,7 @@ listeners:
     address: tcp://127.0.0.1:2376
     mode: scoped
     scopes: ` + scopes + `
+    builder_apparmor_profiles: [yorvogate-buildkit-rootless]
     containers:
       capabilities: [NET_BIND_SERVICE, CHOWN]
       drop_all_capabilities: true
@@ -321,6 +364,11 @@ listeners:
     address: tcp://127.0.0.1:2377
     mode: scoped
     scopes: ` + scopes + `
+  - name: any-builder
+    address: tcp://127.0.0.1:2378
+    mode: scoped
+    scopes: ` + scopes + `
+    allow_privileged_builders: true
 `))
 	if err != nil {
 		t.Fatal(err)

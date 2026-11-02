@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	tokenlessJane = `{"owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-", "jane_"], "containers": ["buildx_buildkit_jane-*"]}`
+	tokenlessJane = `{"owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-", "jane_"], "builders": ["buildx_buildkit_jane0"]}`
 	tokenlessBlog = `{"owner": {"label": "com.docker.compose.project", "value": "blog"}, "prefixes": ["blog-", "blog_"]}`
 )
 

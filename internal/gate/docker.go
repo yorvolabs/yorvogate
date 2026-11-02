@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/moby/moby/api/types/container"
 )
 
 // Docker is what YorvoGate asks Docker itself, to decide: who owns an object a request names. It
@@ -34,29 +36,31 @@ func NewDocker(socket string) *Docker {
 }
 
 // object is what YorvoGate needs to know of a container, network or volume: its full ID or name,
-// and its labels.
+// and its labels. A container's whole inspection comes with it (a builder's configuration is
+// checked on each use).
 type object struct {
 	ID     string
 	Name   string
 	Labels map[string]string
+
+	inspection *container.InspectResponse
 }
 
 // Container looks a container up by ID or name; nil when there's none.
 func (d *Docker) Container(ctx context.Context, version, id string) (*object, error) {
-	var answer struct {
-		ID     string `json:"Id"`
-		Name   string
-		Config struct {
-			Labels map[string]string
-		}
-	}
+	var answer container.InspectResponse
 
 	found, err := d.get(ctx, version, "/containers/"+url.PathEscape(id)+"/json", &answer)
 	if !found || err != nil {
 		return nil, err
 	}
 
-	return &object{ID: answer.ID, Name: strings.TrimPrefix(answer.Name, "/"), Labels: answer.Config.Labels}, nil
+	var labels map[string]string
+	if answer.Config != nil {
+		labels = answer.Config.Labels
+	}
+
+	return &object{ID: answer.ID, Name: strings.TrimPrefix(answer.Name, "/"), Labels: labels, inspection: &answer}, nil
 }
 
 // Network looks a network up by ID or name; nil when there's none.
@@ -111,18 +115,22 @@ func (d *Docker) Image(ctx context.Context, version, ref string) (*image, error)
 	return &image{ID: answer.ID, Tags: answer.RepoTags}, nil
 }
 
-// ExecContainer is the ID of the container an exec runs in; "" when there's no such exec.
-func (d *Docker) ExecContainer(ctx context.Context, version, id string) (string, error) {
-	var answer struct {
-		ContainerID string
-	}
+// execInfo is what YorvoGate needs to know of an exec: its container, and what it runs.
+type execInfo struct {
+	ContainerID   string
+	ProcessConfig *container.ExecProcessConfig
+}
+
+// Exec looks an exec up; nil when there's none.
+func (d *Docker) Exec(ctx context.Context, version, id string) (*execInfo, error) {
+	var answer execInfo
 
 	found, err := d.get(ctx, version, "/exec/"+url.PathEscape(id)+"/json", &answer)
 	if !found || err != nil {
-		return "", err
+		return nil, err
 	}
 
-	return answer.ContainerID, nil
+	return &answer, nil
 }
 
 func (d *Docker) get(ctx context.Context, version, path string, into any) (bool, error) {

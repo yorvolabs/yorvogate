@@ -98,6 +98,7 @@ cleanup() {
 		direct volume ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker volume rm >/dev/null 2>&1
 	done
 	direct rmi ygc-jane/app:1 ygc-blog/app:1 >/dev/null 2>&1
+	direct rm -f ygc-builder-privileged ygc-builder-rootless >/dev/null 2>&1
 	[ -n "${gate:-}" ] && kill "$gate" 2>/dev/null
 }
 trap cleanup EXIT
@@ -111,8 +112,10 @@ for scope in jane blog; do
 	printf '%s' "$token" > "$dir/$scope.token"
 	mkdir -p "$dir/$scope"
 	printf '{"HttpHeaders":{"X-YorvoGate-Scope":"%s","X-YorvoGate-Token":"%s"}}\n' "$scope" "$token" > "$dir/$scope/config.json"
-	printf '{"token_sha256":"%s","owner":{"label":"com.docker.compose.project","value":"ygc-%s"},"prefixes":["ygc-%s-","ygc-%s_"],"images":["ygc-%s/"]}\n' \
-		"$(printf '%s' "$token" | sha256sum | cut -d' ' -f1)" "$scope" "$scope" "$scope" "$scope" > "$dir/scopes/$scope.json"
+	builders='[]'
+	[ "$scope" = jane ] && builders='["ygc-builder-privileged","ygc-builder-rootless"]'
+	printf '{"token_sha256":"%s","owner":{"label":"com.docker.compose.project","value":"ygc-%s"},"prefixes":["ygc-%s-","ygc-%s_"],"images":["ygc-%s/"],"builders":%s}\n' \
+		"$(printf '%s' "$token" | sha256sum | cut -d' ' -f1)" "$scope" "$scope" "$scope" "$scope" "$builders" > "$dir/scopes/$scope.json"
 	chmod 600 "$dir/scopes/$scope.json"
 done
 
@@ -152,6 +155,11 @@ gate=$!
 sleep 1
 
 direct image inspect alpine:3.22 >/dev/null 2>&1 || direct pull -q alpine:3.22 >/dev/null
+
+# jane's builders, as an orchestrator would run them: buildx's docker-container driver's (privileged),
+# and one configured as a builder must be (rootless, unprivileged; alpine stands in for BuildKit)
+direct run -d --name ygc-builder-privileged --privileged alpine:3.22 sleep 600 >/dev/null
+direct run -d --name ygc-builder-rootless --user 1000:1000 --security-opt seccomp=unconfined alpine:3.22 sleep 600 >/dev/null
 
 # A tenant's project: hardened, its own network and volume
 project() {
@@ -239,6 +247,21 @@ refused "a published port" "published ports" as jane docker compose -p ygc-jane 
 refused "blog's image" "protected namespace" as jane docker compose -p ygc-jane -f "$(hostile image '' ygc-blog/app:1)" up -d
 refused "a volume bound to /" "DriverOpts" as jane docker compose -p ygc-jane -f "$(hostile volopts '    volumes: [root:/host]\nvolumes:\n  root:\n    driver_opts: {type: none, o: bind, device: /}')" up -d
 refused "a bridge onto the host's" "Options" as jane docker compose -p ygc-jane -f "$(hostile netopts '    networks: [evil]\nnetworks:\n  evil:\n    driver_opts: {com.docker.network.bridge.name: docker0}' '' net)" up -d
+
+say "== A builder is reached only by buildctl dial-stdio"
+# The assessment's C-2: an ordinary exec in the privileged builder was root on the host.
+refused "an exec in a privileged builder" "it's privileged" as jane docker exec ygc-builder-privileged id
+refused "dial-stdio in a privileged builder" "it's privileged" as jane docker exec -i ygc-builder-privileged buildctl dial-stdio
+refused "a shell in a rootless builder" "only buildctl dial-stdio" as jane docker exec ygc-builder-rootless id
+refused "dial-stdio as root" "User" as jane docker exec -u 0 ygc-builder-rootless buildctl dial-stdio
+refused "stopping a builder" "isn't allowed on builder" as jane docker stop ygc-builder-rootless
+refused "a builder's files" "isn't allowed on builder" as jane docker cp ygc-builder-rootless:/etc/passwd -
+refused "joining a builder's namespaces" "ygc-builder-rootless" as jane docker compose -p ygc-jane -f "$(hostile joinbuilder '    pid: container:ygc-builder-rootless')" up -d
+# dial-stdio itself gets past YorvoGate (alpine has no buildctl: Docker's own error, not YorvoGate's)
+if output=$(as jane docker exec -i ygc-builder-rootless buildctl dial-stdio </dev/null 2>&1) || ! printf '%s' "$output" | grep -q yorvogate; then ok "dial-stdio in a rootless builder"; else ko "dial-stdio in a rootless builder" "$output"; fi
+if [ "$(as jane docker ps -a --format '{{.Names}}' | grep -c ygc-builder)" = 0 ]; then ok "builders aren't listed as its own"; else ko "builders listed as its own"; fi
+blog_builder=$(as blog docker container inspect ygc-builder-rootless 2>&1)
+if printf '%s' "$blog_builder" | grep -q "No such container"; then ok "another scope's builder doesn't exist for blog"; else ko "blog sees jane's builder" "$blog_builder"; fi
 
 say "== Requests written to slip past (raw HTTP)"
 create='{"Image":"alpine:3.22","Labels":{"com.docker.compose.project":"ygc-jane"},"HostConfig":{"NetworkMode":"none","CapDrop":["ALL"],"SecurityOpt":["no-new-privileges"],"Memory":67108864,"PidsLimit":64%s}}'
