@@ -8,6 +8,7 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 - **Scope sockets.** A scoped listener can give each scope a unix socket of its own (`scope_sockets: <folder>`, `<scope>.sock` per scope file) instead of an address. A request on it is that scope's without a header or token, so any client works, buildx's own connections included. Sockets come and go with their scope files (read every 2 seconds, and on `SIGHUP`); a scope removed or no longer valid has its socket and its connections closed. `token_sha256` is optional in those scope files.
 - **`socket_group`** for a listener's unix sockets.
+- **Conformance of Quire Server's real use**, in CI: an orchestrator on a trusted unix socket, sites on their own sockets with nested names, a Compose build on a rootless BuildKit builder under the shipped AppArmor profile.
 - **`builder_apparmor_profiles`**: the AppArmor profiles a scope's builder may run under, and the profile for rootless BuildKit on Ubuntu 24.04 (`examples/apparmor`).
 
 ### Changed

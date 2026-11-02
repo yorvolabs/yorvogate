@@ -13,23 +13,8 @@ set -u
 
 dir=/tmp/conformance
 listener=${YGC_LISTENER:-tokens}
-passed=0
-failed=0
-
-say() { printf '%s\n' "$*"; }
-ok() { passed=$((passed + 1)); say "  ok   $1"; }
-ko() {
-	failed=$((failed + 1))
-	say "  FAIL $1"
-	[ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/       /' | head -5
-	# On GitHub, each failure is an annotation too: readable without the job's log.
-	if [ "${GITHUB_ACTIONS:-}" = true ]; then
-		printf '::error title=Conformance::%s: %s\n' "$1" "$(printf '%s' "${2:-}" | tr '\n' ' ' | cut -c1-300)"
-	fi
-}
-
-# The real Docker, straight (to set up and to check what exists)
-direct() { env -u DOCKER_HOST -u DOCKER_CONFIG docker "$@"; }
+# shellcheck source=lib.sh
+. "$(dirname "$0")/lib.sh"
 
 # A command as a scope, through YorvoGate: its token in a header, or on its own socket with none
 as() {
@@ -39,27 +24,6 @@ as() {
 		DOCKER_HOST="unix://$dir/sockets/$scope.sock" DOCKER_CONFIG="$dir/bare" "$@"
 	else
 		DOCKER_HOST=tcp://127.0.0.1:2376 DOCKER_CONFIG="$dir/$scope" "$@"
-	fi
-}
-
-# works NAME COMMAND…: it must succeed.
-works() {
-	name=$1
-	shift
-	if output=$("$@" 2>&1); then ok "$name"; else ko "$name" "$output"; fi
-}
-
-# refused NAME WORDS COMMAND…: it must fail, with YorvoGate's words.
-refused() {
-	name=$1
-	words=$2
-	shift 2
-	if output=$("$@" 2>&1); then
-		ko "$name (it was allowed)" "$output"
-	elif printf '%s' "$output" | grep -q "yorvogate: .*$words"; then
-		ok "$name"
-	else
-		ko "$name (not refused by YorvoGate as expected)" "$output"
 	fi
 }
 
@@ -257,8 +221,10 @@ refused "dial-stdio as root" "User" as jane docker exec -u 0 ygc-builder-rootles
 refused "stopping a builder" "isn't allowed on builder" as jane docker stop ygc-builder-rootless
 refused "a builder's files" "isn't allowed on builder" as jane docker cp ygc-builder-rootless:/etc/passwd -
 refused "joining a builder's namespaces" "ygc-builder-rootless" as jane docker compose -p ygc-jane -f "$(hostile joinbuilder '    pid: container:ygc-builder-rootless')" up -d
-# dial-stdio itself gets past YorvoGate (alpine has no buildctl: Docker's own error, not YorvoGate's)
-if output=$(as jane docker exec -i ygc-builder-rootless buildctl dial-stdio </dev/null 2>&1) || ! printf '%s' "$output" | grep -q yorvogate; then ok "dial-stdio in a rootless builder"; else ko "dial-stdio in a rootless builder" "$output"; fi
+# dial-stdio itself gets past YorvoGate: created and started, Docker runs it (alpine has no buildctl,
+# so Docker says so). The CLI then asks for the exec's exit code, which a builder's exec doesn't give.
+output=$(as jane docker exec -i ygc-builder-rootless buildctl dial-stdio </dev/null 2>&1)
+if printf '%s' "$output" | grep -q '"buildctl": executable file not found'; then ok "dial-stdio in a rootless builder"; else ko "dial-stdio in a rootless builder" "$output"; fi
 if [ "$(as jane docker ps -a --format '{{.Names}}' | grep -c ygc-builder)" = 0 ]; then ok "builders aren't listed as its own"; else ko "builders listed as its own"; fi
 blog_builder=$(as blog docker container inspect ygc-builder-rootless 2>&1)
 if printf '%s' "$blog_builder" | grep -q "No such container"; then ok "another scope's builder doesn't exist for blog"; else ko "blog sees jane's builder" "$blog_builder"; fi

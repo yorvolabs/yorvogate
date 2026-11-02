@@ -73,7 +73,16 @@ jobs:
           echo "HOST_GID=$(id -g)" >> "$GITHUB_ENV"
       - name: Build
         run: docker compose -f compose.dev.yaml run --rm go make build
-      - name: The suite
+      # Ubuntu restricts unprivileged user namespaces with AppArmor: rootless BuildKit starts only
+      # under the profile YorvoGate ships for it (docs/configuration.md, Builders).
+      - name: The AppArmor profile for rootless BuildKit
+        run: |
+          sudo cp examples/apparmor/yorvogate-buildkit-rootless /etc/apparmor.d/
+          sudo apparmor_parser -r /etc/apparmor.d/yorvogate-buildkit-rootless
+          sudo aa-status | grep -q yorvogate-buildkit-rootless
+      - name: The suite, then Quire Server's use
+        env:
+          YGC_APPARMOR: yorvogate-buildkit-rootless
         run: test/conformance/run.sh
 
   scripts:
