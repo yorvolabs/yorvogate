@@ -163,9 +163,7 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 		add("HostConfig.%s isn't allowed", f)
 	}
 
-	if !s.scope.Owns(req.Config.Labels) {
-		add("it must carry the label %s=%s", s.scope.Owner.Key, s.scope.Owner.Value)
-	}
+	s.ownLabels(req.Config.Labels, add)
 
 	if err := s.image(req.Config.Image); err != nil {
 		add("%v", err)
@@ -179,7 +177,38 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 		return nil, refuse(http.StatusForbidden, "container.create %s: %s", name, strings.Join(problems, "; "))
 	}
 
+	// A volume a mount creates is the scope's: it carries its owner label. (Docker sets a mount's
+	// labels only on a volume it creates; one that exists is left as it is.)
+	for i := range req.HostConfig.Mounts {
+		m := &req.HostConfig.Mounts[i]
+		if m.Type != mount.TypeVolume {
+			continue
+		}
+
+		if m.VolumeOptions == nil {
+			m.VolumeOptions = &mount.VolumeOptions{}
+		}
+
+		if m.VolumeOptions.Labels == nil {
+			m.VolumeOptions.Labels = map[string]string{}
+		}
+
+		m.VolumeOptions.Labels[s.scope.Owner.Key] = s.scope.Owner.Value
+	}
+
 	return json.Marshal(req)
+}
+
+// ownLabels checks the labels of an object a scope creates: they carry its owner label, and none of
+// another scope's.
+func (s *scoped) ownLabels(labels map[string]string, add func(string, ...any)) {
+	if !s.scope.Owns(labels) {
+		add("it must carry the label %s=%s", s.scope.Owner.Key, s.scope.Owner.Value)
+	}
+
+	if s.scope.OwnedByAnother(labels) {
+		add("its labels mark it as another scope's")
+	}
 }
 
 // host checks what a container asks of the host: namespaces, capabilities, security options, the
@@ -323,6 +352,10 @@ func (s *scoped) mount(m mount.Mount, add func(string, ...any)) {
 		if o := m.VolumeOptions; o != nil {
 			if o.DriverConfig != nil && (o.DriverConfig.Name != "" && o.DriverConfig.Name != "local" || len(o.DriverConfig.Options) > 0) {
 				add("mount of %q: volume driver options aren't allowed", m.Source)
+			}
+
+			if s.scope.OwnedByAnother(o.Labels) {
+				add("mount of %q: its labels mark the volume as another scope's", m.Source)
 			}
 
 			if o.Subpath != "" && (path.IsAbs(o.Subpath) || path.Clean(o.Subpath) != o.Subpath || strings.HasPrefix(o.Subpath, "..")) {

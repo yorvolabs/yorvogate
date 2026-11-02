@@ -404,6 +404,18 @@ func (s *Scope) Owns(labels map[string]string) bool {
 	return ok && value == s.Owner.Value
 }
 
+// OwnedByAnother tells whether labels mark an object as another scope's: a scope may label what it
+// creates as its own only. (Scopes may use different owner labels, so having its own is no proof.)
+func (s *Scope) OwnedByAnother(labels map[string]string) bool {
+	for _, o := range s.others {
+		if o.Owns(labels) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // Contains tells whether a subnet is inside one of the scope's (true when it has none).
 func (s *Scope) Contains(subnet netip.Prefix) bool {
 	if len(s.subnets) == 0 {

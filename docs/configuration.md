@@ -114,7 +114,7 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 ```
 
 - `token_sha256`: the SHA-256 of the scope's token, 64 lowercase hex digits. The client sends the token itself.
-- `owner`: the label (and its value) that marks the scope's objects. For Compose projects, `com.docker.compose.project` and the project's name. An object is a scope's by this label only, never by its name.
+- `owner`: the label (and its value) that marks the scope's objects. For Compose projects, `com.docker.compose.project` and the project's name. An object is a scope's by this label only, never by its name. What a scope creates must carry it, and no other scope's owner label; a volume a container's mount creates gets it from YorvoGate.
 - `prefixes`: what the names of the containers, networks and volumes it creates start with. Each ends with `-`, `_` or `.`, so `jane-` never matches `janet-…`.
 - `images` (optional): its own image namespaces, as prefixes ending with `/`: it may use images there even where the listener protects them.
 
