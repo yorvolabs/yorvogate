@@ -1,0 +1,10 @@
+# AppArmor profile for a scope's rootless BuildKit builder (see docs/configuration.md, Builders).
+# It grants only what Ubuntu 24.04 restricts for unprivileged processes: creating a user namespace.
+#   sudo cp yorvogate-buildkit-rootless /etc/apparmor.d/
+#   sudo apparmor_parser -r /etc/apparmor.d/yorvogate-buildkit-rootless
+abi <abi/4.0>,
+include <tunables/global>
+
+profile yorvogate-buildkit-rootless flags=(unconfined) {
+  userns,
+}

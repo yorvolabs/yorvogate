@@ -154,18 +154,14 @@ func (s *scoped) sharedContainers(body []byte) ([]byte, error) {
 		var all map[string]json.RawMessage
 		_ = json.Unmarshal(raw, &all)
 
-		for id, c := range containers {
-			if s.scope.Uses(c.Name) {
-				continue
-			}
-
+		for id := range containers {
 			found, err := s.docker.Container(s.ctx, s.version, id)
 			if err != nil {
 				return nil, err
 			}
 
 			// One gone since Docker answered isn't listed.
-			if found == nil || !s.scope.Owns(found.Labels) {
+			if !s.owned(found) {
 				delete(all, id)
 			}
 		}

@@ -95,11 +95,11 @@ func TestAContainerAsComposeCreatesItIsAllowed(t *testing.T) {
 		t.Errorf("empty values: %d %s", status, answer)
 	}
 
-	// Its builder, which its scope names, and a network-less container are fine too.
+	// A network-less container, and joining its own container's namespaces, are fine too.
 	for _, body := range []map[string]any{
 		set(set(compose(), "HostConfig.NetworkMode", "none"), "NetworkingConfig", nil),
 		set(set(compose(), "HostConfig.NetworkMode", "container:jane-php-1"), "NetworkingConfig", nil),
-		set(compose(), "HostConfig.IpcMode", "container:buildx_buildkit_jane-0"),
+		set(compose(), "HostConfig.IpcMode", "container:jane-php-1"),
 	} {
 		if status, answer := send(t, server, "POST", "/v1.56/containers/create?name=jane-worker-1", encode(body), asJane); status != 200 {
 			t.Errorf("%d %s", status, answer)
@@ -254,7 +254,7 @@ func TestOnlyItsOwnContainers(t *testing.T) {
 		{"GET", "/v1.56/containers/jane-php-1/json"},
 		{"POST", "/v1.56/containers/jane-php-1/stop"},
 		{"DELETE", "/v1.56/containers/jane-php-1?v=1&force=1"},
-		{"GET", "/v1.56/containers/buildx_buildkit_jane-0/json"},
+		{"GET", "/v1.56/containers/buildx_buildkit_jane0/json"},
 	} {
 		if status, answer := send(t, server, c[0], c[1], "", asJane); status != 200 {
 			t.Errorf("%s %s: %d %s", c[0], c[1], status, answer)

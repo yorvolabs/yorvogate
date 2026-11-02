@@ -68,6 +68,11 @@ func TestAValidConfiguration(t *testing.T) {
 		t.Errorf("a scoped listener's containers: %v", err)
 	}
 
+	withBuilders := strings.Replace(valid, "mode: scoped", "mode: scoped\n    builder_apparmor_profiles: [yorvogate-buildkit-rootless, unconfined]\n    allow_privileged_builders: false", 1)
+	if c, err := Parse([]byte(withBuilders)); err != nil || len(c.Listeners[1].BuilderAppArmorProfiles) != 2 {
+		t.Errorf("a scoped listener's builder profiles: %v", err)
+	}
+
 	if n, _ := c.Listeners[1].Network(); n != [2]string{"unix", "/run/yorvogate/sites.sock"} {
 		t.Errorf("network %v", n)
 	}
@@ -136,6 +141,8 @@ func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 		"an unknown container key":       strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {privileged: true}", 1),
 		"a tiny load limit":              valid + "load_limit: 1024\n",
 		"a huge load limit":              valid + "load_limit: 300000000000\n",
+		"builders on a trusted one":      strings.Replace(valid, "mode: trusted", "mode: trusted\n    allow_privileged_builders: true", 1),
+		"a profile that isn't a name":    strings.Replace(valid, "mode: scoped", "mode: scoped\n    builder_apparmor_profiles: [\"a b\"]", 1),
 		"scope sockets and an address":   strings.Replace(valid, "mode: scoped", "mode: scoped\n    scope_sockets: /run/yorvogate/scopes", 1),
 		"scope sockets on a trusted one": strings.Replace(valid, "mode: trusted", "mode: trusted\n    scope_sockets: /run/yorvogate/scopes", 1),
 		"relative scope sockets":         strings.Replace(socketBound, "/run/yorvogate/scopes", "run/scopes", 1),

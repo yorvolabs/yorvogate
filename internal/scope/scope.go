@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -41,9 +42,11 @@ type Scope struct {
 	Images []string `json:"images,omitempty"`
 	// Networks are shared networks it may join, besides its own, with what it may have there.
 	Networks map[string]Network `json:"networks,omitempty"`
-	// Containers are containers it may use that aren't its own by label (e.g. its BuildKit
-	// builder), by name; a trailing "*" matches any end ("buildx_buildkit_jane-*").
-	Containers []string `json:"containers,omitempty"`
+	// Builders are its BuildKit builders, by exact name: containers the orchestrator created, which
+	// it may only inspect and reach with "buildctl dial-stdio" (never its own, whatever their labels).
+	Builders []string `json:"builders,omitempty"`
+	// Containers was 0.1's key for containers a scope could use: refused, with why.
+	Containers json.RawMessage `json:"containers,omitempty"`
 	// Subnets, when set, are where its networks' addresses must be: each network it creates names
 	// its subnet, inside one of these.
 	Subnets []string `json:"subnets,omitempty"`
@@ -75,7 +78,7 @@ var (
 	validPrefix = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}[-_.]$`)
 	validDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	validImage  = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,254}/$`)
-	validObject = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}\*?$`)
+	validObject = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 	validAlias  = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
 )
 
@@ -279,7 +282,7 @@ func (s *Store) resolve() {
 	})
 
 	s.errors = map[string]error{}
-	owners, prefixes, images := map[Label]string{}, map[string]string{}, map[string]string{}
+	owners, prefixes, images, builders := map[Label]string{}, map[string]string{}, map[string]string{}, map[string]string{}
 	valid := []*Scope{}
 
 	for _, name := range names {
@@ -290,7 +293,7 @@ func (s *Store) resolve() {
 			continue
 		}
 
-		if err := conflict(e.scope, owners, prefixes, images); err != nil {
+		if err := conflict(e.scope, owners, prefixes, images, builders); err != nil {
 			s.errors[name] = fmt.Errorf("scope file %s: %w", filepath.Join(s.dir, name+".json"), err)
 
 			continue
@@ -303,6 +306,10 @@ func (s *Store) resolve() {
 
 		for _, i := range e.scope.Images {
 			images[i] = name
+		}
+
+		for _, b := range e.scope.Builders {
+			builders[b] = name
 		}
 
 		valid = append(valid, e.scope)
@@ -325,7 +332,13 @@ func (s *Store) resolve() {
 }
 
 // conflict tells what a scope shares with the valid scopes before it.
-func conflict(s *Scope, owners map[Label]string, prefixes, images map[string]string) error {
+func conflict(s *Scope, owners map[Label]string, prefixes, images, builders map[string]string) error {
+	for _, b := range s.Builders {
+		if other, ok := builders[b]; ok {
+			return fmt.Errorf("builders: %q is scope %s's already", b, other)
+		}
+	}
+
 	if other, ok := owners[s.Owner]; ok {
 		return fmt.Errorf("owner: %s=%s is scope %s's already", s.Owner.Key, s.Owner.Value, other)
 	}
@@ -393,14 +406,18 @@ func (s *Scope) check(tokenless bool) error {
 		}
 	}
 
-	for _, c := range s.Containers {
-		if !validObject.MatchString(c) {
-			return fmt.Errorf("containers: %q must be a container's name, or its start followed by *", c)
+	if s.Containers != nil {
+		return errors.New("containers: replaced by builders (YorvoGate 0.2): exact names of BuildKit builders, which a scope may only inspect and reach with buildctl dial-stdio, never use as its own")
+	}
+
+	for _, b := range s.Builders {
+		if !validObject.MatchString(b) {
+			return fmt.Errorf("builders: %q must be a container's exact name (no wildcard)", b)
 		}
 	}
 
 	for name, n := range s.Networks {
-		if !validObject.MatchString(name) || strings.HasSuffix(name, "*") {
+		if !validObject.MatchString(name) {
 			return fmt.Errorf("networks: %q isn't a network's name", name)
 		}
 
@@ -474,19 +491,9 @@ func (s *Scope) HasSubnets() bool {
 	return len(s.subnets) > 0
 }
 
-// Uses tells whether a container that isn't its own by label is one it may use, by name.
-func (s *Scope) Uses(name string) bool {
-	for _, c := range s.Containers {
-		if start, ok := strings.CutSuffix(c, "*"); ok {
-			if strings.HasPrefix(name, start) && len(name) > len(start) {
-				return true
-			}
-		} else if name == c {
-			return true
-		}
-	}
-
-	return false
+// Builds tells whether a container is one of its builders, by exact name.
+func (s *Scope) Builds(name string) bool {
+	return slices.Contains(s.Builders, name)
 }
 
 // OwnsImage tells whether an image name is in one of its own namespaces: one it starts with, and no

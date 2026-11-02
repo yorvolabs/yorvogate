@@ -19,12 +19,17 @@ import (
 // names are looked up first; the request then names the object by the full ID that was checked, so
 // what Docker acts on is what was checked, whatever the name meant by then.
 type scoped struct {
-	ctx     context.Context
-	req     route.Request
-	scope   *scope.Scope
-	policy  config.Containers
-	docker  *Docker
-	version string
+	ctx    context.Context
+	req    route.Request
+	scope  *scope.Scope
+	policy config.Containers
+	// The listener's AppArmor profiles for builders, and whether any builder is accepted
+	builderProfiles []string
+	anyBuilder      bool
+	// The builder the request names, if it names one
+	builderName string
+	docker      *Docker
+	version     string
 
 	// What's forwarded: the path (with its version) and the query, as the rules leave them
 	path  string
@@ -119,15 +124,20 @@ func (s *scoped) decide(body []byte) ([]byte, error) {
 	case name == "container.create":
 		return s.createContainer(body)
 	case onOwnContainer[name] || name == "container.archive-put":
-		return nil, s.container()
+		builder, err := s.container()
+		if err == nil && builder && name != "container.inspect" {
+			return nil, s.notOnBuilder()
+		}
+
+		return nil, err
 	case name == "container.update":
-		if err := s.container(); err != nil {
+		if err := s.ownContainer(); err != nil {
 			return nil, err
 		}
 
 		return s.updateContainer(body)
 	case name == "container.rename":
-		if err := s.container(); err != nil {
+		if err := s.ownContainer(); err != nil {
 			return nil, err
 		}
 
@@ -137,8 +147,13 @@ func (s *scoped) decide(body []byte) ([]byte, error) {
 
 		return nil, nil
 	case name == "exec.create":
-		if err := s.container(); err != nil {
+		builder, err := s.container()
+		if err != nil {
 			return nil, err
+		}
+
+		if builder {
+			return s.createDialStdio(body)
 		}
 
 		return s.createExec(body)
@@ -181,47 +196,81 @@ var takesBody = map[string]bool{
 	"network.connect": true, "network.disconnect": true, "network.create": true, "volume.create": true,
 }
 
-// container checks that the container the path names is the scope's (by its label, or one its scope
-// lets it use), and names it by its full ID. Another scope's container is answered as Docker answers
-// one that doesn't exist.
-func (s *scoped) container() error {
+// container checks that the container the path names is the scope's (by its label) or one of its
+// builders, and names it by its full ID. Another scope's container is answered as Docker answers one
+// that doesn't exist. It tells whether the container is a builder: what may be done with one is
+// checked by the caller.
+func (s *scoped) container() (bool, error) {
 	id := s.req.Params["id"]
 
 	c, err := s.docker.Container(s.ctx, s.version, id)
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	if c == nil || !(s.scope.Owns(c.Labels) || s.scope.Uses(c.Name)) {
-		return refuse(http.StatusNotFound, "No such container: %s", id)
+	if c == nil || !(s.owned(c) || s.scope.Builds(c.Name)) {
+		return false, refuse(http.StatusNotFound, "No such container: %s", id)
 	}
 
 	s.with("id", c.ID)
 
-	return nil
+	if s.scope.Builds(c.Name) {
+		return true, s.builder(c)
+	}
+
+	return false, nil
 }
 
-// ownsContainer tells whether a container (by ID or name) is the scope's.
+// owned tells whether a container is the scope's own: by its label, and never one of its builders
+// (whatever their labels, they're the orchestrator's).
+func (s *scoped) owned(c *object) bool {
+	return c != nil && s.scope.Owns(c.Labels) && !s.scope.Builds(c.Name)
+}
+
+// ownsContainer tells whether a container (by ID or name) is the scope's own.
 func (s *scoped) ownsContainer(id string) bool {
 	c, err := s.docker.Container(s.ctx, s.version, id)
 
-	return err == nil && c != nil && (s.scope.Owns(c.Labels) || s.scope.Uses(c.Name))
+	return err == nil && s.owned(c)
 }
 
-// exec checks that an exec runs in one of the scope's containers.
+// exec checks that an exec runs in one of the scope's containers, or is a builder's dial-stdio (only
+// started, never resized or inspected).
 func (s *scoped) exec() error {
 	id := s.req.Params["id"]
 
-	containerID, err := s.docker.ExecContainer(s.ctx, s.version, id)
+	e, err := s.docker.Exec(s.ctx, s.version, id)
 	if err != nil {
 		return err
 	}
 
-	if containerID == "" || !s.ownsContainer(containerID) {
+	if e == nil {
 		return refuse(http.StatusNotFound, "No such exec instance: %s", id)
 	}
 
-	return nil
+	c, err := s.docker.Container(s.ctx, s.version, e.ContainerID)
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case s.owned(c):
+		return nil
+	case c != nil && s.scope.Builds(c.Name):
+		if s.req.Endpoint.Name != "exec.start" {
+			return refuse(http.StatusForbidden, "%s isn't allowed in builder %s: only buildctl dial-stdio, created and started", s.req.Endpoint.Name, c.Name)
+		}
+
+		// Docker reports an exec created without a user as the container's (the builder's own,
+		// which isn't root).
+		if p := e.ProcessConfig; p == nil || !dialStdio(append([]string{p.Entrypoint}, p.Arguments...)) || (p.Privileged != nil && *p.Privileged) || !builderUser(c, p.User) || p.Tty {
+			return refuse(http.StatusForbidden, "exec.start: in builder %s, only buildctl dial-stdio is started", c.Name)
+		}
+
+		return s.builder(c)
+	}
+
+	return refuse(http.StatusNotFound, "No such exec instance: %s", id)
 }
 
 // connect checks a container joining a network: one of the scope's containers, its own network or a
@@ -242,7 +291,7 @@ func (s *scoped) connect(body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	if c == nil || !(s.scope.Owns(c.Labels) || s.scope.Uses(c.Name)) {
+	if !s.owned(c) {
 		return nil, refuse(http.StatusNotFound, "No such container: %s", req.Container)
 	}
 
@@ -273,7 +322,7 @@ func (s *scoped) disconnect(body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	if c == nil || !(s.scope.Owns(c.Labels) || s.scope.Uses(c.Name)) {
+	if !s.owned(c) {
 		return nil, refuse(http.StatusNotFound, "No such container: %s", req.Container)
 	}
 
