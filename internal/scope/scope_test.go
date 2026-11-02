@@ -328,3 +328,29 @@ func TestLabelsOfAnotherScope(t *testing.T) {
 		}
 	}
 }
+
+// A scope with its own socket needs no token; one sent with each request does.
+func TestATokenIsOptionalOnlyWithASocket(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "jane", `{"owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`)
+	write(t, dir, "blog", scopeFile("blog", "blog", "quire-sites/blog/"))
+	write(t, dir, "bad", `{"token_sha256": "abc", "owner": {"label": "com.docker.compose.project", "value": "bad"}, "prefixes": ["bad-"]}`)
+
+	if _, err := NewStore(dir).Get("jane"); err == nil {
+		t.Error("a scope without a token, where each request sends one")
+	}
+
+	store := NewSocketStore(dir)
+	if s, err := store.Get("jane"); err != nil || s.TokenSHA256 != "" {
+		t.Fatalf("a socket's scope without a token: %v", err)
+	}
+
+	if _, err := store.Authenticate("jane", "anything"); !errors.Is(err, ErrUnknown) {
+		t.Errorf("a scope without a token is never authenticated by one: %v", err)
+	}
+
+	names, invalid, err := store.Scopes()
+	if err != nil || strings.Join(names, ",") != "blog,jane" || len(invalid) != 1 || invalid["bad"] == nil {
+		t.Errorf("valid %v, invalid %v, %v", names, invalid, err)
+	}
+}

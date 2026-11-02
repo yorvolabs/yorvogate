@@ -10,9 +10,14 @@ if [ ! -x bin/yorvogate ]; then
 	exit 1
 fi
 
-exec docker run --rm -e GITHUB_ACTIONS \
-	-v /var/run/docker.sock:/var/run/docker.sock \
-	-v "$PWD/bin:/yorvogate:ro" \
-	-v "$PWD/test/conformance:/conformance:ro" \
-	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
-	sh /conformance/suite.sh
+# Twice: scopes by token (in a header), then each on its own socket
+status=0
+for listener in tokens sockets; do
+	docker run --rm -e GITHUB_ACTIONS -e YGC_LISTENER=$listener \
+		-v /var/run/docker.sock:/var/run/docker.sock \
+		-v "$PWD/bin:/yorvogate:ro" \
+		-v "$PWD/test/conformance:/conformance:ro" \
+		docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
+		sh /conformance/suite.sh || status=1
+done
+exit $status

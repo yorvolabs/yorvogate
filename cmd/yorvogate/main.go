@@ -100,18 +100,26 @@ func check(path string, stdout io.Writer) error {
 			return err
 		}
 
-		store := scope.NewStore(l.Scopes)
+		store, address := scope.NewStore(l.Scopes), l.Address
+		if l.SocketBound() {
+			store, address = scope.NewSocketStore(l.Scopes), "scope_sockets "+l.ScopeSockets
+		}
+
 		for _, f := range files {
 			if _, err := store.Get(strings.TrimSuffix(filepath.Base(f), ".json")); err != nil {
 				return err
 			}
 		}
 
-		fmt.Fprintf(stdout, "%s (%s, %s): ok, %d scopes\n", l.Name, l.Mode, l.Address, len(files))
+		fmt.Fprintf(stdout, "%s (%s, %s): ok, %d scopes\n", l.Name, l.Mode, address, len(files))
 	}
 
 	return nil
 }
+
+// scanInterval is how often socket-bound listeners look for scope files that came, changed or went
+// (and at once on SIGHUP).
+var scanInterval = 2 * time.Second
 
 // serve listens until the context ends (SIGINT or SIGTERM), then lets requests finish.
 func serve(ctx context.Context, path string, log *slog.Logger) error {
@@ -120,22 +128,57 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		return err
 	}
 
+	// SIGHUP rescans the scope folders; it's taken before any socket is made, so it never stops the
+	// process.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+
 	upstream := gate.NewUpstream(c.UpstreamSocket(), log)
 	servers := make([]*http.Server, 0, len(c.Listeners))
+	bound := []*gate.Sockets{}
 	failed := make(chan error, len(c.Listeners))
 
+	stop := func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		for _, s := range servers {
+			_ = s.Shutdown(shutdown)
+		}
+
+		for _, s := range bound {
+			s.Shutdown(shutdown)
+		}
+	}
+	defer stop()
+
 	for _, l := range c.Listeners {
+		g := gate.New(c, l, upstream, log)
+
+		if l.SocketBound() {
+			sockets, err := gate.NewSockets(g, log)
+			if err != nil {
+				return fmt.Errorf("listener %s: %w", l.Name, err)
+			}
+
+			bound = append(bound, sockets)
+
+			if err := sockets.Scan(); err != nil {
+				return fmt.Errorf("listener %s: %w", l.Name, err)
+			}
+
+			log.Info("listening", "listener", l.Name, "mode", l.Mode, "scope_sockets", l.ScopeSockets)
+
+			continue
+		}
+
 		listener, err := listen(l)
 		if err != nil {
 			return fmt.Errorf("listener %s: %w", l.Name, err)
 		}
 
-		server := &http.Server{
-			Handler:           gate.New(c, l, upstream, log),
-			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       2 * time.Minute,
-			MaxHeaderBytes:    64 << 10,
-		}
+		server := gate.NewServer(g)
 		servers = append(servers, server)
 
 		go func() {
@@ -147,20 +190,39 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		log.Info("listening", "listener", l.Name, "mode", l.Mode, "address", l.Address)
 	}
 
-	select {
-	case <-ctx.Done():
-	case err := <-failed:
-		return err
+	ticker := time.NewTicker(scanInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case err := <-failed:
+			return err
+		case <-hup:
+			scan(bound, log)
+		case <-ticker.C:
+			scan(bound, log)
+		}
+
+		for _, s := range bound {
+			select {
+			case err := <-s.Failed():
+				return err
+			default:
+			}
+		}
 	}
+}
 
-	shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	for _, s := range servers {
-		_ = s.Shutdown(shutdown)
+// scan brings each socket-bound listener's sockets in line with its scope files. What fails is
+// logged and tried again at the next scan: one scope's socket doesn't stop the others'.
+func scan(bound []*gate.Sockets, log *slog.Logger) {
+	for _, s := range bound {
+		if err := s.Scan(); err != nil {
+			log.Error("scope sockets", "error", err)
+		}
 	}
-
-	return nil
 }
 
 // listen opens a listener's address; a unix socket is made readable and writable by its group only.
@@ -170,24 +232,14 @@ func listen(l config.Listener) (net.Listener, error) {
 		return nil, err
 	}
 
-	if network[0] == "unix" {
-		if info, err := os.Lstat(network[1]); err == nil && info.Mode()&os.ModeSocket != 0 {
-			_ = os.Remove(network[1])
-		}
+	if network[0] != "unix" {
+		return net.Listen(network[0], network[1])
 	}
 
-	listener, err := net.Listen(network[0], network[1])
+	gid, err := gate.Group(l)
 	if err != nil {
 		return nil, err
 	}
 
-	if network[0] == "unix" {
-		if err := os.Chmod(network[1], 0o660); err != nil {
-			_ = listener.Close()
-
-			return nil, err
-		}
-	}
-
-	return listener, nil
+	return gate.Listen(network[1], gid)
 }

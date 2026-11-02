@@ -42,6 +42,9 @@ func New(c *config.Config, l config.Listener, upstream *Upstream, log *slog.Logg
 	g := &Gate{config: c, listener: l, upstream: upstream, log: log.With("listener", l.Name)}
 	if l.Mode == config.Scoped {
 		g.scopes = scope.NewStore(l.Scopes)
+		if l.SocketBound() {
+			g.scopes = scope.NewSocketStore(l.Scopes)
+		}
 		g.docker = NewDocker(c.UpstreamSocket())
 	}
 
@@ -122,12 +125,8 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 		// A trusted client's body goes as it came (streams included).
 		return withoutGateHeaders(r), nil, nil
 	case config.Scoped:
-		s, err := g.scopes.Authenticate(r.Header.Get(ScopeHeader), r.Header.Get(TokenHeader))
+		s, err := g.scope(r)
 		if err != nil {
-			if errors.Is(err, scope.ErrUnknown) {
-				return nil, nil, refuse(http.StatusUnauthorized, "no such scope, or not its token")
-			}
-
 			return nil, nil, err
 		}
 
@@ -193,6 +192,38 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 	}
 
 	return nil, nil, refuse(http.StatusInternalServerError, "the listener has no mode")
+}
+
+// boundKey carries, in the context of a request that came on a scope's own socket, the scope's name.
+type boundKey struct{}
+
+// scope is the scope a request is for: the one whose socket it came on, or the one it names, with
+// its token.
+func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
+	if !g.listener.SocketBound() {
+		s, err := g.scopes.Authenticate(r.Header.Get(ScopeHeader), r.Header.Get(TokenHeader))
+		if errors.Is(err, scope.ErrUnknown) {
+			return nil, refuse(http.StatusUnauthorized, "no such scope, or not its token")
+		}
+
+		return s, err
+	}
+
+	name, ok := r.Context().Value(boundKey{}).(string)
+	if !ok {
+		return nil, refuse(http.StatusInternalServerError, "the request didn't come on a scope's socket")
+	}
+
+	if named := r.Header.Get(ScopeHeader); named != "" && named != name {
+		return nil, refuse(http.StatusForbidden, "this socket is scope %s's: a request on it can't name another", name)
+	}
+
+	s, err := g.scopes.Get(name)
+	if err != nil {
+		return nil, refuse(http.StatusForbidden, "scope %s isn't valid now: its socket closes", name)
+	}
+
+	return s, nil
 }
 
 // readBody reads a body whole, up to the limit. A stream isn't read here: its endpoint's rule decides
