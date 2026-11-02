@@ -10,6 +10,7 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
   - a scoped request with a form body (`application/x-www-form-urlencoded`, `multipart/*`), a `Content-Type` that doesn't parse, or two of them is refused;
   - Docker gets the `Content-Type` YorvoGate sets (`application/json` for a checked body, `application/x-tar` for an archive, none without a body), never the client's;
   - `image.create` (a pull) takes no body.
+- **Image answers could name other scopes' images (High).** The image list kept every `RepoDigests` entry, and inspect and history answered as Docker did, so a scope saw the names and digests other scopes use for a shared image. Now the list, inspect and history name an image only by the tags and digests the scope may see.
 
 ## [0.1.0] - 2026-10-30
 
