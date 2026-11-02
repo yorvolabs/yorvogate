@@ -14,7 +14,7 @@ set -u
 dir=/tmp/quire
 apparmor=${YGC_APPARMOR:-}
 buildkit=moby/buildkit:v0.34.0-rootless@sha256:65eca3c01cd1180c8f64565c4e3c5983af5145818b0e6fa863385d099eb73855
-# shellcheck source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
 # The orchestrator, on its trusted listener, through its "quire" context
