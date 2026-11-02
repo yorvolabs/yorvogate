@@ -13,7 +13,7 @@ set -u
 
 dir=/tmp/conformance
 listener=${YGC_LISTENER:-tokens}
-# shellcheck source=lib.sh
+# shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
 # A command as a scope, through YorvoGate: its token in a header, or on its own socket with none
