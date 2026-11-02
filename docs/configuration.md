@@ -114,9 +114,13 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 ```
 
 - `token_sha256`: the SHA-256 of the scope's token, 64 lowercase hex digits. The client sends the token itself.
-- `owner`: the label (and its value) that marks the scope's objects. For Compose projects, `com.docker.compose.project` and the project's name.
-- `prefixes`: what its containers', networks' and volumes' names start with. Each ends with `-`, `_` or `.`, so `jane-` never matches `janet-…`.
+- `owner`: the label (and its value) that marks the scope's objects. For Compose projects, `com.docker.compose.project` and the project's name. An object is a scope's by this label only, never by its name.
+- `prefixes`: what the names of the containers, networks and volumes it creates start with. Each ends with `-`, `_` or `.`, so `jane-` never matches `janet-…`.
 - `images` (optional): its own image namespaces, as prefixes ending with `/`: it may use images there even where the listener protects them.
+
+Scopes' names may nest, as Compose projects' do (sites `jane` and `jane-blog`): a name belongs to the scope with the **longest** prefix it starts with. While scope `jane-blog` exists, `jane` can't create `jane-blog-php-1` or `jane-blog_default`; image namespaces work the same way. Two scopes may not share an owner label, a prefix or an image namespace: the scope that came later is refused (its requests fail), and `yorvogate check` names both.
+
+One case is left to the orchestrator: if tenant `jane` has a Compose service named `blog-php` before a scope `jane-blog` exists, its container `jane-blog-php-1` is jane's. Once `jane-blog` arrives, `jane-blog`'s Compose project can't take that name. Nothing crosses between the scopes, since ownership is by label, but it's a denial of service. An orchestrator that lets tenants pick nested names should refuse dashes in service names.
 - `networks` (optional): shared networks it may join besides its own, each with the `aliases` it may take and the `addresses` it may ask for there (none if left out).
 - `subnets` (optional): where its networks' addresses must be, in CIDR form: each network it creates names its subnet, inside one of these (otherwise Docker picks from its own pools).
 - `containers` (optional): containers it may use without carrying its label, by name, a trailing `*` matching any end (e.g. its BuildKit builder, created by the orchestrator).

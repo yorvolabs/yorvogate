@@ -190,8 +190,12 @@ func TestSubnets(t *testing.T) {
 		}
 	}
 
-	write(t, dir, "free", jane())
-	free, _ := NewStore(dir).Authenticate("free", token)
+	write(t, dir, "free", scopeFile("free", "free", "free/"))
+	free, err := NewStore(dir).Authenticate("free", token)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if free.HasSubnets() || !free.Contains(netip.MustParsePrefix("172.20.0.0/16")) {
 		t.Error("a scope without subnets takes Docker's")
 	}
@@ -208,6 +212,96 @@ func TestAliasLengths(t *testing.T) {
 
 		if _, err := NewStore(dir).Authenticate("jane", token); (err == nil) != valid {
 			t.Errorf("%d characters: %v", len(alias), err)
+		}
+	}
+}
+
+// scopeFile is a scope with its own owner value, prefixes and image namespace.
+func scopeFile(owner, prefix, images string) string {
+	return `{"token_sha256": "` + digest(token) + `", "owner": {"label": "com.docker.compose.project", "value": "` + owner + `"}, "prefixes": ["` + prefix + `-", "` + prefix + `_"], "images": ["` + images + `"]}`
+}
+
+// Tenants' names nest (sites jane and jane-blog): both are valid, and a name is the scope's with the
+// longest prefix it starts with, for as long as that scope exists.
+func TestANameIsTheLongestPrefixs(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "jane", scopeFile("jane", "jane", "quire-sites/jane/"))
+	write(t, dir, "jane-blog", scopeFile("jane-blog", "jane-blog", "quire-sites/jane/blog/"))
+	store := NewStore(dir)
+
+	jane, err := store.Get("jane")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	blog, err := store.Get("jane-blog")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range []string{"jane-blog-php-1", "jane-blog_default", "jane-blog_data"} {
+		if jane.Names(name) || !blog.Names(name) {
+			t.Errorf("%s: jane %v, jane-blog %v", name, jane.Names(name), blog.Names(name))
+		}
+	}
+
+	if !jane.Names("jane-php-1") || !jane.Names("jane-blogger-1") || blog.Names("jane-php-1") {
+		t.Error("jane's own names")
+	}
+
+	if jane.OwnsImage("quire-sites/jane/blog/php:1") || !blog.OwnsImage("quire-sites/jane/blog/php:1") || !jane.OwnsImage("quire-sites/jane/php:1") {
+		t.Error("image namespaces")
+	}
+
+	// Without scope jane-blog, its names are jane's again.
+	if err := os.Remove(filepath.Join(dir, "jane-blog.json")); err != nil {
+		t.Fatal(err)
+	}
+
+	if jane, err = store.Get("jane"); err != nil || !jane.Names("jane-blog-php-1") || !jane.OwnsImage("quire-sites/jane/blog/php:1") {
+		t.Errorf("jane-blog removed: %v", err)
+	}
+}
+
+// Two scopes may not share an owner label, a prefix or an image namespace: the one that came first
+// stays valid, the later is refused naming both; rewriting the first (a new token) doesn't change
+// which.
+func TestScopesThatShareAreRefused(t *testing.T) {
+	for what, second := range map[string]string{
+		"an owner label":      scopeFile("jane", "other", "quire-sites/other/"),
+		"a prefix":            scopeFile("other", "jane", "quire-sites/other/"),
+		"an image namespace":  scopeFile("other", "other", "quire-sites/jane/"),
+		"one of two prefixes": strings.Replace(scopeFile("other", "other", "quire-sites/other/"), `"other_"`, `"jane_"`, 1),
+	} {
+		for _, order := range [][2]string{{"jane", "zed"}, {"zed", "jane"}} {
+			dir := t.TempDir()
+			past := time.Now().Add(-time.Hour)
+
+			earlier := write(t, dir, order[0], scopeFile("jane", "jane", "quire-sites/jane/"))
+			later := write(t, dir, order[1], second)
+			_ = os.Chtimes(earlier, past, past)
+			_ = os.Chtimes(later, past.Add(time.Minute), past.Add(time.Minute))
+			store := NewStore(dir)
+
+			if _, err := store.Get(order[0]); err != nil {
+				t.Errorf("%s, %s first: the first refused: %v", what, order[0], err)
+			}
+
+			_, err := store.Get(order[1])
+			if err == nil || !strings.Contains(err.Error(), "scope "+order[0]+"'s already") || !strings.Contains(err.Error(), order[1]+".json") {
+				t.Errorf("%s, %s first: the later: %v", what, order[0], err)
+			}
+
+			// The first file rewritten now: it's still the first.
+			write(t, dir, order[0], scopeFile("jane", "jane", "quire-sites/jane/")+"\n")
+
+			if _, err := store.Get(order[0]); err != nil {
+				t.Errorf("%s, %s first: rewritten, it was refused: %v", what, order[0], err)
+			}
+
+			if _, err := store.Get(order[1]); err == nil {
+				t.Errorf("%s, %s first: rewriting the first made the later valid", what, order[0])
+			}
 		}
 	}
 }

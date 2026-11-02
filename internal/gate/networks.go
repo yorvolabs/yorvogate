@@ -139,7 +139,8 @@ func (s *scoped) createVolume(body []byte) ([]byte, error) {
 }
 
 // sharedContainers filters the answer of a network's inspection: only the scope's own containers are
-// listed (a shared network's others are other scopes').
+// listed (a shared network's others are other scopes'). A container is its own by its owner label,
+// looked up, never by its name: scopes' names can nest ("jane-blog-php-1" starts with "jane-").
 func (s *scoped) sharedContainers(body []byte) ([]byte, error) {
 	var answer map[string]json.RawMessage
 	if err := json.Unmarshal(body, &answer); err != nil {
@@ -158,7 +159,17 @@ func (s *scoped) sharedContainers(body []byte) ([]byte, error) {
 		_ = json.Unmarshal(raw, &all)
 
 		for id, c := range containers {
-			if !s.scope.Names(c.Name) && !s.scope.Uses(c.Name) {
+			if s.scope.Uses(c.Name) {
+				continue
+			}
+
+			found, err := s.docker.Container(s.ctx, s.version, id)
+			if err != nil {
+				return nil, err
+			}
+
+			// One gone since Docker answered isn't listed.
+			if found == nil || !s.scope.Owns(found.Labels) {
 				delete(all, id)
 			}
 		}
