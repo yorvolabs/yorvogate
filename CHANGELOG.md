@@ -4,17 +4,21 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-02
+
+Security fixes: update from 0.1.0. A scope file's `containers` is refused; see [migrating from 0.1.0](https://github.com/yorvolabs/yorvogate/blob/v0.2.0/docs/configuration.md#migrating-from-010).
+
 ### Added
 
 - **Scope sockets.** A scoped listener can give each scope a unix socket of its own (`scope_sockets: <folder>`, `<scope>.sock` per scope file) instead of an address. A request on it is that scope's without a header or token, so any client works, buildx's own connections included. Sockets come and go with their scope files (read every 2 seconds, and on `SIGHUP`); a scope removed or no longer valid has its socket and its connections closed. `token_sha256` is optional in those scope files.
 - **`socket_group`** for a listener's unix sockets.
 - **Conformance of Quire Server's real use**, in CI: an orchestrator on a trusted unix socket, sites on their own sockets with nested names, a Compose build on a rootless BuildKit builder under the shipped AppArmor profile.
-- **`builder_apparmor_profiles`**: the AppArmor profiles a scope's builder may run under, and the profile for rootless BuildKit on Ubuntu 24.04 (`examples/apparmor`).
+- **`builder_apparmor_profiles`**: the AppArmor profiles a scope's builder may run under, and the profile for rootless BuildKit on Ubuntu 26.04 (`examples/apparmor`).
 
 ### Changed
 
 - CI's conformance runs against Docker Engine 29.9.2 (API 1.56), installed pinned from Docker's repository, with its CLI, Compose 5.6.1 and buildx 0.38.1.
-- **Breaking:** a scope file's `containers` is refused; use `builders` (exact names), with a builder configured as [builders](docs/configuration.md#builders) says.
+- **Breaking:** a scope file's `containers` is refused; use `builders` (exact names), with a builder configured as [builders](https://github.com/yorvolabs/yorvogate/blob/v0.2.0/docs/configuration.md#builders) says.
 - A listener's unix socket is made under a restrictive umask: no one but YorvoGate's user can connect to it before its mode (`0660`) and group are set.
 
 ### Security
@@ -22,7 +26,7 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 - **A container a scope could use was fully its own, privileged or not (Critical).** The documented builder setup (buildx's `docker-container` driver, named in a scope's `containers`) is always privileged, and a scope could run any command in it: root on the host. Now:
   - `containers` is replaced by `builders`: exact names, no wildcard, each one scope's;
   - a scope may only inspect its builder and run `buildctl dial-stdio` in it (created and started), and nothing may join its namespaces or volumes;
-  - a builder is accepted only while it's rootless and unprivileged, with nothing of the host's ([builders](docs/configuration.md#builders)); `allow_privileged_builders` accepts any, for trusted clients only.
+  - a builder is accepted only while it's rootless and unprivileged, with nothing of the host's ([builders](https://github.com/yorvolabs/yorvogate/blob/v0.2.0/docs/configuration.md#builders)); `allow_privileged_builders` accepts any, for trusted clients only.
 - **A scope's form body could override what YorvoGate checked (Critical).** Docker reads a request's parameters from a form-encoded body as well as the query, and the body's win. YorvoGate 0.1.0 checked the query and forwarded the body and its `Content-Type` as they came. So a scope could import an image from any URL under any name (replacing e.g. `postgres:18` for everyone), make the daemon fetch any URL from the host's network, or pull into another scope's protected namespace. Now:
   - a scoped request with a form body (`application/x-www-form-urlencoded`, `multipart/*`), a `Content-Type` that doesn't parse, or two of them is refused;
   - Docker gets the `Content-Type` YorvoGate sets (`application/json` for a checked body, `application/x-tar` for an archive, none without a body), never the client's;
@@ -47,5 +51,6 @@ The first release.
 - **Every decision logged** as JSON; every refusal a Docker-style error that says why.
 - **Releases:** an image for x86_64 and arm64 (static, on distroless, as a user without privileges), signed with Sigstore, with its SBOM and build provenance; reproducible binaries with signed checksums.
 
-[Unreleased]: https://github.com/yorvolabs/yorvogate/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/yorvolabs/yorvogate/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/yorvolabs/yorvogate/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/yorvolabs/yorvogate/releases/tag/v0.1.0
