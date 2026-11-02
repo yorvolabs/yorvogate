@@ -190,6 +190,20 @@ On a listener with an address, a client sends its scope with each request. With 
 {"HttpHeaders": {"X-YorvoGate-Scope": "jane", "X-YorvoGate-Token": "<the token>"}}
 ```
 
+## Migrating from 0.1.0
+
+Run `yorvogate check` with the new version on your configuration and scope folders before you switch: it names every file 0.2 refuses, and why.
+
+- **`containers` in a scope file is refused.** Name the scope's BuildKit builders in `builders`, exactly (no `*`). A builder is no longer a container the scope may use: it may only be inspected and reached with `buildctl dial-stdio`, and only while it's configured as [builders](#builders) says. In practice:
+  - create each builder yourself, with BuildKit's rootless image (buildx's `docker-container` driver always makes privileged ones), and register it with buildx's `remote` driver;
+  - on Ubuntu 23.10 and later, load the AppArmor profile in `examples/apparmor` and list it in the listener's `builder_apparmor_profiles`;
+  - builds go through a [scope socket](#scope-sockets), since buildx sends no header tokens on its own connections.
+- **Scopes may not share an owner label, a prefix, an image namespace or a builder.** The scope file that came later is refused. Names that nest (`jane`, `jane-blog`) are fine: a name belongs to the longest prefix it starts with.
+- **What a scope creates may not carry another scope's owner label**, and a volume a container's mount creates gets the scope's own.
+- **A scope's request may not have a form body** (`application/x-www-form-urlencoded`, `multipart/*`), and `image.create` (a pull) may not have a body at all. The Docker CLI and Compose send neither.
+- **Image answers** (list, inspect, history) name an image only by the tags and digests the scope may see.
+- New, optional: [`scope_sockets`](#scope-sockets) (a socket per scope, where `token_sha256` becomes optional) and `socket_group` on any listener with unix sockets.
+
 ## Logs
 
 One JSON line per decision on standard error: `listener`, `method`, `path`, `scope` (scoped listeners), `endpoint`, and for a refusal its `status` and `reason`.
