@@ -20,4 +20,12 @@ for listener in tokens sockets; do
 		docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
 		sh /conformance/suite.sh || status=1
 done
+# Then Quire Server's real use: an orchestrator, sites on their own sockets, builds on rootless
+# BuildKit (YGC_APPARMOR: the host's AppArmor profile for it, where it has AppArmor)
+docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR \
+	-v /var/run/docker.sock:/var/run/docker.sock \
+	-v "$PWD/bin:/yorvogate:ro" \
+	-v "$PWD/test/conformance:/conformance:ro" \
+	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
+	sh /conformance/quire.sh || status=1
 exit $status
