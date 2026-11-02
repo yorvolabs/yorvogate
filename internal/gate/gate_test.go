@@ -71,9 +71,21 @@ var (
 		{"sha256:" + strings.Repeat("5", 64), []string{"busybox:1", "quire-sites/blog/tools:1"}}, // shared, also tagged by blog
 	}
 
-	inspection  = regexp.MustCompile(`^/v[0-9.]+/(containers|networks|volumes|exec)/([^/]+)(/json)?$`)
-	imageLookup = regexp.MustCompile(`^/v[0-9.]+/images/(.+)/json$`)
+	inspection   = regexp.MustCompile(`^/v[0-9.]+/(containers|networks|volumes|exec)/([^/]+)(/json)?$`)
+	imageLookup  = regexp.MustCompile(`^/v[0-9.]+/images/(.+)/json$`)
+	imageHistory = regexp.MustCompile(`^/v[0-9.]+/images/(.+)/history$`)
 )
+
+// digests are an image's RepoDigests as Docker gives them: one per repository it's tagged in.
+func digests(tags []string) []string {
+	out := []string{}
+	for _, tag := range tags {
+		name := tag[:strings.LastIndex(tag, ":")]
+		out = append(out, name+"@sha256:"+strings.Repeat("d", 64))
+	}
+
+	return out
+}
 
 type fakeImage struct {
 	id   string
@@ -149,15 +161,27 @@ func startDocker(t testing.TB) *docker {
 		w.Header().Set("Content-Type", "application/json")
 
 		// Answers a rule changes: the image list, and the shared network with every scope on it
-		switch r.URL.Path {
-		case "/v1.56/images/json":
+		switch {
+		case r.URL.Path == "/v1.56/images/json":
 			list := []map[string]any{}
 			for _, img := range images {
-				list = append(list, map[string]any{"Id": img.id, "RepoTags": img.tags})
+				list = append(list, map[string]any{"Id": img.id, "RepoTags": img.tags, "RepoDigests": digests(img.tags)})
 			}
 
 			_ = json.NewEncoder(w).Encode(list)
-		case "/v1.56/networks/" + linkNet:
+		case imageLookup.FindStringSubmatch(r.URL.Path) != nil:
+			// An inspection forwarded (not YorvoGate's own lookup): Docker's whole answer
+			img := findImage(imageLookup.FindStringSubmatch(r.URL.Path)[1])
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": img.id, "RepoTags": img.tags, "RepoDigests": digests(img.tags), "Config": map[string]any{"Env": []string{"PATH=/bin"}}})
+		case imageHistory.FindStringSubmatch(r.URL.Path) != nil:
+			// The image's own layer, then its base image's (alpine's)
+			img := findImage(imageHistory.FindStringSubmatch(r.URL.Path)[1])
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{"Id": img.id, "Tags": img.tags, "CreatedBy": "COPY . /app"},
+				{"Id": images[0].id, "Tags": images[0].tags, "CreatedBy": "ADD rootfs"},
+				{"Id": "<missing>", "Tags": nil, "CreatedBy": "CMD"},
+			})
+		case r.URL.Path == "/v1.56/networks/"+linkNet:
 			_ = json.NewEncoder(w).Encode(map[string]any{"Name": "quire-link-jane", "Id": linkNet, "Containers": map[string]any{
 				janePHP: map[string]any{"Name": "jane-php-1", "IPv4Address": "10.213.0.4/27"},
 				blogPHP: map[string]any{"Name": "blog-php-1", "IPv4Address": "10.213.0.5/27"},

@@ -156,6 +156,11 @@ func (s *scoped) decide(body []byte) ([]byte, error) {
 		return nil, nil
 	case name == "image.inspect" || name == "image.history":
 		// Another scope's image holds its code, and its configuration its environment.
+		s.answer = s.imageNames
+		if name == "image.history" {
+			s.answer = s.history
+		}
+
 		return nil, s.readsImage(s.req.Params["name"])
 	case name == "network.connect":
 		return s.connect(body)

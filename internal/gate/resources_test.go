@@ -396,3 +396,49 @@ func TestStreamsOnAScopedListener(t *testing.T) {
 		t.Errorf("half an upgrade: %d %s", status, answer)
 	}
 }
+
+// An image the scope may read can carry another scope's names too (busybox:1, also tagged
+// quire-sites/blog/tools:1): no answer names them, by tag or by digest.
+func TestAnswersNameOnlyWhatItMaySee(t *testing.T) {
+	d := startDocker(t)
+	server := gate(t, d, "sites")
+
+	for _, path := range []string{
+		"/v1.56/images/json",
+		"/v1.56/images/busybox:1/json",
+		"/v1.56/images/sha256:" + strings.Repeat("5", 64) + "/json",
+		"/v1.56/images/busybox:1/history",
+		"/v1.56/images/quire-sites/jane/php-prod/json",
+	} {
+		status, answer := send(t, server, "GET", path, "", asJane)
+		if status != 200 || strings.Contains(answer, "blog") {
+			t.Errorf("%s: %d %s", path, status, answer)
+		}
+
+		if !strings.HasSuffix(path, "/history") && !strings.Contains(answer, "@sha256:") {
+			t.Errorf("%s: its own digests are gone too: %s", path, answer)
+		}
+	}
+
+	// What else Docker said is kept as it was.
+	_, answer := send(t, server, "GET", "/v1.56/images/busybox:1/json", "", asJane)
+
+	var img struct {
+		RepoTags, RepoDigests []string
+		Config                struct{ Env []string }
+	}
+	if err := json.Unmarshal([]byte(answer), &img); err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Join(img.RepoTags, ",") != "busybox:1" || strings.Join(img.RepoDigests, ",") != "busybox@sha256:"+strings.Repeat("d", 64) || len(img.Config.Env) != 1 {
+		t.Errorf("inspect: %+v", img)
+	}
+
+	_, answer = send(t, server, "GET", "/v1.56/images/busybox:1/history", "", asJane)
+
+	var layers []struct{ Tags []string }
+	if err := json.Unmarshal([]byte(answer), &layers); err != nil || len(layers) != 3 || strings.Join(layers[0].Tags, ",") != "busybox:1" || strings.Join(layers[1].Tags, ",") != "alpine:3.22" || layers[2].Tags != nil {
+		t.Errorf("history: %s", answer)
+	}
+}

@@ -148,11 +148,73 @@ func (s *scoped) images(body []byte) ([]byte, error) {
 		var tags []string
 		_ = json.Unmarshal(img["RepoTags"], &tags)
 
-		if seen := s.visible(tags); len(seen) > 0 {
-			img["RepoTags"], _ = json.Marshal(seen)
-			kept = append(kept, img)
+		if len(s.visible(tags)) == 0 {
+			continue
 		}
+
+		if err := s.filterNames(img, "RepoTags", "RepoDigests"); err != nil {
+			return nil, err
+		}
+
+		kept = append(kept, img)
 	}
 
 	return json.Marshal(kept)
+}
+
+// imageNames filters an image's inspection: its tags and digests name it only as the scope may see
+// it. (YorvoGate inspects only an image with at least one such name.)
+func (s *scoped) imageNames(body []byte) ([]byte, error) {
+	var img map[string]json.RawMessage
+	if err := json.Unmarshal(body, &img); err != nil {
+		return nil, err
+	}
+
+	if err := s.filterNames(img, "RepoTags", "RepoDigests"); err != nil {
+		return nil, err
+	}
+
+	return json.Marshal(img)
+}
+
+// history filters an image's history: each layer's image is named only as the scope may see it.
+func (s *scoped) history(body []byte) ([]byte, error) {
+	var layers []map[string]json.RawMessage
+	if err := json.Unmarshal(body, &layers); err != nil {
+		return nil, err
+	}
+
+	for _, layer := range layers {
+		if err := s.filterNames(layer, "Tags"); err != nil {
+			return nil, err
+		}
+	}
+
+	return json.Marshal(layers)
+}
+
+// filterNames keeps, in each of an answer's fields that list image names ("name:tag" or
+// "name@digest"), only the names the scope may see. A field that isn't there stays absent, and a null
+// stays null.
+func (s *scoped) filterNames(object map[string]json.RawMessage, fields ...string) error {
+	for _, field := range fields {
+		raw, ok := object[field]
+		if !ok || string(raw) == "null" {
+			continue
+		}
+
+		var names []string
+		if err := json.Unmarshal(raw, &names); err != nil {
+			return fmt.Errorf("%s isn't a list of names: %w", field, err)
+		}
+
+		seen := s.visible(names)
+		if seen == nil {
+			seen = []string{}
+		}
+
+		object[field], _ = json.Marshal(seen)
+	}
+
+	return nil
 }
