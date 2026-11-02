@@ -34,7 +34,9 @@ type scoped struct {
 	upgrading bool
 
 	// A stream's body (an image archive), the most read of it, and what's forwarded in its place
-	stream        io.Reader
+	stream io.Reader
+	// Whether the request came with a body (one of unknown length included)
+	hasBody       bool
 	loadLimit     int64
 	forwardBody   io.ReadCloser
 	forwardLength int64
@@ -163,6 +165,10 @@ func (s *scoped) decide(body []byte) ([]byte, error) {
 
 	return nil, refuse(http.StatusForbidden, "%s isn't allowed for scope %s", name, s.scope.Name)
 }
+
+// The streams whose body is an archive: one YorvoGate reads (image.load), or one that goes into the
+// scope's own container as it comes (container.archive-put). Docker gets them as application/x-tar.
+var sendsArchive = map[string]bool{"image.load": true, "container.archive-put": true}
 
 // The endpoints whose body YorvoGate reads (a JSON value); any other has none.
 var takesBody = map[string]bool{

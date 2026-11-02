@@ -90,6 +90,11 @@ func (s *scoped) ownsImageName(ref, what string) error {
 // pull checks a pull: from a registry by name (never an import from a URL or an archive), and not
 // into another scope's protected namespace.
 func (s *scoped) pull() error {
+	// Docker reads an import's archive from the body; a pull has none.
+	if s.hasBody {
+		return refuse(http.StatusBadRequest, "image.create has no body: a pull's parameters are in its query")
+	}
+
 	if s.query.Get("fromSrc") != "" {
 		return refuse(http.StatusForbidden, "image.create: importing (fromSrc) isn't allowed, only pulls")
 	}

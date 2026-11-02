@@ -4,6 +4,13 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Security
+
+- **A scope's form body could override what YorvoGate checked (Critical).** Docker reads a request's parameters from a form-encoded body as well as the query, and the body's win. YorvoGate 0.1.0 checked the query and forwarded the body and its `Content-Type` as they came. So a scope could import an image from any URL under any name (replacing e.g. `postgres:18` for everyone), make the daemon fetch any URL from the host's network, or pull into another scope's protected namespace. Now:
+  - a scoped request with a form body (`application/x-www-form-urlencoded`, `multipart/*`), a `Content-Type` that doesn't parse, or two of them is refused;
+  - Docker gets the `Content-Type` YorvoGate sets (`application/json` for a checked body, `application/x-tar` for an archive, none without a body), never the client's;
+  - `image.create` (a pull) takes no body.
+
 ## [0.1.0] - 2026-10-30
 
 The first release.
