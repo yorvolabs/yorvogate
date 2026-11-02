@@ -61,7 +61,12 @@ jobs:
   conformance:
     name: Conformance (a real Docker, real Compose)
     runs-on: ubuntu-26.04
-    timeout-minutes: 20
+    timeout-minutes: 30
+    env:
+      # The Docker Engine the suite runs against; its CLI, Compose (5.6.1) and buildx (0.38.1) come
+      # with the pinned docker:29.9.2-cli image run.sh uses.
+      DOCKER_VERSION: 29.9.2
+      DOCKER_API: '1.56'
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,6 +76,21 @@ jobs:
         run: |
           echo "HOST_UID=$(id -u)" >> "$GITHUB_ENV"
           echo "HOST_GID=$(id -g)" >> "$GITHUB_ENV"
+      # The runner's own Docker could be any version: Docker's packages for this Ubuntu, pinned, from
+      # Docker's repository (its signing key checked by fingerprint).
+      - name: Docker Engine ${{ env.DOCKER_VERSION }}
+        run: |
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o docker.asc
+          gpg --show-keys --with-colons docker.asc | grep -q '^fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:$'
+          sudo install -m 0755 -d /etc/apt/keyrings
+          sudo install -m 0644 docker.asc /etc/apt/keyrings/docker.asc
+          . /etc/os-release
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" | sudo tee /etc/apt/sources.list.d/docker.list
+          sudo apt-get update -q
+          version="5:$DOCKER_VERSION-1~ubuntu.$VERSION_ID~$VERSION_CODENAME"
+          sudo apt-get install -y -q --allow-downgrades "docker-ce=$version" "docker-ce-cli=$version" containerd.io
+          sudo systemctl restart docker
+          [ "$(docker version --format '{{.Server.Version}} {{.Server.APIVersion}}')" = "$DOCKER_VERSION $DOCKER_API" ]
       - name: Build
         run: docker compose -f compose.dev.yaml run --rm go make build
       # Ubuntu restricts unprivileged user namespaces with AppArmor: rootless BuildKit starts only
