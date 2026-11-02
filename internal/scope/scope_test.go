@@ -305,3 +305,26 @@ func TestScopesThatShareAreRefused(t *testing.T) {
 		}
 	}
 }
+
+// Scopes may use different owner labels: having its own label doesn't make an object only its own.
+func TestLabelsOfAnotherScope(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "jane", scopeFile("jane", "jane", "quire-sites/jane/"))
+	write(t, dir, "ci", strings.Replace(scopeFile("job-7", "ci", "ci/"), "com.docker.compose.project", "example.ci.job", 1))
+
+	jane, err := NewStore(dir).Get("jane")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for labels, want := range map[*map[string]string]bool{
+		{"com.docker.compose.project": "jane"}:                            false,
+		{"com.docker.compose.project": "jane", "example.ci.job": "job-7"}: true,
+		{"com.docker.compose.project": "jane", "example.ci.job": "job-8"}: false,
+		{"example.ci.job": "job-7"}:                                       true,
+	} {
+		if got := jane.OwnedByAnother(*labels); got != want {
+			t.Errorf("%v: %v", *labels, got)
+		}
+	}
+}

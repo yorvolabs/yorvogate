@@ -38,9 +38,7 @@ func (s *scoped) createNetwork(body []byte) ([]byte, error) {
 		add("the name %q isn't one of scope %s's (%s)", req.Name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
 	}
 
-	if !s.scope.Owns(req.Labels) {
-		add("it must carry the label %s=%s", s.scope.Owner.Key, s.scope.Owner.Value)
-	}
+	s.ownLabels(req.Labels, add)
 
 	if req.Driver != "" && req.Driver != "bridge" {
 		add("the driver %q isn't allowed (only bridge)", req.Driver)
@@ -123,9 +121,7 @@ func (s *scoped) createVolume(body []byte) ([]byte, error) {
 		add("the name %q isn't one of scope %s's (%s)", req.Name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
 	}
 
-	if !s.scope.Owns(req.Labels) {
-		add("it must carry the label %s=%s", s.scope.Owner.Key, s.scope.Owner.Value)
-	}
+	s.ownLabels(req.Labels, add)
 
 	if req.Driver != "" && req.Driver != "local" {
 		add("the driver %q isn't allowed (only local)", req.Driver)
