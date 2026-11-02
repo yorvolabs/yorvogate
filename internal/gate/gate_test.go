@@ -30,6 +30,7 @@ const (
 	janeNet     = "dddd000000000000000000000000000000000000000000000000000000000004"
 	blogNet     = "eeee000000000000000000000000000000000000000000000000000000000005"
 	linkNet     = "ffff000000000000000000000000000000000000000000000000000000000006"
+	nestedPHP   = "9999000000000000000000000000000000000000000000000000000000000007"
 )
 
 // docker is a fake Docker on a unix socket. It knows two scopes' objects (jane's and blog's, by
@@ -58,7 +59,8 @@ var (
 	jane = map[string]string{"com.docker.compose.project": "jane"}
 	blog = map[string]string{"com.docker.compose.project": "blog"}
 
-	containers = []fakeObject{{janePHP, "jane-php-1", jane}, {blogPHP, "blog-php-1", blog}, {janeBuilder, "buildx_buildkit_jane-0", nil}}
+	// jane-blog-php-1 starts with jane's prefix, but it's scope jane-blog's (a site nested in jane's name).
+	containers = []fakeObject{{janePHP, "jane-php-1", jane}, {blogPHP, "blog-php-1", blog}, {janeBuilder, "buildx_buildkit_jane-0", nil}, {nestedPHP, "jane-blog-php-1", map[string]string{"com.docker.compose.project": "jane-blog"}}}
 	networks   = []fakeObject{{janeNet, "jane_default", jane}, {blogNet, "blog_default", blog}, {linkNet, "quire-link-jane", nil}}
 	// jane_stolen has jane's prefix but blog's label: a name doesn't make a volume jane's.
 	volumes = []fakeObject{{"jane_data", "jane_data", jane}, {"blog_data", "blog_data", blog}, {"jane_stolen", "jane_stolen", blog}}
@@ -183,8 +185,9 @@ func startDocker(t testing.TB) *docker {
 			})
 		case r.URL.Path == "/v1.56/networks/"+linkNet:
 			_ = json.NewEncoder(w).Encode(map[string]any{"Name": "quire-link-jane", "Id": linkNet, "Containers": map[string]any{
-				janePHP: map[string]any{"Name": "jane-php-1", "IPv4Address": "10.213.0.4/27"},
-				blogPHP: map[string]any{"Name": "blog-php-1", "IPv4Address": "10.213.0.5/27"},
+				janePHP:   map[string]any{"Name": "jane-php-1", "IPv4Address": "10.213.0.4/27"},
+				blogPHP:   map[string]any{"Name": "blog-php-1", "IPv4Address": "10.213.0.5/27"},
+				nestedPHP: map[string]any{"Name": "jane-blog-php-1", "IPv4Address": "10.213.0.6/27"},
 			}})
 		default:
 			_, _ = w.Write([]byte(`{"ok":true}`))
@@ -284,6 +287,12 @@ func gate(t testing.TB, d *docker, listener string) *httptest.Server {
 	sum := sha256.Sum256([]byte(token))
 
 	if err := os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(strings.Replace(scopeFile, "%s", hex.EncodeToString(sum[:]), 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A site nested in jane's names, as hosting has them: its names and images are its own, not jane's.
+	nested := `{"token_sha256": "` + strings.Repeat("0", 64) + `", "owner": {"label": "com.docker.compose.project", "value": "jane-blog"}, "prefixes": ["jane-blog-", "jane-blog_"], "images": ["quire-sites/jane/blog/"]}`
+	if err := os.WriteFile(filepath.Join(scopes, "jane-blog.json"), []byte(nested), 0o600); err != nil {
 		t.Fatal(err)
 	}
 

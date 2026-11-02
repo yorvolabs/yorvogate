@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +48,9 @@ type Scope struct {
 	Subnets []string `json:"subnets,omitempty"`
 
 	subnets []netip.Prefix
+	// The other scopes of its folder, as the store read them with it: the names and images that are
+	// theirs rather than its own
+	others []*Scope
 }
 
 // Network is what a scope may have on a shared network.
@@ -77,19 +81,28 @@ var (
 // ErrUnknown is a scope with no file, or a token that doesn't match it.
 var ErrUnknown = errors.New("no such scope, or not its token")
 
-// Store reads a folder of scope files.
+// Store reads a folder of scope files. A scope is read together with the others: two may not share
+// an owner label, a prefix or an image namespace (the one that came later is refused), and each
+// knows the others' names, so a name belongs to the scope with the longest prefix it starts with.
 type Store struct {
 	dir string
 
 	mu     sync.Mutex
 	loaded map[string]entry
+	// What a request gets: each valid scope, knowing the others; or why a scope isn't valid
+	views  map[string]*Scope
+	errors map[string]error
 }
 
 type entry struct {
 	modified time.Time
 	size     int64
-	scope    *Scope
-	err      error
+	// When this process first read the file: of two scopes that conflict, the earlier stays. Taken
+	// from the file's modification time when it's first read, and kept when the file changes, so
+	// rewriting an older scope (a new token) doesn't make it the later one.
+	firstSeen time.Time
+	scope     *Scope
+	err       error
 }
 
 // NewStore reads scopes from a folder.
@@ -123,33 +136,175 @@ func (s *Store) Authenticate(name, token string) (*Scope, error) {
 	return scope, nil
 }
 
-// Get reads a scope (again only if its file changed).
+// Get returns a scope as its folder has it now (each file read again only if it changed).
 func (s *Store) Get(name string) (*Scope, error) {
 	if !validName.MatchString(name) {
 		return nil, fmt.Errorf("%q isn't a scope's name", name)
 	}
 
-	path := filepath.Join(s.dir, name+".json")
-	info, err := os.Lstat(path)
-	if err != nil {
-		return nil, err
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if e, ok := s.loaded[name]; ok && e.modified.Equal(info.ModTime()) && e.size == info.Size() {
-		return e.scope, e.err
+	if err := s.scan(); err != nil {
+		return nil, err
 	}
 
-	scope, err := read(path, info)
-	if scope != nil {
-		scope.Name = name
+	if err, ok := s.errors[name]; ok {
+		return nil, err
 	}
 
-	s.loaded[name] = entry{modified: info.ModTime(), size: info.Size(), scope: scope, err: err}
+	if scope, ok := s.views[name]; ok {
+		return scope, nil
+	}
 
-	return scope, err
+	return nil, fmt.Errorf("scope %s: %w", name, os.ErrNotExist)
+}
+
+// scan reads the folder's scope files that changed, and decides again which scopes are valid when
+// any did.
+func (s *Store) scan() error {
+	files, err := os.ReadDir(s.dir)
+	if err != nil {
+		return err
+	}
+
+	changed := s.views == nil
+	present := map[string]bool{}
+
+	for _, f := range files {
+		name, ok := strings.CutSuffix(f.Name(), ".json")
+		if !ok || !validName.MatchString(name) {
+			continue
+		}
+
+		path := filepath.Join(s.dir, f.Name())
+
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+
+		present[name] = true
+
+		old, known := s.loaded[name]
+		if known && old.modified.Equal(info.ModTime()) && old.size == info.Size() {
+			continue
+		}
+
+		first := info.ModTime()
+		if known {
+			first = old.firstSeen
+		}
+
+		scope, err := read(path, info)
+		if scope != nil {
+			scope.Name = name
+		}
+
+		s.loaded[name] = entry{modified: info.ModTime(), size: info.Size(), firstSeen: first, scope: scope, err: err}
+		changed = true
+	}
+
+	for name := range s.loaded {
+		if !present[name] {
+			delete(s.loaded, name)
+
+			changed = true
+		}
+	}
+
+	if changed {
+		s.resolve()
+	}
+
+	return nil
+}
+
+// resolve decides which scopes are valid: in the order they came, a scope that shares an owner
+// label, a prefix or an image namespace with one before it is refused. Each valid scope is then
+// given the others.
+func (s *Store) resolve() {
+	names := make([]string, 0, len(s.loaded))
+	for name := range s.loaded {
+		names = append(names, name)
+	}
+
+	sort.Slice(names, func(i, j int) bool {
+		a, b := s.loaded[names[i]], s.loaded[names[j]]
+		if !a.firstSeen.Equal(b.firstSeen) {
+			return a.firstSeen.Before(b.firstSeen)
+		}
+
+		return names[i] < names[j]
+	})
+
+	s.errors = map[string]error{}
+	owners, prefixes, images := map[Label]string{}, map[string]string{}, map[string]string{}
+	valid := []*Scope{}
+
+	for _, name := range names {
+		e := s.loaded[name]
+		if e.err != nil {
+			s.errors[name] = e.err
+
+			continue
+		}
+
+		if err := conflict(e.scope, owners, prefixes, images); err != nil {
+			s.errors[name] = fmt.Errorf("scope file %s: %w", filepath.Join(s.dir, name+".json"), err)
+
+			continue
+		}
+
+		owners[e.scope.Owner] = name
+		for _, p := range e.scope.Prefixes {
+			prefixes[p] = name
+		}
+
+		for _, i := range e.scope.Images {
+			images[i] = name
+		}
+
+		valid = append(valid, e.scope)
+	}
+
+	s.views = map[string]*Scope{}
+
+	for _, scope := range valid {
+		view := *scope
+		view.others = make([]*Scope, 0, len(valid)-1)
+
+		for _, other := range valid {
+			if other != scope {
+				view.others = append(view.others, other)
+			}
+		}
+
+		s.views[scope.Name] = &view
+	}
+}
+
+// conflict tells what a scope shares with the valid scopes before it.
+func conflict(s *Scope, owners map[Label]string, prefixes, images map[string]string) error {
+	if other, ok := owners[s.Owner]; ok {
+		return fmt.Errorf("owner: %s=%s is scope %s's already", s.Owner.Key, s.Owner.Value, other)
+	}
+
+	for _, p := range s.Prefixes {
+		if other, ok := prefixes[p]; ok {
+			return fmt.Errorf("prefixes: %q is scope %s's already", p, other)
+		}
+	}
+
+	for _, i := range s.Images {
+		if other, ok := images[i]; ok {
+			return fmt.Errorf("images: %q is scope %s's already", i, other)
+		}
+	}
+
+	return nil
 }
 
 func read(path string, info os.FileInfo) (*Scope, error) {
@@ -284,24 +439,51 @@ func (s *Scope) Uses(name string) bool {
 	return false
 }
 
-// OwnsImage tells whether an image name is in one of its own namespaces.
+// OwnsImage tells whether an image name is in one of its own namespaces: one it starts with, and no
+// other scope's namespace it starts with is longer ("quire-sites/jane/blog/x" is scope jane-blog's
+// while it exists, if its namespace is "quire-sites/jane/blog/").
 func (s *Scope) OwnsImage(image string) bool {
-	for _, i := range s.Images {
-		if strings.HasPrefix(image, i) && len(image) > len(i) {
-			return true
+	own := longest(s.Images, image)
+	if own == 0 {
+		return false
+	}
+
+	for _, o := range s.others {
+		if longest(o.Images, image) > own {
+			return false
 		}
 	}
 
-	return false
+	return true
 }
 
-// Names tells whether a name starts with one of the scope's prefixes.
+// Names tells whether a name is the scope's: it starts with one of the scope's prefixes, and with no
+// longer prefix of another scope's ("jane-blog-php-1" is scope jane-blog's while it exists, not
+// jane's). Compose fixes the names (<project>-<service>-<n>), so tenants' names can nest.
 func (s *Scope) Names(name string) bool {
-	for _, p := range s.Prefixes {
-		if len(name) > len(p) && name[:len(p)] == p {
-			return true
+	own := longest(s.Prefixes, name)
+	if own == 0 {
+		return false
+	}
+
+	for _, o := range s.others {
+		if longest(o.Prefixes, name) > own {
+			return false
 		}
 	}
 
-	return false
+	return true
+}
+
+// longest is the length of the longest of the prefixes a name starts with (and goes beyond), or 0.
+func longest(prefixes []string, name string) int {
+	n := 0
+
+	for _, p := range prefixes {
+		if len(name) > len(p) && strings.HasPrefix(name, p) && len(p) > n {
+			n = len(p)
+		}
+	}
+
+	return n
 }

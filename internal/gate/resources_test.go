@@ -442,3 +442,32 @@ func TestAnswersNameOnlyWhatItMaySee(t *testing.T) {
 		t.Errorf("history: %s", answer)
 	}
 }
+
+// Scope jane-blog exists beside jane: its names and images aren't jane's to create, though they
+// start with jane's prefixes.
+func TestANestedScopesNamesAreItsOwn(t *testing.T) {
+	d := startDocker(t)
+	server := gate(t, d, "sites")
+
+	for _, c := range []struct{ name, path, body, want string }{
+		{"a container", "/v1.56/containers/create?name=jane-blog-php-1", encode(compose()), `the name "jane-blog-php-1" isn't one of scope jane's`},
+		{"a network", "/v1.56/networks/create", encode(set(composeNetwork(), "Name", "jane-blog_default")), `the name "jane-blog_default" isn't one of scope jane's`},
+		{"a volume", "/v1.56/volumes/create", `{"Name":"jane-blog_data","Labels":{"com.docker.compose.project":"jane"}}`, `the name "jane-blog_data" isn't one of scope jane's`},
+		{"a rename", "/v1.56/containers/jane-php-1/rename?name=jane-blog-php-2", "", `the name "jane-blog-php-2" isn't one of scope jane's`},
+		{"an image tag", "/v1.56/images/alpine:3.22/tag?repo=quire-sites/jane/blog/php&tag=1", "", "isn't in one of scope jane's image namespaces"},
+		{"a pull", "/v1.56/images/create?fromImage=quire-sites/jane/blog/php&tag=1", "", "protected namespace"},
+	} {
+		if status, answer := send(t, server, "POST", c.path, c.body, asJane); status != http.StatusForbidden || !strings.Contains(message(t, answer), c.want) {
+			t.Errorf("%s: %d %s", c.name, status, answer)
+		}
+	}
+
+	if d.count() != 0 {
+		t.Errorf("%d requests reached Docker", d.count())
+	}
+
+	// Its own names still are.
+	if status, answer := send(t, server, "POST", "/v1.56/containers/create?name=jane-blogger-1", encode(compose()), asJane); status != 200 {
+		t.Errorf("jane-blogger-1: %d %s", status, answer)
+	}
+}
