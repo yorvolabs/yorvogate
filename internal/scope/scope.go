@@ -27,7 +27,8 @@ import (
 type Scope struct {
 	// Name is the file's name, without ".json".
 	Name string `json:"-"`
-	// TokenSHA256 is the SHA-256 (hex) of the token the client sends.
+	// TokenSHA256 is the SHA-256 (hex) of the token the client sends. A scope with a socket of its
+	// own needs none: whoever can open the socket is the scope.
 	TokenSHA256 string `json:"token_sha256"`
 	// Owner marks what the scope owns: every container, network and volume it creates carries this
 	// label with this value, and only objects with it are its own.
@@ -86,6 +87,8 @@ var ErrUnknown = errors.New("no such scope, or not its token")
 // knows the others' names, so a name belongs to the scope with the longest prefix it starts with.
 type Store struct {
 	dir string
+	// Whether a scope may have no token (each has its own socket)
+	tokenless bool
 
 	mu     sync.Mutex
 	loaded map[string]entry
@@ -105,9 +108,15 @@ type entry struct {
 	err       error
 }
 
-// NewStore reads scopes from a folder.
+// NewStore reads scopes from a folder; each scope has a token.
 func NewStore(dir string) *Store {
 	return &Store{dir: dir, loaded: map[string]entry{}}
+}
+
+// NewSocketStore reads scopes from a folder for a listener where each scope has its own socket: a
+// token is optional.
+func NewSocketStore(dir string) *Store {
+	return &Store{dir: dir, tokenless: true, loaded: map[string]entry{}}
 }
 
 // Authenticate returns the scope a request names, if its token is the scope's. Both a missing scope
@@ -124,6 +133,10 @@ func (s *Store) Authenticate(name, token string) (*Scope, error) {
 		}
 
 		return nil, err
+	}
+
+	if scope.TokenSHA256 == "" {
+		return nil, ErrUnknown
 	}
 
 	want, _ := hex.DecodeString(scope.TokenSHA256)
@@ -158,6 +171,31 @@ func (s *Store) Get(name string) (*Scope, error) {
 	}
 
 	return nil, fmt.Errorf("scope %s: %w", name, os.ErrNotExist)
+}
+
+// Scopes returns the names of the valid scopes as the folder has them now, and why each other scope
+// file isn't valid.
+func (s *Store) Scopes() ([]string, map[string]error, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if err := s.scan(); err != nil {
+		return nil, nil, err
+	}
+
+	names := make([]string, 0, len(s.views))
+	for name := range s.views {
+		names = append(names, name)
+	}
+
+	sort.Strings(names)
+
+	invalid := make(map[string]error, len(s.errors))
+	for name, err := range s.errors {
+		invalid[name] = err
+	}
+
+	return names, invalid, nil
 }
 
 // scan reads the folder's scope files that changed, and decides again which scopes are valid when
@@ -198,7 +236,7 @@ func (s *Store) scan() error {
 			first = old.firstSeen
 		}
 
-		scope, err := read(path, info)
+		scope, err := read(path, info, s.tokenless)
 		if scope != nil {
 			scope.Name = name
 		}
@@ -307,7 +345,7 @@ func conflict(s *Scope, owners map[Label]string, prefixes, images map[string]str
 	return nil
 }
 
-func read(path string, info os.FileInfo) (*Scope, error) {
+func read(path string, info os.FileInfo, tokenless bool) (*Scope, error) {
 	// Only a plain file that no one but its owner can change: a link could point anywhere.
 	if !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
 		return nil, fmt.Errorf("scope file %s: must be a plain file, writable by its owner only", path)
@@ -330,16 +368,16 @@ func read(path string, info os.FileInfo) (*Scope, error) {
 		return nil, fmt.Errorf("scope file %s: one JSON object only", path)
 	}
 
-	if err := scope.check(); err != nil {
+	if err := scope.check(tokenless); err != nil {
 		return nil, fmt.Errorf("scope file %s: %w", path, err)
 	}
 
 	return &scope, nil
 }
 
-func (s *Scope) check() error {
+func (s *Scope) check(tokenless bool) error {
 	switch {
-	case !validDigest.MatchString(s.TokenSHA256):
+	case !validDigest.MatchString(s.TokenSHA256) && (s.TokenSHA256 != "" || !tokenless):
 		return errors.New("token_sha256: the token's SHA-256, as 64 lowercase hex digits")
 	case !validLabel.MatchString(s.Owner.Key):
 		return errors.New("owner.label: a Docker label's name")

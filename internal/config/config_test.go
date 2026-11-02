@@ -73,6 +73,31 @@ func TestAValidConfiguration(t *testing.T) {
 	}
 }
 
+// A scoped listener whose scopes each have their own socket
+var socketBound = strings.Replace(valid, "address: unix:///run/yorvogate/sites.sock", "scope_sockets: /run/yorvogate/scopes\n    socket_group: docker-sites", 1)
+
+func TestScopeSockets(t *testing.T) {
+	c, err := Parse([]byte(socketBound))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sites := c.Listeners[1]
+	if !sites.SocketBound() || !sites.Unix() || sites.SocketGroup != "docker-sites" || c.Listeners[0].SocketBound() || c.Listeners[0].Unix() {
+		t.Errorf("%+v", sites)
+	}
+
+	for _, g := range []string{"0", "1001", "_sites"} {
+		if _, err := Parse([]byte(strings.Replace(socketBound, "docker-sites", g, 1))); err != nil {
+			t.Errorf("group %q: %v", g, err)
+		}
+	}
+
+	if _, err := Parse([]byte(strings.Replace(valid, "mode: scoped", "mode: scoped\n    socket_group: docker", 1))); err != nil {
+		t.Errorf("a group on a unix address: %v", err)
+	}
+}
+
 func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 	cases := map[string]string{
 		"an unknown key":                 strings.Replace(valid, "upstream:", "upstreem: x\nupstream:", 1),
@@ -111,6 +136,13 @@ func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 		"an unknown container key":       strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {privileged: true}", 1),
 		"a tiny load limit":              valid + "load_limit: 1024\n",
 		"a huge load limit":              valid + "load_limit: 300000000000\n",
+		"scope sockets and an address":   strings.Replace(valid, "mode: scoped", "mode: scoped\n    scope_sockets: /run/yorvogate/scopes", 1),
+		"scope sockets on a trusted one": strings.Replace(valid, "mode: trusted", "mode: trusted\n    scope_sockets: /run/yorvogate/scopes", 1),
+		"relative scope sockets":         strings.Replace(socketBound, "/run/yorvogate/scopes", "run/scopes", 1),
+		"scope sockets not clean":        strings.Replace(socketBound, "/run/yorvogate/scopes", "/run/yorvogate/../scopes", 1),
+		"a group on a TCP listener":      strings.Replace(valid, "mode: trusted", "mode: trusted\n    socket_group: docker", 1),
+		"a group that isn't one":         strings.Replace(socketBound, "docker-sites", "my group", 1),
+		"the same folder twice":          strings.Replace(socketBound, "name: server", "name: other\n    mode: scoped\n    scope_sockets: /run/yorvogate/scopes\n    scopes: /etc/yorvogate/scopes\n  - name: server", 1),
 	}
 
 	for name, content := range cases {

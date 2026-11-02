@@ -65,6 +65,12 @@ type Listener struct {
 	Name    string `yaml:"name"`
 	Address string `yaml:"address"` // "tcp://10.0.0.2:2375" or "unix:///run/yorvogate/sites.sock"
 	Mode    string `yaml:"mode"`    // trusted or scoped
+	// ScopeSockets (scoped, instead of an address): the folder where each scope gets its own socket,
+	// "<scope>.sock". A request on it is that scope's, with no token.
+	ScopeSockets string `yaml:"scope_sockets"`
+	// SocketGroup is the group (a name or a number) that may connect to the listener's unix sockets;
+	// the process's own when empty.
+	SocketGroup string `yaml:"socket_group"`
 	// Allow (trusted): endpoint group => "read" or "write".
 	Allow map[string]string `yaml:"allow"`
 	// Scopes (scoped): the folder of scope files, one "<name>.json" per scope.
@@ -99,7 +105,10 @@ type Containers struct {
 	ProtectedImages []string `yaml:"protected_images"`
 }
 
-var name = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+var (
+	name  = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	group = regexp.MustCompile(`^[a-z_][a-z0-9_-]{0,31}$|^[0-9]{1,10}$`)
+)
 
 // Load reads and checks a configuration file.
 func Load(path string) (*Config, error) {
@@ -207,11 +216,16 @@ func (c *Config) check() error {
 			return fmt.Errorf("listeners[%d]: %w", i, err)
 		}
 
-		if names[l.Name] || addresses[l.Address] {
+		address := l.Address
+		if l.ScopeSockets != "" {
+			address = "unix://" + l.ScopeSockets + "/"
+		}
+
+		if names[l.Name] || addresses[address] {
 			return fmt.Errorf("listeners[%d]: its name and address must be its own", i)
 		}
 
-		names[l.Name], addresses[l.Address] = true, true
+		names[l.Name], addresses[address] = true, true
 	}
 
 	return nil
@@ -222,8 +236,26 @@ func (l *Listener) check() error {
 		return fmt.Errorf("name: %q must be lowercase letters, digits and dashes", l.Name)
 	}
 
-	if _, err := l.Network(); err != nil {
+	if l.ScopeSockets != "" {
+		if l.Mode != Scoped || l.Address != "" {
+			return errors.New("scope_sockets: only a scoped listener has them, instead of an address")
+		}
+
+		if !filepath.IsAbs(l.ScopeSockets) || filepath.Clean(l.ScopeSockets) != l.ScopeSockets {
+			return fmt.Errorf("scope_sockets: %q must be an absolute folder", l.ScopeSockets)
+		}
+	} else if _, err := l.Network(); err != nil {
 		return err
+	}
+
+	if l.SocketGroup != "" {
+		if !l.Unix() {
+			return errors.New("socket_group: only a listener on unix sockets has one")
+		}
+
+		if !group.MatchString(l.SocketGroup) {
+			return fmt.Errorf("socket_group: %q must be a group's name or number", l.SocketGroup)
+		}
 	}
 
 	switch l.Mode {
@@ -323,6 +355,16 @@ func (l *Listener) Network() ([2]string, error) {
 	}
 
 	return [2]string{}, fmt.Errorf("address: %q must be tcp://host:port or unix:///path", l.Address)
+}
+
+// Unix tells whether the listener's clients connect over unix sockets.
+func (l *Listener) Unix() bool {
+	return l.ScopeSockets != "" || strings.HasPrefix(l.Address, "unix://")
+}
+
+// SocketBound tells whether each scope has its own socket, rather than a token sent with each request.
+func (l *Listener) SocketBound() bool {
+	return l.ScopeSockets != ""
 }
 
 // Allows tells whether a trusted listener allows an endpoint.

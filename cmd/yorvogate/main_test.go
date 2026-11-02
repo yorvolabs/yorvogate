@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -121,5 +122,89 @@ func TestServeRefusesABadConfiguration(t *testing.T) {
 
 	if err := serve(context.Background(), configFile, slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
 		t.Fatal("it started")
+	}
+}
+
+// A socket-bound listener: a socket for each scope at start, one for a scope added when SIGHUP
+// comes (not waiting for the next scan), and none left once it stops.
+func TestServeScopeSockets(t *testing.T) {
+	dir := t.TempDir()
+	upstream := filepath.Join(dir, "docker.sock")
+
+	docker, err := net.Listen("unix", upstream)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		_ = http.Serve(docker, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("OK")) }))
+	}()
+	defer docker.Close()
+
+	scopes, sockets := filepath.Join(dir, "scopes"), filepath.Join(dir, "s")
+	_ = os.Mkdir(scopes, 0o700)
+	_ = os.Mkdir(sockets, 0o700)
+	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
+
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	_ = os.WriteFile(configFile, []byte("upstream: unix://"+upstream+"\nlisteners:\n  - {name: sites, scope_sockets: "+sockets+", mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+
+	var out, errs bytes.Buffer
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 || !strings.Contains(out.String(), "sites (scoped, scope_sockets "+sockets+"): ok, 1 scopes") {
+		t.Fatalf("check: %d %q %q", code, out.String(), errs.String())
+	}
+
+	interval := scanInterval
+	scanInterval = time.Hour
+	defer func() { scanInterval = interval }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+
+	go func() { done <- serve(ctx, configFile, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
+
+	ping := func(scope string) string {
+		client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", filepath.Join(sockets, scope+".sock"))
+		}}}
+
+		for range 100 {
+			if res, err := client.Get("http://gate/_ping"); err == nil {
+				body, _ := io.ReadAll(res.Body)
+				_ = res.Body.Close()
+
+				return string(body)
+			}
+
+			time.Sleep(20 * time.Millisecond)
+		}
+
+		return ""
+	}
+
+	if answer := ping("jane"); answer != "OK" {
+		t.Fatalf("on jane's socket: %q", answer)
+	}
+
+	_ = os.WriteFile(filepath.Join(scopes, "blog.json"), []byte(`{"owner": {"label": "com.docker.compose.project", "value": "blog"}, "prefixes": ["blog-"]}`), 0o600)
+	_ = syscall.Kill(os.Getpid(), syscall.SIGHUP)
+
+	if answer := ping("blog"); answer != "OK" {
+		t.Fatalf("on blog's socket, after SIGHUP: %q", answer)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("stopped with %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("it didn't stop")
+	}
+
+	if left, _ := filepath.Glob(filepath.Join(sockets, "*")); len(left) != 0 {
+		t.Errorf("left behind: %v", left)
 	}
 }

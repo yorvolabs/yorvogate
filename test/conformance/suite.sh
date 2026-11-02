@@ -3,11 +3,16 @@
 # Compose and by raw HTTP. Two scopes, jane and blog: what each does as a tenant must work; what would
 # reach the host or the other must be refused, saying why, and leave nothing behind.
 #
+# It runs twice (run.sh): with each scope's token sent in a header (YGC_LISTENER=tokens), and with
+# each scope on a socket of its own (YGC_LISTENER=sockets), where the CLI and Compose send no header.
+# Raw requests go to the token listener either way (BusyBox's nc has no unix sockets).
+#
 # Every attack is a create (or a read): even one that got through would run nothing. Run it through
 # run.sh, which gives it a container with Docker's CLI, Compose, Docker's socket and the binary.
 set -u
 
 dir=/tmp/conformance
+listener=${YGC_LISTENER:-tokens}
 passed=0
 failed=0
 
@@ -26,11 +31,15 @@ ko() {
 # The real Docker, straight (to set up and to check what exists)
 direct() { env -u DOCKER_HOST -u DOCKER_CONFIG docker "$@"; }
 
-# A command as a scope, through YorvoGate
+# A command as a scope, through YorvoGate: its token in a header, or on its own socket with none
 as() {
 	scope=$1
 	shift
-	DOCKER_HOST=tcp://127.0.0.1:2376 DOCKER_CONFIG="$dir/$scope" "$@"
+	if [ "$listener" = sockets ]; then
+		DOCKER_HOST="unix://$dir/sockets/$scope.sock" DOCKER_CONFIG="$dir/bare" "$@"
+	else
+		DOCKER_HOST=tcp://127.0.0.1:2376 DOCKER_CONFIG="$dir/$scope" "$@"
+	fi
 }
 
 # works NAME COMMAND…: it must succeed.
@@ -95,8 +104,8 @@ trap cleanup EXIT
 cleanup
 
 say "== Docker $(direct version --format '{{.Server.Version}} (API {{.Server.APIVersion}})'), Compose $(docker compose version --short)"
-say "== Setting up: YorvoGate, scopes jane and blog"
-mkdir -p "$dir/scopes"
+say "== Setting up: YorvoGate, scopes jane and blog ($listener)"
+mkdir -p "$dir/scopes" "$dir/sockets" "$dir/bare"
 for scope in jane blog; do
 	token=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 	printf '%s' "$token" > "$dir/$scope.token"
@@ -122,6 +131,21 @@ listeners:
       max_pids: 128
       protected_images: [ygc-jane/, ygc-blog/]
 EOF
+if [ "$listener" = sockets ]; then
+	cat >> "$dir/yorvogate.yaml" <<EOF
+  - name: tenant-sockets
+    scope_sockets: $dir/sockets
+    mode: scoped
+    scopes: $dir/scopes
+    containers:
+      capabilities: [NET_BIND_SERVICE]
+      drop_all_capabilities: true
+      no_new_privileges: true
+      max_memory: 268435456
+      max_pids: 128
+      protected_images: [ygc-jane/, ygc-blog/]
+EOF
+fi
 
 ${YORVOGATE:-/yorvogate/yorvogate} serve --config "$dir/yorvogate.yaml" 2> "$dir/yorvogate.log" &
 gate=$!
@@ -252,6 +276,18 @@ if direct image inspect alpine:yorvogate-hijack >/dev/null 2>&1; then ko "a shar
 if direct image inspect alpine:yorvogate-import >/dev/null 2>&1; then ko "an import was named as a shared image"; else ok "no import named as a shared image"; fi
 works "jane: compose down -v" as jane docker compose -p ygc-jane -f "$jane" down -v
 works "blog: compose down -v" as blog docker compose -p ygc-blog -f "$blog" down -v
+
+if [ "$listener" = sockets ]; then
+	say "== A scope's socket is that scope only"
+	refused "naming blog on jane's socket" "this socket is scope jane's" \
+		env DOCKER_HOST="unix://$dir/sockets/jane.sock" DOCKER_CONFIG="$dir/blog" docker ps
+	mv "$dir/scopes/blog.json" "$dir/blog.json.removed"
+	kill -HUP "$gate"
+	sleep 1
+	if [ -e "$dir/sockets/blog.sock" ]; then ko "a removed scope's socket is gone"; else ok "a removed scope's socket is gone"; fi
+	if as blog docker version >/dev/null 2>&1; then ko "a removed scope still answers"; else ok "a removed scope no longer answers"; fi
+	works "jane's socket is still open" as jane docker version
+fi
 
 say ""
 say "$passed passed, $failed failed"

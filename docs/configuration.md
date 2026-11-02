@@ -15,6 +15,7 @@ load_limit: 8589934592                  # the largest image archive a scope load
 listeners:                              # at least one
   - name: orchestrator                  # lowercase letters, digits and dashes; in logs
     address: tcp://10.10.0.2:2375       # tcp://host:port, or unix:///absolute/path (made 0660)
+    # socket_group: docker-orchestrator # a unix socket's group, a name or a number (optional)
     mode: trusted
     allow:                              # endpoint group => read or write
       system: read
@@ -31,7 +32,24 @@ listeners:                              # at least one
       max_memory: 1073741824
       max_pids: 512
       protected_images: [registry.example.com/tenants/]
+
+  - name: sites                         # each scope on a socket of its own, instead of an address
+    scope_sockets: /run/yorvogate/sites # <scope>.sock for each valid scope file
+    socket_group: quire                 # who may connect (optional; YorvoGate's own group if left out)
+    mode: scoped
+    scopes: /etc/yorvogate/sites
 ```
+
+## Scope sockets
+
+A scoped listener can give each scope a unix socket of its own instead of one address: `scope_sockets: <folder>` in place of `address`. For each valid scope file, YorvoGate makes `<folder>/<scope>.sock`; a request on it is that scope's, with no header and no token. This is how builds are scoped: buildx doesn't send `config.json`'s `HttpHeaders` on its own connections, but it connects to whatever socket its Docker context names.
+
+- A socket comes with its scope file and goes with it. The folder of scope files is read again every 2 seconds, and at once on `SIGHUP`. A scope removed, or no longer valid, has its socket closed, with every connection on it, streams (attach, exec) included.
+- A request on a scope's socket that names a scope (`X-YorvoGate-Scope`) must name that one: one that names another is refused, never acted on as the other.
+- `token_sha256` is optional in the scope files of such a listener. A scope file with one may serve a token listener too.
+- YorvoGate makes the sockets, so its user needs write access to the folder. Sockets are mode `0660`, owned by YorvoGate's user and `socket_group`. They're made so that no one else can connect before the mode and group are set. A file at a socket's path that isn't a socket is left alone, and the scope's socket isn't made (it's logged, and tried again at the next scan).
+
+**Whoever can open a scope's socket is that scope.** The folder belongs where only the orchestrator, or the one client each socket is given to, can reach it: a volume only the orchestrator mounts, then each scope's socket alone mounted into that scope's client. Never give a client the folder.
 
 ## Containers (scoped listeners)
 
@@ -113,7 +131,7 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 }
 ```
 
-- `token_sha256`: the SHA-256 of the scope's token, 64 lowercase hex digits. The client sends the token itself.
+- `token_sha256`: the SHA-256 of the scope's token, 64 lowercase hex digits. The client sends the token itself. Optional where each scope has its own socket ([scope sockets](#scope-sockets)).
 - `owner`: the label (and its value) that marks the scope's objects. For Compose projects, `com.docker.compose.project` and the project's name. An object is a scope's by this label only, never by its name. What a scope creates must carry it, and no other scope's owner label; a volume a container's mount creates gets it from YorvoGate.
 - `prefixes`: what the names of the containers, networks and volumes it creates start with. Each ends with `-`, `_` or `.`, so `jane-` never matches `janet-…`.
 - `images` (optional): its own image namespaces, as prefixes ending with `/`: it may use images there even where the listener protects them.
@@ -125,7 +143,7 @@ One case is left to the orchestrator: if tenant `jane` has a Compose service nam
 - `subnets` (optional): where its networks' addresses must be, in CIDR form: each network it creates names its subnet, inside one of these (otherwise Docker picks from its own pools).
 - `containers` (optional): containers it may use without carrying its label, by name, a trailing `*` matching any end (e.g. its BuildKit builder, created by the orchestrator).
 
-A client sends its scope with each request. With the Docker CLI or Compose, through its `config.json` (`DOCKER_CONFIG` pointing at the scope's own folder):
+On a listener with an address, a client sends its scope with each request. With the Docker CLI or Compose, through its `config.json` (`DOCKER_CONFIG` pointing at the scope's own folder):
 
 ```json
 {"HttpHeaders": {"X-YorvoGate-Scope": "jane", "X-YorvoGate-Token": "<the token>"}}
