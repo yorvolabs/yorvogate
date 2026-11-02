@@ -28,4 +28,14 @@ docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR \
 	-v "$PWD/test/conformance:/conformance:ro" \
 	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
 	sh /conformance/quire.sh || status=1
+# Then an AI agent's socket, as docs/agents.md sets it up: the sockets' folder a volume, so an agent's
+# container can mount its one socket
+docker run --rm -e GITHUB_ACTIONS \
+	-v /var/run/docker.sock:/var/run/docker.sock \
+	-v ygc-agents:/agents \
+	-v "$PWD/bin:/yorvogate:ro" \
+	-v "$PWD/test/conformance:/conformance:ro" \
+	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
+	sh /conformance/agents.sh || status=1
+docker volume rm ygc-agents >/dev/null 2>&1
 exit $status
