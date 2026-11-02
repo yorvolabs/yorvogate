@@ -14,7 +14,7 @@ import (
 )
 
 // The documents whose examples must be what YorvoGate accepts
-var documents = []string{"../../README.md", "../../docs/configuration.md", "../../docs/threat-model.md"}
+var documents = []string{"../../README.md", "../../docs/configuration.md", "../../docs/threat-model.md", "../../docs/agents.md"}
 
 var fence = regexp.MustCompile("(?ms)^```(yaml|json)\n(.*?)^```")
 
@@ -73,7 +73,13 @@ func TestEveryExampleIsValid(t *testing.T) {
 	placeholder := regexp.MustCompile(`"<[^">]*>"`)
 
 	for name, content := range scopes {
-		for _, socketBound := range []bool{false, true} {
+		// A scope file without a token serves only scope sockets.
+		listeners := []bool{false, true}
+		if !strings.Contains(content, `"token_sha256"`) {
+			listeners = []bool{true}
+		}
+
+		for _, socketBound := range listeners {
 			dir := t.TempDir()
 			scopesDir := filepath.Join(dir, "scopes")
 			_ = os.Mkdir(scopesDir, 0o700)

@@ -4,6 +4,10 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added
+
+- **[An AI agent's Docker socket](docs/agents.md):** why the Docker socket is root on the host, and how to give an agent a scope socket instead, in a container or on the host. Its setup runs in the conformance suite.
+
 ## [0.2.0] - 2026-11-02
 
 Security fixes: update from 0.1.0. A scope file's `containers` is refused; see [migrating from 0.1.0](https://github.com/yorvolabs/yorvogate/blob/v0.2.0/docs/configuration.md#migrating-from-010).
