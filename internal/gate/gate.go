@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -132,6 +133,10 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 
 		entry = entry.With("scope", s.Name)
 
+		if err := notAForm(r); err != nil {
+			return nil, nil, err
+		}
+
 		body, err := g.readBody(r, req.Endpoint)
 		if err != nil {
 			return nil, nil, err
@@ -140,7 +145,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 		decision := &scoped{
 			ctx: r.Context(), req: req, scope: s, policy: g.listener.Containers, docker: g.docker,
 			path: r.URL.EscapedPath(), query: r.URL.Query(), upgrading: upgrading(r),
-			stream: r.Body, loadLimit: g.config.LoadLimit,
+			stream: r.Body, hasBody: r.ContentLength != 0, loadLimit: g.config.LoadLimit,
 		}
 		if req.Version != nil {
 			decision.version = req.Version.String()
@@ -164,19 +169,26 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			out = out.WithContext(context.WithValue(out.Context(), answerKey{}, decision.answer))
 		}
 
+		// Docker reads a request's parameters from its body too when the Content-Type says it's a
+		// form, and those win over the query YorvoGate checked. So the Content-Type Docker gets is
+		// YorvoGate's, from what's forwarded, never the client's.
 		switch {
 		case decision.forwardBody != nil:
 			// What was checked in place of what came (an archive kept on disk)
 			out.Body, out.ContentLength = decision.forwardBody, decision.forwardLength
 			out.TransferEncoding = nil
 			out.Header.Del("Transfer-Encoding")
+			out.Header.Set("Content-Type", "application/x-tar")
 
 			return out, decision, nil
-		case req.Endpoint.Stream:
-			// A stream YorvoGate doesn't read (an archive put into one of its containers) goes as it came.
+		case sendsArchive[req.Endpoint.Name]:
+			// An archive put into one of its containers goes as it comes: YorvoGate doesn't read it.
+			out.Header.Set("Content-Type", "application/x-tar")
+
 			return out, decision, nil
 		}
 
+		// Any other stream (an image.create) has no body, and goes without one.
 		return withBody(out, checked), decision, nil
 	}
 
@@ -242,12 +254,40 @@ func withoutGateHeaders(r *http.Request) *http.Request {
 	return out
 }
 
-// withBody sets the body that's forwarded: what was checked, never what came.
+// notAForm refuses a scoped request whose body Docker would read as a form: its parameters would
+// override the query YorvoGate checks (Go's Request.ParseForm, which Docker's handlers call). A
+// Content-Type that doesn't parse is refused too, since Go reads the form even when only the
+// type's parameters are malformed; so is a Content-Type given twice.
+func notAForm(r *http.Request) error {
+	types := r.Header.Values("Content-Type")
+	if len(types) == 0 {
+		return nil
+	}
+
+	if len(types) > 1 {
+		return refuse(http.StatusBadRequest, "the request has more than one Content-Type")
+	}
+
+	media, _, err := mime.ParseMediaType(types[0])
+	if err != nil {
+		return refuse(http.StatusBadRequest, "the request's Content-Type %q isn't valid: %v", types[0], err)
+	}
+
+	if media == "application/x-www-form-urlencoded" || strings.HasPrefix(media, "multipart/") {
+		return refuse(http.StatusUnsupportedMediaType, "a form body (%s) isn't allowed: Docker would read parameters from it that YorvoGate doesn't check", media)
+	}
+
+	return nil
+}
+
+// withBody sets the body that's forwarded, and its Content-Type: what was checked (a JSON value),
+// never what came.
 func withBody(r *http.Request, body []byte) *http.Request {
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	r.ContentLength = int64(len(body))
 	r.TransferEncoding = nil
 	r.Header.Del("Transfer-Encoding")
+	r.Header.Set("Content-Type", "application/json")
 
 	if len(body) == 0 {
 		r.Body = http.NoBody

@@ -54,12 +54,13 @@ refused() {
 	fi
 }
 
-# raw SCOPE METHOD PATH [BODY]: the status of a hand-written request, as it's written.
+# raw SCOPE METHOD PATH [BODY]: the status of a hand-written request, as it's written. Its
+# Content-Type is application/json, or $ctype when that's set.
 request() {
 	token=$(cat "$dir/$1.token" 2>/dev/null || echo not-a-token)
 	body=${4:-}
-	printf '%s %s HTTP/1.1\r\nHost: docker\r\nX-YorvoGate-Scope: %s\r\nX-YorvoGate-Token: %s\r\nContent-Type: application/json\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' \
-		"$2" "$3" "$1" "$token" "$(printf '%s' "$body" | wc -c)" "$body"
+	printf '%s %s HTTP/1.1\r\nHost: docker\r\nX-YorvoGate-Scope: %s\r\nX-YorvoGate-Token: %s\r\nContent-Type: %s\r\nContent-Length: %s\r\nConnection: close\r\n\r\n%s' \
+		"$2" "$3" "$1" "$token" "${ctype:-application/json}" "$(printf '%s' "$body" | wc -c)" "$body"
 	# Kept open until YorvoGate answers: a client that half-closes is one that went away.
 	sleep 2
 }
@@ -235,11 +236,20 @@ status "an endpoint YorvoGate doesn't know" 403 jane GET /v1.56/containers/ygc-j
 status "BuildKit's gRPC" 403 jane POST /v1.56/grpc
 status "a build" 403 jane POST /v1.56/build
 status "the swarm" 403 jane GET /v1.56/swarm
+# C-1 (the assessment of 0.1.0): Docker reads a form body's parameters over the query YorvoGate checked.
+# The query is a pull of jane's own; the body an import named as a shared image, and a pull into blog's.
+ctype=application/x-www-form-urlencoded
+status "an import smuggled in a form body" 415 jane POST "/v1.56/images/create?fromImage=ygc-jane/app&tag=1" "fromImage=&fromSrc=http://127.0.0.1:9/rootfs.tar&repo=alpine&tag=yorvogate-import"
+status "a pull into blog's namespace smuggled in a form body" 415 jane POST "/v1.56/images/create?fromImage=ygc-jane/app&tag=1" "fromImage=ygc-blog/app&tag=1"
+ctype=text/plain
+status "a pull with a body" 400 jane POST "/v1.56/images/create?fromImage=ygc-jane/app&tag=1" "fromImage=&fromSrc=http://127.0.0.1:9/rootfs.tar&repo=alpine&tag=yorvogate-import"
+ctype=
 status "no token" 401 nobody GET /v1.56/version
 
 say "== Nothing was left behind"
 if [ "$(direct ps -aq --filter label=com.docker.compose.project=ygc-jane | wc -l)" = 1 ]; then ok "jane has its one container"; else ko "jane's containers" "$(direct ps -a --filter label=com.docker.compose.project=ygc-jane --format '{{.Names}}')"; fi
 if direct image inspect alpine:yorvogate-hijack >/dev/null 2>&1; then ko "a shared name was retagged"; else ok "no shared name retagged"; fi
+if direct image inspect alpine:yorvogate-import >/dev/null 2>&1; then ko "an import was named as a shared image"; else ok "no import named as a shared image"; fi
 works "jane: compose down -v" as jane docker compose -p ygc-jane -f "$jane" down -v
 works "blog: compose down -v" as blog docker compose -p ygc-blog -f "$blog" down -v
 
