@@ -13,6 +13,7 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ### Changed
 
+- CI's conformance runs against Docker Engine 29.9.2 (API 1.56), installed pinned from Docker's repository, with its CLI, Compose 5.6.1 and buildx 0.38.1.
 - **Breaking:** a scope file's `containers` is refused; use `builders` (exact names), with a builder configured as [builders](docs/configuration.md#builders) says.
 - A listener's unix socket is made under a restrictive umask: no one but YorvoGate's user can connect to it before its mode (`0660`) and group are set.
 
