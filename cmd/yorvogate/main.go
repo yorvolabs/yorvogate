@@ -302,6 +302,8 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		server := gate.NewServer(g)
 		servers = append(servers, server)
 
+		listener = gate.LimitListener(listener, gate.MaxConnections)
+
 		go func() {
 			if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
 				failed <- fmt.Errorf("listener %s: %w", l.Name, err)

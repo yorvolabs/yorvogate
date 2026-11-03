@@ -14,6 +14,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/yorvolabs/yorvogate/internal/config"
 	"github.com/yorvolabs/yorvogate/internal/route"
@@ -233,6 +234,13 @@ func (g *Gate) readBody(r *http.Request, e *route.Endpoint) ([]byte, error) {
 	if e.Stream {
 		return nil, nil
 	}
+
+	// A body to check is small; a client that trickles one keeps a connection (and a file
+	// descriptor) for as long as it likes, which is how a scope can exhaust the gate for the others
+	// (slowloris). Reading has a deadline: closing the body unblocks a stuck read. Streams, which
+	// are large or long by design, are already returned above and keep no such deadline.
+	timer := time.AfterFunc(bodyReadTimeout, func() { _ = r.Body.Close() })
+	defer timer.Stop()
 
 	body, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, g.config.BodyLimit))
 	if err != nil {
