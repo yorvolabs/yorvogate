@@ -141,6 +141,8 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 
 Scopes' names may nest, as Compose projects' do (sites `jane` and `jane-blog`): a name belongs to the scope with the **longest** prefix it starts with. While scope `jane-blog` exists, `jane` can't create `jane-blog-php-1` or `jane-blog_default`; image namespaces work the same way. Two scopes may not share an owner label, a prefix or an image namespace: the scope that came later is refused (its requests fail), and `yorvogate check` names both.
 
+A scope file that isn't valid (or that conflicts) is refused alone: its requests fail and its socket closes, the other scopes keep working, and YorvoGate keeps running. While it's refused, it has no names: `jane-blog-php-1` is `jane`'s to create again. The scope's objects keep its owner label, so they stay out of `jane`'s reach. `yorvogate check` exits with the first scope file it refuses.
+
 One case is left to the orchestrator: if tenant `jane` has a Compose service named `blog-php` before a scope `jane-blog` exists, its container `jane-blog-php-1` is jane's. Once `jane-blog` arrives, `jane-blog`'s Compose project can't take that name. Nothing crosses between the scopes, since ownership is by label, but it's a denial of service. An orchestrator that lets tenants pick nested names should refuse dashes in service names.
 - `networks` (optional): shared networks it may join besides its own, each with the `aliases` it may take and the `addresses` it may ask for there (none if left out).
 - `subnets` (optional): where its networks' addresses must be, in CIDR form: each network it creates names its subnet, inside one of these (otherwise Docker picks from its own pools).
