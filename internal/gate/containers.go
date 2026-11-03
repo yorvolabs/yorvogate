@@ -391,6 +391,13 @@ func (s *scoped) volumeSource(source string) error {
 		return fmt.Errorf("the volume %q isn't its own", source)
 	}
 
+	// Its labels can say it's the scope's while its driver binds a host path (a local volume with
+	// o=bind,device=/,type=none, or any non-local driver). Checked at use, not only at create,
+	// because the scope may not have created it: an orchestrator provisions labelled volumes.
+	if v != nil && (v.Driver != "" && v.Driver != "local" || len(v.Options) > 0) {
+		return fmt.Errorf("the volume %q has driver options that could bind a host path; only a plain local volume may be mounted", source)
+	}
+
 	return nil
 }
 

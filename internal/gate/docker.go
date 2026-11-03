@@ -43,6 +43,11 @@ type object struct {
 	Name   string
 	Labels map[string]string
 
+	// Volumes only: the driver and its options, so a mount can refuse a volume that binds a host
+	// path (a local volume with o=bind/device/type) even when its labels mark it as the scope's.
+	Driver  string
+	Options map[string]string
+
 	inspection *container.InspectResponse
 }
 
@@ -82,8 +87,10 @@ func (d *Docker) Network(ctx context.Context, version, id string) (*object, erro
 // Volume looks a volume up by name; nil when there's none.
 func (d *Docker) Volume(ctx context.Context, version, name string) (*object, error) {
 	var answer struct {
-		Name   string
-		Labels map[string]string
+		Name    string
+		Labels  map[string]string
+		Driver  string
+		Options map[string]string
 	}
 
 	found, err := d.get(ctx, version, "/volumes/"+url.PathEscape(name), &answer)
@@ -91,7 +98,7 @@ func (d *Docker) Volume(ctx context.Context, version, name string) (*object, err
 		return nil, err
 	}
 
-	return &object{ID: answer.Name, Name: answer.Name, Labels: answer.Labels}, nil
+	return &object{ID: answer.Name, Name: answer.Name, Labels: answer.Labels, Driver: answer.Driver, Options: answer.Options}, nil
 }
 
 // image is what YorvoGate needs to know of an image: its ID and names.

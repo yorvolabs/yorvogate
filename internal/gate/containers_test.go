@@ -119,6 +119,7 @@ func TestWhatReachesTheHostOrAnotherScopeIsRefused(t *testing.T) {
 		{"privileged", "HostConfig.Privileged isn't allowed", set(compose(), "HostConfig.Privileged", true)},
 		{"the host's root, bound", "only named volumes of its own, never a host path", set(compose(), "HostConfig.Binds", []any{"/:/host"})},
 		{"another scope's volume, bound", `the volume "blog_data" isn't one of its own names`, set(compose(), "HostConfig.Binds", []any{"blog_data:/x"})},
+		{"an owned volume that binds the host", "could bind a host path", set(compose(), "HostConfig.Binds", []any{"jane_hostbind:/x"})},
 		{"a bind mount", `a "bind" mount of "/etc" isn't allowed`, set(compose(), "HostConfig.Mounts", []any{map[string]any{"Type": "bind", "Source": "/etc", "Target": "/x"}})},
 		{"a volume bound to the host", "volume driver options aren't allowed", set(compose(), "HostConfig.Mounts", []any{map[string]any{"Type": "volume", "Source": "jane_root", "Target": "/x", "VolumeOptions": map[string]any{"DriverConfig": map[string]any{"Name": "local", "Options": map[string]any{"type": "none", "o": "bind", "device": "/"}}}}})},
 		{"a volume's subpath out of it", "must stay inside the volume", set(compose(), "HostConfig.Mounts", []any{map[string]any{"Type": "volume", "Source": "jane_data", "Target": "/x", "VolumeOptions": map[string]any{"Subpath": "../../.."}}})},
