@@ -150,6 +150,44 @@ func crossListener(c *config.Config) error {
 	return nil
 }
 
+// listenerWarnings names a listener's choices that are valid but dangerous, so `check` can point
+// them out (it doesn't refuse them: an operator may mean them).
+func listenerWarnings(l config.Listener) []string {
+	var w []string
+
+	tcpOpen := false
+	if hostPort, ok := strings.CutPrefix(l.Address, "tcp://"); ok {
+		if host, _, err := net.SplitHostPort(hostPort); err == nil {
+			ip := net.ParseIP(host)
+			tcpOpen = host != "localhost" && (host == "" || ip == nil || !ip.IsLoopback())
+		}
+	}
+
+	if tcpOpen && l.Mode == config.Scoped && !l.SocketBound() {
+		w = append(w, "a scoped TCP listener on a non-loopback address sends scope tokens in cleartext (there's no TLS): bind it to loopback or a unix socket, or put TLS in front")
+	}
+
+	if tcpOpen && l.Mode == config.Trusted {
+		for _, access := range l.Allow {
+			if access == "write" {
+				w = append(w, "a trusted listener with write access on a non-loopback address is full control of Docker, in cleartext")
+
+				break
+			}
+		}
+	}
+
+	if l.Unix() && l.SocketGroup == "" {
+		w = append(w, "no socket_group: the listener's unix sockets fall back to the process's primary group, which may let more than the intended clients connect")
+	}
+
+	if l.AllowPrivilegedBuilders {
+		w = append(w, "allow_privileged_builders is on: a scope's builder is accepted whatever its configuration, so the scope can become root on the host")
+	}
+
+	return w
+}
+
 // check reads the configuration, and every scope file of its scoped listeners.
 func check(path string, stdout io.Writer) error {
 	c, err := config.Load(path)
@@ -160,6 +198,9 @@ func check(path string, stdout io.Writer) error {
 	for _, l := range c.Listeners {
 		if l.Mode != config.Scoped {
 			fmt.Fprintf(stdout, "%s (%s, %s): ok\n", l.Name, l.Mode, l.Address)
+			for _, warn := range listenerWarnings(l) {
+				fmt.Fprintf(stdout, "  warning: %s\n", warn)
+			}
 
 			continue
 		}
@@ -181,6 +222,9 @@ func check(path string, stdout io.Writer) error {
 		}
 
 		fmt.Fprintf(stdout, "%s (%s, %s): ok, %d scopes\n", l.Name, l.Mode, address, len(files))
+		for _, warn := range listenerWarnings(l) {
+			fmt.Fprintf(stdout, "  warning: %s\n", warn)
+		}
 	}
 
 	if err := crossListener(c); err != nil {

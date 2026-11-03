@@ -62,6 +62,27 @@ func TestCheckRefusesCrossListenerCollision(t *testing.T) {
 	}
 }
 
+func TestCheckWarnsOnDangerousConfig(t *testing.T) {
+	dir := t.TempDir()
+	scopes := filepath.Join(dir, "scopes")
+	_ = os.Mkdir(scopes, 0o700)
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	// A scoped TCP listener open to the world, with privileged builders allowed: valid, but dangerous.
+	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://0.0.0.0:2376', mode: scoped, scopes: "+scopes+", allow_privileged_builders: true}\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
+
+	var out, errs bytes.Buffer
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 {
+		t.Fatalf("check should still pass (warnings, not errors): %d %q", code, errs.String())
+	}
+
+	for _, want := range []string{"cleartext", "allow_privileged_builders"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing warning %q in: %s", want, out.String())
+		}
+	}
+}
+
 func TestUsage(t *testing.T) {
 	var out, errs bytes.Buffer
 	if run(nil, &out, &errs) != 2 || run([]string{"open"}, &out, &errs) != 2 || run([]string{"check", "--nope"}, &out, &errs) != 2 {
