@@ -4,9 +4,13 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-03
+
+Compose can recreate a scope's containers (a changed service), which 0.2.0 refused. Check your scope files with `yorvogate check` before you update: a prefix that starts with 12 hex and `_` is now refused.
+
 ### Added
 
-- **[An AI agent's Docker socket](docs/agents.md):** why the Docker socket is root on the host, and how to give an agent a scope socket instead, in a container or on the host. Its setup runs in the conformance suite.
+- **[An AI agent's Docker socket](https://github.com/yorvolabs/yorvogate/blob/v0.2.1/docs/agents.md):** why the Docker socket is root on the host, and how to give an agent a scope socket instead, in a container or on the host. Its setup runs in the conformance suite.
 
 ### Changed
 
@@ -63,6 +67,7 @@ The first release.
 - **Every decision logged** as JSON; every refusal a Docker-style error that says why.
 - **Releases:** an image for x86_64 and arm64 (static, on distroless, as a user without privileges), signed with Sigstore, with its SBOM and build provenance; reproducible binaries with signed checksums.
 
-[Unreleased]: https://github.com/yorvolabs/yorvogate/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/yorvolabs/yorvogate/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/yorvolabs/yorvogate/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/yorvolabs/yorvogate/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/yorvolabs/yorvogate/releases/tag/v0.1.0
