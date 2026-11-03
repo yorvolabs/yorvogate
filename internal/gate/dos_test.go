@@ -30,6 +30,42 @@ func TestReadBodyDeadline(t *testing.T) {
 	}
 }
 
+// A scope loads one archive at a time: a second acquire for the same scope waits for the first to
+// release, while a different scope is never blocked.
+func TestLoadLimiter(t *testing.T) {
+	l := newLoadLimiter()
+
+	release := l.acquire("jane")
+
+	// A different scope isn't blocked.
+	otherDone := make(chan struct{})
+	go func() { l.acquire("blog")(); close(otherDone) }()
+
+	select {
+	case <-otherDone:
+	case <-time.After(time.Second):
+		t.Fatal("a different scope's load was blocked")
+	}
+
+	// A second load for jane waits until the first releases.
+	second := make(chan struct{})
+	go func() { l.acquire("jane")(); close(second) }()
+
+	select {
+	case <-second:
+		t.Fatal("a second load for the same scope ran before the first released")
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	release()
+
+	select {
+	case <-second:
+	case <-time.After(time.Second):
+		t.Fatal("the second load didn't run after the first released")
+	}
+}
+
 // LimitListener accepts up to its limit at once; a connection past it waits for one to close.
 func TestLimitListener(t *testing.T) {
 	inner, err := net.Listen("tcp", "127.0.0.1:0")

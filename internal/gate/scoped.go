@@ -43,6 +43,7 @@ type scoped struct {
 	// Whether the request came with a body (one of unknown length included)
 	hasBody       bool
 	loadLimit     int64
+	loads         *loadLimiter
 	forwardBody   io.ReadCloser
 	forwardLength int64
 	// Done once the request is forwarded (e.g. an archive's copy removed)
