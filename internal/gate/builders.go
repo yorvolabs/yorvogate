@@ -141,7 +141,7 @@ func builderProblems(c *container.InspectResponse, profiles []string) []string {
 
 	for _, o := range h.SecurityOpt {
 		if !builderOption(o, profiles) {
-			add("the security option %q isn't allowed (seccomp=unconfined, systempaths=unconfined, no-new-privileges, apparmor=<one of the listener's builder_apparmor_profiles>)", o)
+			add("the security option %q isn't allowed (seccomp=unconfined, systempaths=unconfined, no-new-privileges=false, apparmor=<one of the listener's builder_apparmor_profiles>)", o)
 		}
 	}
 
@@ -149,11 +149,12 @@ func builderProblems(c *container.InspectResponse, profiles []string) []string {
 }
 
 // builderOption tells whether a builder may have a security option, as Docker takes it ("key=value"
-// or "key:value").
+// or "key:value"). A bare option (no value) is refused: the only one Docker reads bare is
+// "no-new-privileges" (= true), which a rootless builder can't run under.
 func builderOption(o string, profiles []string) bool {
 	i := strings.IndexAny(o, "=:")
 	if i < 0 {
-		return o == "no-new-privileges"
+		return false
 	}
 
 	key, value := o[:i], o[i+1:]
@@ -162,7 +163,10 @@ func builderOption(o string, profiles []string) bool {
 	case "seccomp", "systempaths":
 		return value == "unconfined"
 	case "no-new-privileges":
-		return value == "true"
+		// Rootless BuildKit can't map its users under no-new-privileges, so a hardened daemon
+		// (no-new-privileges true by default) needs the builder to opt out. Only "false" is
+		// allowed: "true" (or a bare option) is a builder that can't start.
+		return value == "false"
 	case "apparmor":
 		return slices.Contains(profiles, value)
 	}

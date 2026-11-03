@@ -154,6 +154,8 @@ func TestABuildersConfiguration(t *testing.T) {
 		"no AppArmor, not listed":      {"HostConfig.SecurityOpt", []string{"apparmor=unconfined"}, "apparmor=unconfined"},
 		"an SELinux label":             {"HostConfig.SecurityOpt", []string{"label=disable"}, "label=disable"},
 		"a seccomp profile of its own": {"HostConfig.SecurityOpt", []string{"seccomp=/x.json"}, "seccomp=/x.json"},
+		"no-new-privileges, bare":      {"HostConfig.SecurityOpt", []string{"no-new-privileges"}, `"no-new-privileges" isn't allowed`},
+		"no-new-privileges true":       {"HostConfig.SecurityOpt", []string{"no-new-privileges=true"}, `"no-new-privileges=true" isn't allowed`},
 	} {
 		d := startDocker(t)
 		server := gate(t, d, "sites")
@@ -180,8 +182,9 @@ func TestABuildersConfiguration(t *testing.T) {
 		}
 	}
 
-	// What a rootless builder may have: no-new-privileges (which breaks it, but isn't a risk), and
-	// the options in either of Docker's forms.
+	// What a rootless builder may have: no-new-privileges=false (the opt-out it needs on a daemon
+	// that defaults no-new-privileges on), in either of Docker's forms, and the unconfined/apparmor
+	// options.
 	// Its state in a named volume, as "docker run -v <name>:<path>" gives it (among the binds)
 	d := startDocker(t)
 	d.setBuilder("HostConfig.Binds", []string{"buildkit-jane-state:/home/user/.local/share/buildkit", "cache:/cache:ro"})
@@ -191,7 +194,7 @@ func TestABuildersConfiguration(t *testing.T) {
 	}
 
 	for _, options := range [][]string{
-		{"no-new-privileges"}, {"no-new-privileges:true"}, {"seccomp:unconfined", "apparmor:yorvogate-buildkit-rootless"}, nil,
+		{"no-new-privileges=false"}, {"no-new-privileges:false"}, {"seccomp:unconfined", "apparmor:yorvogate-buildkit-rootless"}, nil,
 	} {
 		d := startDocker(t)
 		d.setBuilder("HostConfig.SecurityOpt", options)
