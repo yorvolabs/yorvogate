@@ -41,13 +41,25 @@ fuzz:
 	go test -run '^$$' -fuzz '^FuzzListFilters$$' -fuzztime $(FUZZTIME) ./internal/gate
 	go test -run '^$$' -fuzz '^FuzzArchiveNames$$' -fuzztime $(FUZZTIME) ./internal/gate
 
-# Mutation testing: each package's tests must kill at least EFFICACY% of the mutants they cover. One
-# worker: in parallel, the gate's tests slow each other down, and mutants that time out don't count
-# (efficacy looks higher than it is). Without Go's test cache, which leaves gremlins no coverage.
+# Mutation testing: each package's tests must kill at least its floor % of the mutants they cover,
+# EFFICACY for all but internal/scope. gremlins v0.5.1's --threshold-efficacy does not fail the run,
+# so the floor is enforced here by reading "Test efficacy" from its output. internal/scope's floor is
+# lower (84): its surviving mutants are equivalent — a longest-prefix >/>= boundary that can't occur
+# because two scopes may not share an equal-length prefix, a firstSeen sort tie-break, and a slice
+# capacity hint — so 90 is unreachable there. One worker: in parallel, the gate's tests slow each
+# other down, and mutants that time out don't count (efficacy looks higher). Without Go's test cache,
+# which leaves gremlins no coverage.
 mutation:
+	@fail=0; \
 	for p in ./internal/route ./internal/config ./internal/scope ./internal/gate ./cmd/yorvogate; do \
-		GOFLAGS=-count=1 go run $(GREMLINS) unleash --workers 1 --timeout-coefficient 10 --threshold-efficacy $(EFFICACY) $$p || exit 1; \
-	done
+		floor=$(EFFICACY); case $$p in */scope) floor=84;; esac; \
+		out=$$(GOFLAGS=-count=1 go run $(GREMLINS) unleash --workers 1 --timeout-coefficient 10 $$p 2>&1); \
+		printf '%s\n' "$$out"; \
+		eff=$$(printf '%s\n' "$$out" | sed -n 's/.*[Tt]est efficacy: \([0-9.]*\)%.*/\1/p' | tail -1); \
+		if [ -z "$$eff" ]; then echo "mutation: $$p: no efficacy reported"; fail=1; continue; fi; \
+		if awk "BEGIN{exit !($$eff < $$floor)}"; then echo "mutation: $$p efficacy $$eff%% is below the $$floor%% floor"; fail=1; fi; \
+	done; \
+	[ $$fail -eq 0 ]
 
 # A release's binaries (Linux, x86_64 and arm64), reproducible, and their SHA256SUMS
 dist:

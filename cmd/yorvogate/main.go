@@ -81,6 +81,116 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
+// crossListener refuses an owner label, prefix, image namespace or builder that scopes on two
+// different scoped listeners share. Within one listener the store refuses the later of two scopes
+// that collide, but the listeners share one Docker, so a label or name claimed on two listeners
+// lets one listener's scope reach the other's objects. Startup-time: the scope folders are
+// re-read, so a collision introduced later is caught by `yorvogate check` or the next start.
+func crossListener(c *config.Config) error {
+	type claim struct{ listener, scope string }
+	owners, prefixes, images, builders := map[string]claim{}, map[string]claim{}, map[string]claim{}, map[string]claim{}
+
+	for _, l := range c.Listeners {
+		if l.Mode != config.Scoped {
+			continue
+		}
+
+		store := scope.NewStore(l.Scopes)
+		if l.SocketBound() {
+			store = scope.NewSocketStore(l.Scopes)
+		}
+
+		files, err := filepath.Glob(filepath.Join(l.Scopes, "*.json"))
+		if err != nil {
+			return err
+		}
+
+		for _, f := range files {
+			name := strings.TrimSuffix(filepath.Base(f), ".json")
+
+			sc, err := store.Get(name)
+			if err != nil {
+				continue // invalid, or a within-listener conflict the store already refuses
+			}
+
+			claimed := func(m map[string]claim, key, kind string) error {
+				// A different scope claiming the same key is the conflict (one scope could reach the
+				// other's objects). The same scope on two listeners (often one scopes folder served
+				// both by token and by socket) is fine: a client is that one scope either way.
+				if other, ok := m[key]; ok && other.scope != name {
+					return fmt.Errorf("%s %q is scope %s's on listener %s and scope %s's on listener %s: two scopes on listeners of one Docker may not share it", kind, key, other.scope, other.listener, name, l.Name)
+				}
+
+				m[key] = claim{l.Name, name}
+
+				return nil
+			}
+
+			if err := claimed(owners, sc.Owner.Key+"="+sc.Owner.Value, "owner label"); err != nil {
+				return err
+			}
+
+			for _, p := range sc.Prefixes {
+				if err := claimed(prefixes, p, "prefix"); err != nil {
+					return err
+				}
+			}
+
+			for _, i := range sc.Images {
+				if err := claimed(images, i, "image namespace"); err != nil {
+					return err
+				}
+			}
+
+			for _, b := range sc.Builders {
+				if err := claimed(builders, b, "builder"); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// listenerWarnings names a listener's choices that are valid but dangerous, so `check` can point
+// them out (it doesn't refuse them: an operator may mean them).
+func listenerWarnings(l config.Listener) []string {
+	var w []string
+
+	tcpOpen := false
+	if hostPort, ok := strings.CutPrefix(l.Address, "tcp://"); ok {
+		if host, _, err := net.SplitHostPort(hostPort); err == nil {
+			ip := net.ParseIP(host)
+			tcpOpen = host != "localhost" && (host == "" || ip == nil || !ip.IsLoopback())
+		}
+	}
+
+	if tcpOpen && l.Mode == config.Scoped && !l.SocketBound() {
+		w = append(w, "a scoped TCP listener on a non-loopback address sends scope tokens in cleartext (there's no TLS): bind it to loopback or a unix socket, or put TLS in front")
+	}
+
+	if tcpOpen && l.Mode == config.Trusted {
+		for _, access := range l.Allow {
+			if access == "write" {
+				w = append(w, "a trusted listener with write access on a non-loopback address is full control of Docker, in cleartext")
+
+				break
+			}
+		}
+	}
+
+	if l.Unix() && l.SocketGroup == "" {
+		w = append(w, "no socket_group: the listener's unix sockets fall back to the process's primary group, which may let more than the intended clients connect")
+	}
+
+	if l.AllowPrivilegedBuilders {
+		w = append(w, "allow_privileged_builders is on: a scope's builder is accepted whatever its configuration, so the scope can become root on the host")
+	}
+
+	return w
+}
+
 // check reads the configuration, and every scope file of its scoped listeners.
 func check(path string, stdout io.Writer) error {
 	c, err := config.Load(path)
@@ -91,6 +201,9 @@ func check(path string, stdout io.Writer) error {
 	for _, l := range c.Listeners {
 		if l.Mode != config.Scoped {
 			fmt.Fprintf(stdout, "%s (%s, %s): ok\n", l.Name, l.Mode, l.Address)
+			for _, warn := range listenerWarnings(l) {
+				fmt.Fprintf(stdout, "  warning: %s\n", warn)
+			}
 
 			continue
 		}
@@ -112,6 +225,13 @@ func check(path string, stdout io.Writer) error {
 		}
 
 		fmt.Fprintf(stdout, "%s (%s, %s): ok, %d scopes\n", l.Name, l.Mode, address, len(files))
+		for _, warn := range listenerWarnings(l) {
+			fmt.Fprintf(stdout, "  warning: %s\n", warn)
+		}
+	}
+
+	if err := crossListener(c); err != nil {
+		return err
 	}
 
 	return nil
@@ -125,6 +245,10 @@ var scanInterval = 2 * time.Second
 func serve(ctx context.Context, path string, log *slog.Logger) error {
 	c, err := config.Load(path)
 	if err != nil {
+		return err
+	}
+
+	if err := crossListener(c); err != nil {
 		return err
 	}
 
@@ -180,6 +304,8 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 
 		server := gate.NewServer(g)
 		servers = append(servers, server)
+
+		listener = gate.LimitListener(listener, gate.MaxConnections)
 
 		go func() {
 			if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {

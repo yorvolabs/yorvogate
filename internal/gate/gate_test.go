@@ -88,7 +88,8 @@ var (
 	containers = []fakeObject{{janePHP, "jane-php-1", jane}, {blogPHP, "blog-php-1", blog}, {janeBuilder, "buildx_buildkit_jane0", nil}, {nestedPHP, "jane-blog-php-1", map[string]string{"com.docker.compose.project": "jane-blog"}}}
 	networks   = []fakeObject{{janeNet, "jane_default", jane}, {blogNet, "blog_default", blog}, {linkNet, "quire-link-jane", nil}}
 	// jane_stolen has jane's prefix but blog's label: a name doesn't make a volume jane's.
-	volumes = []fakeObject{{"jane_data", "jane_data", jane}, {"blog_data", "blog_data", blog}, {"jane_stolen", "jane_stolen", blog}}
+	// jane_hostbind has jane's label but a local driver that binds the host root: owned, yet unsafe to mount.
+	volumes = []fakeObject{{"jane_data", "jane_data", jane}, {"blog_data", "blog_data", blog}, {"jane_stolen", "jane_stolen", blog}, {"jane_hostbind", "jane_hostbind", jane}}
 	execs   = map[string]string{"exec-jane": janePHP, "exec-blog": blogPHP, "exec-dial": janeBuilder, "exec-dial-as-docker-says": janeBuilder, "exec-shell": janeBuilder, "exec-dial-root": janeBuilder}
 	// What each exec runs (the others, a shell)
 	execCommands = map[string]map[string]any{
@@ -272,7 +273,12 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 		}
 	case "volumes":
 		if o := find(volumes, m[2]); o != nil {
-			answer = map[string]any{"Name": o.name, "Labels": o.labels}
+			vol := map[string]any{"Name": o.name, "Labels": o.labels}
+			if o.name == "jane_hostbind" {
+				vol["Driver"] = "local"
+				vol["Options"] = map[string]string{"type": "none", "o": "bind", "device": "/"}
+			}
+			answer = vol
 		}
 	case "exec":
 		if c, ok := execs[m[2]]; ok {

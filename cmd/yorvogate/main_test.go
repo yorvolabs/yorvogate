@@ -43,6 +43,62 @@ func TestCheckReadsTheConfigurationAndEveryScope(t *testing.T) {
 	}
 }
 
+func TestCheckRefusesCrossListenerCollision(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a")
+	b := filepath.Join(dir, "b")
+	_ = os.Mkdir(a, 0o700)
+	_ = os.Mkdir(b, 0o700)
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: one, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+a+"}\n  - {name: two, address: 'tcp://127.0.0.1:2377', mode: scoped, scopes: "+b+"}\n"), 0o600)
+	// Two scopes on two listeners that share the owner label "shared": each passes its own folder,
+	// but one listener's scope could then reach the other's objects.
+	_ = os.WriteFile(filepath.Join(a, "alpha.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "shared"}, "prefixes": ["alpha-"]}`), 0o600)
+	_ = os.WriteFile(filepath.Join(b, "beta.json"), []byte(`{"token_sha256": "`+strings.Repeat("b", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "shared"}, "prefixes": ["beta-"]}`), 0o600)
+
+	var out, errs bytes.Buffer
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 1 || !strings.Contains(errs.String(), "owner label") {
+		t.Fatalf("a cross-listener owner-label collision: %d %q %q", code, out.String(), errs.String())
+	}
+}
+
+func TestCheckAllowsSameScopesOnTwoListeners(t *testing.T) {
+	dir := t.TempDir()
+	scopes := filepath.Join(dir, "scopes")
+	_ = os.Mkdir(scopes, 0o700)
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	// One scopes folder served by two listeners (a token one and a socket one): the same scope on
+	// both, which is allowed — a client is that one scope either way.
+	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: tenants, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n  - {name: sockets, scope_sockets: "+filepath.Join(dir, "sock")+", socket_group: '0', mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
+
+	var out, errs bytes.Buffer
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 {
+		t.Fatalf("the same scope on two listeners should be allowed: %d %q %q", code, out.String(), errs.String())
+	}
+}
+
+func TestCheckWarnsOnDangerousConfig(t *testing.T) {
+	dir := t.TempDir()
+	scopes := filepath.Join(dir, "scopes")
+	_ = os.Mkdir(scopes, 0o700)
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	// A scoped TCP listener open to the world, with privileged builders allowed: valid, but dangerous.
+	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://0.0.0.0:2376', mode: scoped, scopes: "+scopes+", allow_privileged_builders: true}\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
+
+	var out, errs bytes.Buffer
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 {
+		t.Fatalf("check should still pass (warnings, not errors): %d %q", code, errs.String())
+	}
+
+	for _, want := range []string{"cleartext", "allow_privileged_builders"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("missing warning %q in: %s", want, out.String())
+		}
+	}
+}
+
 func TestUsage(t *testing.T) {
 	var out, errs bytes.Buffer
 	if run(nil, &out, &errs) != 2 || run([]string{"open"}, &out, &errs) != 2 || run([]string{"check", "--nope"}, &out, &errs) != 2 {

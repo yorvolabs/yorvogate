@@ -28,6 +28,53 @@ func NewServer(h http.Handler) *http.Server {
 	}
 }
 
+// bodyReadTimeout bounds how long YorvoGate waits for a non-stream request body (a small JSON value
+// it checks): long enough for a slow link, short enough that a trickled body can't hold a connection
+// open indefinitely.
+var bodyReadTimeout = 30 * time.Second
+
+// maxConnections is how many connections one listener accepts at once. For a scope-bound socket it's
+// per scope (each scope has its own socket), so one scope can't take the file descriptors the others
+// need; for a shared address it bounds the whole listener. Generous for a tenant's real use.
+const MaxConnections = 256
+
+// LimitListener accepts at most n connections at once; past that, Accept waits for one to close. It
+// bounds the file descriptors a listener (and, for a scope socket, a scope) can tie up.
+func LimitListener(l net.Listener, n int) net.Listener {
+	return &limitListener{Listener: l, sem: make(chan struct{}, n)}
+}
+
+type limitListener struct {
+	net.Listener
+	sem chan struct{}
+}
+
+func (l *limitListener) Accept() (net.Conn, error) {
+	l.sem <- struct{}{}
+
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		<-l.sem
+
+		return nil, err
+	}
+
+	return &limitConn{Conn: conn, release: func() { <-l.sem }}, nil
+}
+
+type limitConn struct {
+	net.Conn
+	release func()
+	once    sync.Once
+}
+
+func (c *limitConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.release)
+
+	return err
+}
+
 // umask is the process's: it's set only while a socket is made.
 var umask sync.Mutex
 
@@ -64,7 +111,7 @@ func Listen(path string, gid int) (net.Listener, error) {
 		return nil, err
 	}
 
-	return listener, nil
+	return LimitListener(listener, MaxConnections), nil
 }
 
 // Group is the ID of a listener's socket_group, or -1 when it has none (the process's own).

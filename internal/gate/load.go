@@ -14,18 +14,53 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 )
+
+// loadLimiter lets a scope load one image archive at a time. Reading an archive decompresses it,
+// which is CPU-bound and uncapped by the on-disk limit (a small archive can decompress to a huge
+// one): without this, a scope could run many loads at once and starve the others of CPU. One in
+// flight per scope leaves the others' loads (one each) running as before.
+type loadLimiter struct {
+	mu  sync.Mutex
+	sem map[string]chan struct{}
+}
+
+func newLoadLimiter() *loadLimiter {
+	return &loadLimiter{sem: map[string]chan struct{}{}}
+}
+
+// acquire blocks until the scope has no other load in flight, and returns a function that releases
+// the slot.
+func (l *loadLimiter) acquire(scope string) func() {
+	l.mu.Lock()
+	ch, ok := l.sem[scope]
+	if !ok {
+		ch = make(chan struct{}, 1)
+		l.sem[scope] = ch
+	}
+	l.mu.Unlock()
+
+	ch <- struct{}{}
+
+	return func() { <-ch }
+}
 
 // load checks an image archive before Docker loads it: the names it gives its images must be in the
 // scope's own namespaces, or loading it would replace what another scope (or anything else) runs
 // under that name. The archive is kept on disk while it's read, then forwarded from there.
 func (s *scoped) load() error {
+	release := s.loads.acquire(s.scope.Name)
+
 	file, err := os.CreateTemp("", "yorvogate-load-*")
 	if err != nil {
+		release()
+
 		return err
 	}
 
 	s.cleanup = func() {
+		release()
 		_ = file.Close()
 		_ = os.Remove(file.Name())
 	}

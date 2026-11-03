@@ -14,6 +14,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/yorvolabs/yorvogate/internal/config"
 	"github.com/yorvolabs/yorvogate/internal/route"
@@ -34,6 +35,7 @@ type Gate struct {
 	scopes   *scope.Store
 	docker   *Docker
 	upstream *Upstream
+	loads    *loadLimiter
 	log      *slog.Logger
 }
 
@@ -46,6 +48,7 @@ func New(c *config.Config, l config.Listener, upstream *Upstream, log *slog.Logg
 			g.scopes = scope.NewSocketStore(l.Scopes)
 		}
 		g.docker = NewDocker(c.UpstreamSocket())
+		g.loads = newLoadLimiter()
 	}
 
 	return g
@@ -145,7 +148,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			ctx: r.Context(), req: req, scope: s, policy: g.listener.Containers, docker: g.docker,
 			builderProfiles: g.listener.BuilderAppArmorProfiles, anyBuilder: g.listener.AllowPrivilegedBuilders,
 			path: r.URL.EscapedPath(), query: r.URL.Query(), upgrading: upgrading(r),
-			stream: r.Body, hasBody: r.ContentLength != 0, loadLimit: g.config.LoadLimit,
+			stream: r.Body, hasBody: r.ContentLength != 0, loadLimit: g.config.LoadLimit, loads: g.loads,
 		}
 		if req.Version != nil {
 			decision.version = req.Version.String()
@@ -233,6 +236,13 @@ func (g *Gate) readBody(r *http.Request, e *route.Endpoint) ([]byte, error) {
 	if e.Stream {
 		return nil, nil
 	}
+
+	// A body to check is small; a client that trickles one keeps a connection (and a file
+	// descriptor) for as long as it likes, which is how a scope can exhaust the gate for the others
+	// (slowloris). Reading has a deadline: closing the body unblocks a stuck read. Streams, which
+	// are large or long by design, are already returned above and keep no such deadline.
+	timer := time.AfterFunc(bodyReadTimeout, func() { _ = r.Body.Close() })
+	defer timer.Stop()
 
 	body, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, g.config.BodyLimit))
 	if err != nil {
