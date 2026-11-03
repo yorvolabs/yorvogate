@@ -135,7 +135,7 @@ func decode(body []byte, into any) error {
 // configuration that was checked, encoded anew.
 func (s *scoped) createContainer(body []byte) ([]byte, error) {
 	name := s.single("name")
-	if !s.scope.Names(name) {
+	if !s.scope.NamesContainer(name) {
 		return nil, refuse(http.StatusForbidden, "container.create: the name %q isn't one of scope %s's (%s)", name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
 	}
 

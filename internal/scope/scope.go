@@ -80,6 +80,10 @@ var (
 	validImage  = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,254}/$`)
 	validObject = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 	validAlias  = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+
+	// recreated is the name Compose gives a container it recreates, until it removes the old one
+	// and renames the new one to the old name: the first 12 hex of the old one's ID, _, its name.
+	recreated = regexp.MustCompile(`^[0-9a-f]{12}_(.+)$`)
 )
 
 // ErrUnknown is a scope with no file, or a token that doesn't match it.
@@ -447,6 +451,10 @@ func (s *Scope) check(tokenless bool) error {
 		if !validPrefix.MatchString(p) {
 			return fmt.Errorf("prefixes: %q must end with a separator (- _ or .) so no other name starts with it", p)
 		}
+
+		if recreated.MatchString(p + "x") {
+			return fmt.Errorf("prefixes: %q starts like the name Compose gives a container it recreates (12 hex and _)", p)
+		}
 	}
 
 	return nil
@@ -530,6 +538,19 @@ func (s *Scope) Names(name string) bool {
 	}
 
 	return true
+}
+
+// NamesContainer tells whether a new container's name is the scope's: one of its names, or the name
+// Compose gives a container it recreates (<12 hex>_<name>) when <name> is one of them. No prefix
+// starts like that, so the name is no other scope's.
+func (s *Scope) NamesContainer(name string) bool {
+	if s.Names(name) {
+		return true
+	}
+
+	m := recreated.FindStringSubmatch(name)
+
+	return m != nil && s.Names(m[1])
 }
 
 // longest is the length of the longest of the prefixes a name starts with (and goes beyond), or 0.
