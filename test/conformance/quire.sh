@@ -192,6 +192,18 @@ works "jane-blog: compose up" as jane-blog docker compose -p ygq-jane-blog -f "$
 if [ "$(as jane docker ps --format '{{.Names}}')" = ygq-jane-web-1 ]; then ok "jane sees only its own"; else ko "jane's ps" "$(as jane docker ps --format '{{.Names}}')"; fi
 if [ "$(as jane-blog docker ps --format '{{.Names}}')" = ygq-jane-blog-app-1 ]; then ok "jane-blog sees only its own"; else ko "jane-blog's ps" "$(as jane-blog docker ps --format '{{.Names}}')"; fi
 refused "jane: jane-blog's container" "No such container" as jane docker container inspect ygq-jane-blog-app-1
+# A changed service is recreated: Compose creates <12 hex of the old ID>_<name>, removes the old one,
+# and renames the new one to the old name.
+before="$(as jane-blog docker container inspect -f '{{.Id}}' ygq-jane-blog-app-1)"
+printf '    environment: [RELEASE=2]\n' >> "$blog"
+works "jane-blog: compose up (recreate)" as jane-blog docker compose -p ygq-jane-blog -f "$blog" up -d
+after="$(as jane-blog docker container inspect -f '{{.Id}} {{.Name}} {{range .Config.Env}}{{.}} {{end}}' ygq-jane-blog-app-1)"
+case "$after" in
+"$before "*) ko "jane-blog: recreated" "still the old container" ;;
+*" /ygq-jane-blog-app-1 "*"RELEASE=2 "*) ok "jane-blog: recreated under its name" ;;
+*) ko "jane-blog: recreated" "$after" ;;
+esac
+if [ "$(as jane-blog docker ps -a --format '{{.Names}}')" = ygq-jane-blog-app-1 ]; then ok "jane-blog: one container after the recreate"; else ko "jane-blog's ps -a" "$(as jane-blog docker ps -a --format '{{.Names}}')"; fi
 refused "jane: a name of jane-blog's" "isn't one of scope jane's" as jane docker compose -p ygq-jane-blog -f "$blog" up -d
 works "jane-blog: compose down" as jane-blog docker compose -p ygq-jane-blog -f "$blog" down --remove-orphans --volumes
 

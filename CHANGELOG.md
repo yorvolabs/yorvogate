@@ -8,6 +8,10 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 - **[An AI agent's Docker socket](docs/agents.md):** why the Docker socket is root on the host, and how to give an agent a scope socket instead, in a container or on the host. Its setup runs in the conformance suite.
 
+### Fixed
+
+- **Compose recreates a scope's containers.** A container may be created with the name Compose gives one it recreates (a changed service: `up`, deploys, rollbacks), 12 hex and `_` before one of the scope's names; 0.2.0 refused it. A prefix may no longer start with 12 hex and `_`. The Quire conformance recreates a service of a nested site.
+
 ## [0.2.0] - 2026-11-02
 
 Security fixes: update from 0.1.0. A scope file's `containers` is refused; see [migrating from 0.1.0](https://github.com/yorvolabs/yorvogate/blob/v0.2.0/docs/configuration.md#migrating-from-010).

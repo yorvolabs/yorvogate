@@ -136,7 +136,7 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 
 - `token_sha256`: the SHA-256 of the scope's token, 64 lowercase hex digits. The client sends the token itself. Optional where each scope has its own socket ([scope sockets](#scope-sockets)).
 - `owner`: the label (and its value) that marks the scope's objects. For Compose projects, `com.docker.compose.project` and the project's name. An object is a scope's by this label only, never by its name. What a scope creates must carry it, and no other scope's owner label; a volume a container's mount creates gets it from YorvoGate.
-- `prefixes`: what the names of the containers, networks and volumes it creates start with. Each ends with `-`, `_` or `.`, so `jane-` never matches `janet-…`.
+- `prefixes`: what the names of the containers, networks and volumes it creates start with. Each ends with `-`, `_` or `.`, so `jane-` never matches `janet-…`. A container may also take the name Compose gives one it recreates, 12 hex and `_` before one of the scope's names (`f5dba3e4fa27_jane-php-1`), so no prefix may start with 12 hex and `_`.
 - `images` (optional): its own image namespaces, as prefixes ending with `/`: it may use images there even where the listener protects them.
 
 Scopes' names may nest, as Compose projects' do (sites `jane` and `jane-blog`): a name belongs to the scope with the **longest** prefix it starts with. While scope `jane-blog` exists, `jane` can't create `jane-blog-php-1` or `jane-blog_default`; image namespaces work the same way. Two scopes may not share an owner label, a prefix or an image namespace: the scope that came later is refused (its requests fail), and `yorvogate check` names both.

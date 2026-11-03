@@ -99,24 +99,25 @@ func TestChangesNeedNoRestart(t *testing.T) {
 
 func TestScopeFilesAreChecked(t *testing.T) {
 	cases := map[string]string{
-		"an unknown key":         strings.Replace(jane(), `"prefixes"`, `"privileged": true, "prefixes"`, 1),
-		"two objects":            jane() + jane(),
-		"a token in clear":       strings.Replace(jane(), digest(token), token, 1),
-		"an uppercase digest":    strings.Replace(jane(), digest(token), strings.ToUpper(digest(token)), 1),
-		"no owner label":         strings.Replace(jane(), `"com.docker.compose.project"`, `""`, 1),
-		"an owner value of any":  strings.Replace(jane(), `"value": "jane"`, `"value": "*"`, 1),
-		"no prefixes":            strings.Replace(jane(), `["jane-", "jane_"]`, `[]`, 1),
-		"a prefix of any name":   strings.Replace(jane(), `"jane-"`, `"jane"`, 1),
-		"an empty prefix":        strings.Replace(jane(), `"jane-"`, `""`, 1),
-		"an image not a prefix":  strings.Replace(jane(), `"prefixes"`, `"images": ["quire-sites/jane"], "prefixes"`, 1),
-		"a container pattern":    strings.Replace(jane(), `"prefixes"`, `"containers": ["*"], "prefixes"`, 1),
-		"a network pattern":      strings.Replace(jane(), `"prefixes"`, `"networks": {"quire-*": {}}, "prefixes"`, 1),
-		"an alias with a space":  strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"aliases": ["a b"]}}, "prefixes"`, 1),
-		"an address of a range":  strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"addresses": ["10.0.0.0/8"]}}, "prefixes"`, 1),
-		"an address unshortened": strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"addresses": ["2001:db8:0:0::1"]}}, "prefixes"`, 1),
-		"a network key unknown":  strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"mac": "x"}}, "prefixes"`, 1),
-		"a subnet not a network": strings.Replace(jane(), `"prefixes"`, `"subnets": ["10.213.0.33/27"], "prefixes"`, 1),
-		"an address as a subnet": strings.Replace(jane(), `"prefixes"`, `"subnets": ["10.213.0.32"], "prefixes"`, 1),
+		"an unknown key":          strings.Replace(jane(), `"prefixes"`, `"privileged": true, "prefixes"`, 1),
+		"two objects":             jane() + jane(),
+		"a token in clear":        strings.Replace(jane(), digest(token), token, 1),
+		"an uppercase digest":     strings.Replace(jane(), digest(token), strings.ToUpper(digest(token)), 1),
+		"no owner label":          strings.Replace(jane(), `"com.docker.compose.project"`, `""`, 1),
+		"an owner value of any":   strings.Replace(jane(), `"value": "jane"`, `"value": "*"`, 1),
+		"no prefixes":             strings.Replace(jane(), `["jane-", "jane_"]`, `[]`, 1),
+		"a prefix of any name":    strings.Replace(jane(), `"jane-"`, `"jane"`, 1),
+		"an empty prefix":         strings.Replace(jane(), `"jane-"`, `""`, 1),
+		"a recreated name prefix": strings.Replace(jane(), `"jane-"`, `"0123456789ab_"`, 1),
+		"an image not a prefix":   strings.Replace(jane(), `"prefixes"`, `"images": ["quire-sites/jane"], "prefixes"`, 1),
+		"a container pattern":     strings.Replace(jane(), `"prefixes"`, `"containers": ["*"], "prefixes"`, 1),
+		"a network pattern":       strings.Replace(jane(), `"prefixes"`, `"networks": {"quire-*": {}}, "prefixes"`, 1),
+		"an alias with a space":   strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"aliases": ["a b"]}}, "prefixes"`, 1),
+		"an address of a range":   strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"addresses": ["10.0.0.0/8"]}}, "prefixes"`, 1),
+		"an address unshortened":  strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"addresses": ["2001:db8:0:0::1"]}}, "prefixes"`, 1),
+		"a network key unknown":   strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"mac": "x"}}, "prefixes"`, 1),
+		"a subnet not a network":  strings.Replace(jane(), `"prefixes"`, `"subnets": ["10.213.0.33/27"], "prefixes"`, 1),
+		"an address as a subnet":  strings.Replace(jane(), `"prefixes"`, `"subnets": ["10.213.0.32"], "prefixes"`, 1),
 	}
 
 	for name, content := range cases {
@@ -247,6 +248,22 @@ func TestANameIsTheLongestPrefixs(t *testing.T) {
 
 	if !jane.Names("jane-php-1") || !jane.Names("jane-blogger-1") || blog.Names("jane-php-1") {
 		t.Error("jane's own names")
+	}
+
+	// The name Compose gives a container it recreates is the scope's whose name follows the 12 hex,
+	// and only a container's.
+	for name, want := range map[string][2]bool{
+		"f5dba3e4fa27_jane-blog-php-1": {false, true},
+		"f5dba3e4fa27_jane-php-1":      {true, false},
+		"f5dba3e4fa27_other-php-1":     {false, false},
+		"f5dba3e4fa2_jane-php-1":       {false, false},
+		"F5DBA3E4FA27_jane-php-1":      {false, false},
+		"f5dba3e4fa27-jane-php-1":      {false, false},
+		"f5dba3e4fa27_":                {false, false},
+	} {
+		if jane.NamesContainer(name) != want[0] || blog.NamesContainer(name) != want[1] || jane.Names(name) || blog.Names(name) {
+			t.Errorf("%s: jane %v, jane-blog %v", name, jane.NamesContainer(name), blog.NamesContainer(name))
+		}
 	}
 
 	if jane.OwnsImage("quire-sites/jane/blog/php:1") || !blog.OwnsImage("quire-sites/jane/blog/php:1") || !jane.OwnsImage("quire-sites/jane/php:1") {
