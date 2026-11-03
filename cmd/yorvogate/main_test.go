@@ -62,6 +62,22 @@ func TestCheckRefusesCrossListenerCollision(t *testing.T) {
 	}
 }
 
+func TestCheckAllowsSameScopesOnTwoListeners(t *testing.T) {
+	dir := t.TempDir()
+	scopes := filepath.Join(dir, "scopes")
+	_ = os.Mkdir(scopes, 0o700)
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	// One scopes folder served by two listeners (a token one and a socket one): the same scope on
+	// both, which is allowed — a client is that one scope either way.
+	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: tenants, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n  - {name: sockets, scope_sockets: "+filepath.Join(dir, "sock")+", socket_group: '0', mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
+
+	var out, errs bytes.Buffer
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 {
+		t.Fatalf("the same scope on two listeners should be allowed: %d %q %q", code, out.String(), errs.String())
+	}
+}
+
 func TestCheckWarnsOnDangerousConfig(t *testing.T) {
 	dir := t.TempDir()
 	scopes := filepath.Join(dir, "scopes")

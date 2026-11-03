@@ -114,8 +114,11 @@ func crossListener(c *config.Config) error {
 			}
 
 			claimed := func(m map[string]claim, key, kind string) error {
-				if other, ok := m[key]; ok && other.listener != l.Name {
-					return fmt.Errorf("%s %q is scope %s's on listener %s and scope %s's on listener %s: scopes on listeners of one Docker may not share it", kind, key, other.scope, other.listener, name, l.Name)
+				// A different scope claiming the same key is the conflict (one scope could reach the
+				// other's objects). The same scope on two listeners (often one scopes folder served
+				// both by token and by socket) is fine: a client is that one scope either way.
+				if other, ok := m[key]; ok && other.scope != name {
+					return fmt.Errorf("%s %q is scope %s's on listener %s and scope %s's on listener %s: two scopes on listeners of one Docker may not share it", kind, key, other.scope, other.listener, name, l.Name)
 				}
 
 				m[key] = claim{l.Name, name}
