@@ -81,6 +81,75 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
+// crossListener refuses an owner label, prefix, image namespace or builder that scopes on two
+// different scoped listeners share. Within one listener the store refuses the later of two scopes
+// that collide, but the listeners share one Docker, so a label or name claimed on two listeners
+// lets one listener's scope reach the other's objects. Startup-time: the scope folders are
+// re-read, so a collision introduced later is caught by `yorvogate check` or the next start.
+func crossListener(c *config.Config) error {
+	type claim struct{ listener, scope string }
+	owners, prefixes, images, builders := map[string]claim{}, map[string]claim{}, map[string]claim{}, map[string]claim{}
+
+	for _, l := range c.Listeners {
+		if l.Mode != config.Scoped {
+			continue
+		}
+
+		store := scope.NewStore(l.Scopes)
+		if l.SocketBound() {
+			store = scope.NewSocketStore(l.Scopes)
+		}
+
+		files, err := filepath.Glob(filepath.Join(l.Scopes, "*.json"))
+		if err != nil {
+			return err
+		}
+
+		for _, f := range files {
+			name := strings.TrimSuffix(filepath.Base(f), ".json")
+
+			sc, err := store.Get(name)
+			if err != nil {
+				continue // invalid, or a within-listener conflict the store already refuses
+			}
+
+			claimed := func(m map[string]claim, key, kind string) error {
+				if other, ok := m[key]; ok && other.listener != l.Name {
+					return fmt.Errorf("%s %q is scope %s's on listener %s and scope %s's on listener %s: scopes on listeners of one Docker may not share it", kind, key, other.scope, other.listener, name, l.Name)
+				}
+
+				m[key] = claim{l.Name, name}
+
+				return nil
+			}
+
+			if err := claimed(owners, sc.Owner.Key+"="+sc.Owner.Value, "owner label"); err != nil {
+				return err
+			}
+
+			for _, p := range sc.Prefixes {
+				if err := claimed(prefixes, p, "prefix"); err != nil {
+					return err
+				}
+			}
+
+			for _, i := range sc.Images {
+				if err := claimed(images, i, "image namespace"); err != nil {
+					return err
+				}
+			}
+
+			for _, b := range sc.Builders {
+				if err := claimed(builders, b, "builder"); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 // check reads the configuration, and every scope file of its scoped listeners.
 func check(path string, stdout io.Writer) error {
 	c, err := config.Load(path)
@@ -114,6 +183,10 @@ func check(path string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "%s (%s, %s): ok, %d scopes\n", l.Name, l.Mode, address, len(files))
 	}
 
+	if err := crossListener(c); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -125,6 +198,10 @@ var scanInterval = 2 * time.Second
 func serve(ctx context.Context, path string, log *slog.Logger) error {
 	c, err := config.Load(path)
 	if err != nil {
+		return err
+	}
+
+	if err := crossListener(c); err != nil {
 		return err
 	}
 
