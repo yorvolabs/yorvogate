@@ -4,6 +4,25 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-03
+
+Hardening from a security audit of 0.2.1, and a fix for rootless builders on CIS-hardened daemons. Check your configuration with `yorvogate check` before you update: two scoped listeners on one Docker may no longer share an owner label, prefix, image namespace or builder.
+
+### Changed
+
+- **Breaking: two scoped listeners on one Docker may not share an owner label, prefix, image namespace or builder.** Within one listener this was already refused; now it's refused across scoped listeners too, because a value claimed on two listeners lets one listener's scope reach the other's objects. `yorvogate check` reports the collision (naming both listeners and both scopes) and exits non-zero; `serve` refuses the colliding scope. The same scope served on two listeners (a token and a socket over one scope folder) is still fine. The only configurations this breaks are ones that were already cross-scope-leaky.
+- **`yorvogate check` warns on valid but dangerous listener settings:** a scoped TCP listener on a non-loopback address (scope tokens in cleartext, as there's no TLS), a trusted write listener on a non-loopback address, a unix-socket listener with no `socket_group`, and `allow_privileged_builders`.
+
+### Security
+
+- **A mount could reach the host filesystem through an owned volume's driver (Medium; High in an orchestrator deployment).** A volume was checked for driver options when it was created, but `container.create` and the builder path trusted an already-owned volume by its labels alone when it was mounted. A volume owned by the scope but backed by a bind, `device` or other non-`local` driver could therefore mount a host path. Now a volume's driver and options are re-checked where it is mounted: only a plain `local` volume with no such options may be mounted.
+- **One scope could wedge the gate for every tenant (High).** A slow or stalled request body held a connection open with no deadline, and nothing capped concurrent connections, so one scope could exhaust the gate's file descriptors or hang it (slowloris). Now a non-stream request body has a read deadline (real streams — exec, build, load — stay exempt), and each listener caps its concurrent connections.
+- **An image load could starve co-tenants' CPU (Medium).** `image.load` had no per-scope concurrency limit, so several decompression-heavy archives at once could saturate CPU for co-tenants. Now a scope loads one image archive at a time.
+
+### Fixed
+
+- **A rootless builder on a CIS-hardened daemon.** When the daemon defaults to `no-new-privileges`, rootless BuildKit needs the `no-new-privileges=false` security option to map users; 0.2.1 refused it, so no builder could run on the hardened hosts YorvoGate targets. A scope's builder may now opt out of `no-new-privileges`; the inert bare/`=true` form is dropped from the allowlist.
+
 ## [0.2.1] - 2026-11-03
 
 Compose can recreate a scope's containers (a changed service), which 0.2.0 refused. Check your scope files with `yorvogate check` before you update: a prefix that starts with 12 hex and `_` is now refused.
@@ -67,7 +86,8 @@ The first release.
 - **Every decision logged** as JSON; every refusal a Docker-style error that says why.
 - **Releases:** an image for x86_64 and arm64 (static, on distroless, as a user without privileges), signed with Sigstore, with its SBOM and build provenance; reproducible binaries with signed checksums.
 
-[Unreleased]: https://github.com/yorvolabs/yorvogate/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/yorvolabs/yorvogate/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/yorvolabs/yorvogate/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/yorvolabs/yorvogate/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/yorvolabs/yorvogate/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/yorvolabs/yorvogate/releases/tag/v0.1.0
