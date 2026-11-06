@@ -100,8 +100,12 @@ docker compose -f compose.dev.yaml run --rm go make build && test/conformance/ru
 
 ## Security
 
-YorvoGate is security software: please report vulnerabilities privately, as [SECURITY.md](SECURITY.md) says.
+YorvoGate is security software: please report vulnerabilities privately, as [SECURITY.md](SECURITY.md) says, or by email to [security@yorvolabs.com](mailto:security@yorvolabs.com).
+
+## Contact
+
+Questions and anything else: [contact@yorvolabs.com](mailto:contact@yorvolabs.com).
 
 ## License
 
-Apache License 2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+Apache License 2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE). Licensing questions: [legal@poposki.mk](mailto:legal@poposki.mk).

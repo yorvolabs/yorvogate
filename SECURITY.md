@@ -18,6 +18,8 @@ Report them privately through GitHub instead:
 
 Only the maintainers can see your report.
 
+If you can't use GitHub, email [security@yorvolabs.com](mailto:security@yorvolabs.com) with the same details instead.
+
 ## What happens next
 
 - We acknowledge your report within **3 working days**.
