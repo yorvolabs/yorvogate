@@ -28,6 +28,7 @@ LABEL org.opencontainers.image.title="YorvoGate" \
       org.opencontainers.image.source="https://github.com/yorvolabs/yorvogate" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.vendor="YorvoLabs" \
+      org.opencontainers.image.authors="YorvoLabs <contact@yorvolabs.com>" \
       org.opencontainers.image.version="${VERSION}"
 
 COPY --from=build /yorvogate /usr/local/bin/yorvogate

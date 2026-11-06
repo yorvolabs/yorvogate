@@ -36,7 +36,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement through GitHub: on the issue, pull request or comment concerned, open the **···** menu, choose **Report content**, then **Report to repository admins**. Only the maintainers see these reports. For behavior that also breaks GitHub's own rules, you can report it to GitHub as well.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement through GitHub: on the issue, pull request or comment concerned, open the **···** menu, choose **Report content**, then **Report to repository admins**. Only the maintainers see these reports. You can also email [contact@yorvolabs.com](mailto:contact@yorvolabs.com). For behavior that also breaks GitHub's own rules, you can report it to GitHub as well.
 
 All complaints will be reviewed and investigated promptly and fairly.
 
