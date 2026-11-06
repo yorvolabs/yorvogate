@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/moby/moby/api v1.56.1
-	go.yaml.in/yaml/v3 v3.0.5
+	go.yaml.in/yaml/v3 v3.0.6
 )
 
 require (
