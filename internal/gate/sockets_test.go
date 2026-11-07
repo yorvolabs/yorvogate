@@ -52,18 +52,27 @@ func boundGate(t *testing.T, d *docker, group string) (*Sockets, string, string)
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	s, err := NewSockets(New(c, c.Listeners[0], NewUpstream(c.UpstreamSocket(), log), log), log)
+	s, err := NewSockets(New(c, c.Listeners[0], NewUpstream(c.UpstreamSocket(), log), Registry(c), log), log)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	t.Cleanup(func() { s.Shutdown(context.Background()) })
 
-	if err := s.Scan(); err != nil {
+	if err := rescan(s); err != nil {
 		t.Fatal(err)
 	}
 
 	return s, scopes, sockets
+}
+
+// rescan reloads the scope files and brings the sockets in line, as serve's scan does.
+func rescan(s *Sockets) error {
+	if err := s.gate.registry.Reload(); err != nil {
+		return err
+	}
+
+	return s.Scan()
 }
 
 func writeScope(t *testing.T, dir, name, content string) {
@@ -124,7 +133,7 @@ func TestASocketPerScope(t *testing.T) {
 	writeScope(t, scopes, "ci", `{"owner": {"label": "example.ci.job", "value": "7"}, "prefixes": ["ci-"]}`)
 	_ = os.Remove(filepath.Join(scopes, "blog.json"))
 
-	if err := s.Scan(); err != nil {
+	if err := rescan(s); err != nil {
 		t.Fatal(err)
 	}
 
@@ -138,7 +147,7 @@ func TestASocketPerScope(t *testing.T) {
 
 	// A scan that changes nothing keeps the sockets (and their connections) as they are.
 	before, _ := os.Stat(filepath.Join(dir, "jane.sock"))
-	if err := s.Scan(); err != nil {
+	if err := rescan(s); err != nil {
 		t.Fatal(err)
 	}
 
@@ -225,7 +234,7 @@ func TestAnInvalidScopeClosesItsSocket(t *testing.T) {
 	// jane's file loses its prefixes: it's no longer valid.
 	writeScope(t, scopes, "jane", strings.Replace(tokenlessJane, `["jane-", "jane_"]`, `[]`, 1))
 
-	if err := s.Scan(); err != nil {
+	if err := rescan(s); err != nil {
 		t.Fatal(err)
 	}
 
@@ -241,7 +250,7 @@ func TestAnInvalidScopeClosesItsSocket(t *testing.T) {
 	// Valid again: its socket comes back.
 	writeScope(t, scopes, "jane", tokenlessJane)
 
-	if err := s.Scan(); err != nil {
+	if err := rescan(s); err != nil {
 		t.Fatal(err)
 	}
 
@@ -287,7 +296,7 @@ func TestASocketsPermissions(t *testing.T) {
 	writeScope(t, scopes, "ci", `{"owner": {"label": "example.ci.job", "value": "7"}, "prefixes": ["ci-"]}`)
 	writeScope(t, scopes, "web", `{"owner": {"label": "example.web", "value": "1"}, "prefixes": ["web-"]}`)
 
-	if err := s.Scan(); err == nil || !strings.Contains(err.Error(), "scope web's socket") || strings.Contains(err.Error(), "scope ci's") {
+	if err := rescan(s); err == nil || !strings.Contains(err.Error(), "scope web's socket") || strings.Contains(err.Error(), "scope ci's") {
 		t.Errorf("a scan with web.sock taken: %v", err)
 	}
 
@@ -300,7 +309,7 @@ func TestASocketsPermissions(t *testing.T) {
 	}
 
 	_ = os.Remove(filepath.Join(dir, "web.sock"))
-	if err := s.Scan(); err != nil {
+	if err := rescan(s); err != nil {
 		t.Errorf("tried again: %v", err)
 	}
 

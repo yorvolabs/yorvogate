@@ -12,11 +12,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -81,78 +82,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 2
 }
 
-// crossListener refuses an owner label, prefix, image namespace or builder that scopes on two
-// different scoped listeners share. Within one listener the store refuses the later of two scopes
-// that collide, but the listeners share one Docker, so a label or name claimed on two listeners
-// lets one listener's scope reach the other's objects. Startup-time: the scope folders are
-// re-read, so a collision introduced later is caught by `yorvogate check` or the next start.
-func crossListener(c *config.Config) error {
-	type claim struct{ listener, scope string }
-	owners, prefixes, images, builders := map[string]claim{}, map[string]claim{}, map[string]claim{}, map[string]claim{}
-
-	for _, l := range c.Listeners {
-		if l.Mode != config.Scoped {
-			continue
-		}
-
-		store := scope.NewStore(l.Scopes)
-		if l.SocketBound() {
-			store = scope.NewSocketStore(l.Scopes)
-		}
-
-		files, err := filepath.Glob(filepath.Join(l.Scopes, "*.json"))
-		if err != nil {
-			return err
-		}
-
-		for _, f := range files {
-			name := strings.TrimSuffix(filepath.Base(f), ".json")
-
-			sc, err := store.Get(name)
-			if err != nil {
-				continue // invalid, or a within-listener conflict the store already refuses
-			}
-
-			claimed := func(m map[string]claim, key, kind string) error {
-				// A different scope claiming the same key is the conflict (one scope could reach the
-				// other's objects). The same scope on two listeners (often one scopes folder served
-				// both by token and by socket) is fine: a client is that one scope either way.
-				if other, ok := m[key]; ok && other.scope != name {
-					return fmt.Errorf("%s %q is scope %s's on listener %s and scope %s's on listener %s: two scopes on listeners of one Docker may not share it", kind, key, other.scope, other.listener, name, l.Name)
-				}
-
-				m[key] = claim{l.Name, name}
-
-				return nil
-			}
-
-			if err := claimed(owners, sc.Owner.Key+"="+sc.Owner.Value, "owner label"); err != nil {
-				return err
-			}
-
-			for _, p := range sc.Prefixes {
-				if err := claimed(prefixes, p, "prefix"); err != nil {
-					return err
-				}
-			}
-
-			for _, i := range sc.Images {
-				if err := claimed(images, i, "image namespace"); err != nil {
-					return err
-				}
-			}
-
-			for _, b := range sc.Builders {
-				if err := claimed(builders, b, "builder"); err != nil {
-					return err
-				}
-			}
-		}
-	}
-
-	return nil
-}
-
 // listenerWarnings names a listener's choices that are valid but dangerous, so `check` can point
 // them out (it doesn't refuse them: an operator may mean them).
 func listenerWarnings(l config.Listener) []string {
@@ -191,12 +120,23 @@ func listenerWarnings(l config.Listener) []string {
 	return w
 }
 
-// check reads the configuration, and every scope file of its scoped listeners.
+// check reads the configuration, and every scope file of its scoped listeners, as a gate starting
+// now would (it reads the state file, and never writes it). It names every scope file refused.
 func check(path string, stdout io.Writer) error {
 	c, err := config.Load(path)
 	if err != nil {
 		return err
 	}
+
+	registry := gate.Registry(c).ReadOnly()
+	if err := registry.Reload(); err != nil {
+		return err
+	}
+
+	var refused []string
+
+	seen := map[string]bool{}
+	scoped := false
 
 	for _, l := range c.Listeners {
 		if l.Mode != config.Scoped {
@@ -208,33 +148,70 @@ func check(path string, stdout io.Writer) error {
 			continue
 		}
 
-		files, err := filepath.Glob(filepath.Join(l.Scopes, "*.json"))
+		scoped = true
+
+		names, invalid, err := registry.Store(l.Name).Scopes()
 		if err != nil {
 			return err
 		}
 
-		store, address := scope.NewStore(l.Scopes), l.Address
+		address := l.Address
 		if l.SocketBound() {
-			store, address = scope.NewSocketStore(l.Scopes), "scope_sockets "+l.ScopeSockets
+			address = "scope_sockets " + l.ScopeSockets
 		}
 
-		for _, f := range files {
-			if _, err := store.Get(strings.TrimSuffix(filepath.Base(f), ".json")); err != nil {
-				return err
-			}
+		if len(invalid) == 0 {
+			fmt.Fprintf(stdout, "%s (%s, %s): ok, %d scopes\n", l.Name, l.Mode, address, len(names))
+		} else {
+			fmt.Fprintf(stdout, "%s (%s, %s): %d scopes, %d refused\n", l.Name, l.Mode, address, len(names), len(invalid))
 		}
 
-		fmt.Fprintf(stdout, "%s (%s, %s): ok, %d scopes\n", l.Name, l.Mode, address, len(files))
 		for _, warn := range listenerWarnings(l) {
 			fmt.Fprintf(stdout, "  warning: %s\n", warn)
 		}
+
+		for _, name := range slices.Sorted(maps.Keys(invalid)) {
+			if msg := invalid[name].Error(); !seen[msg] {
+				seen[msg] = true
+				refused = append(refused, msg)
+			}
+		}
 	}
 
-	if err := crossListener(c); err != nil {
-		return err
+	for _, warn := range stateWarnings(c, registry, scoped) {
+		fmt.Fprintf(stdout, "warning: %s\n", warn)
+	}
+
+	if len(refused) == 1 {
+		return errors.New(refused[0])
+	} else if len(refused) > 1 {
+		return fmt.Errorf("%d scope files refused:\n  %s", len(refused), strings.Join(refused, "\n  "))
 	}
 
 	return nil
+}
+
+// stateWarnings tells what isn't held across a restart.
+func stateWarnings(c *config.Config, registry *scope.Registry, scoped bool) []string {
+	var w []string
+
+	if scoped && c.StateFile == "" {
+		w = append(w, "no state_file: scopes' claims are held only while the gate runs, so a scope file that isn't valid when it starts leaves its names to a scope whose prefix they start with")
+	}
+
+	if err := registry.StateProblem(); err != nil {
+		w = append(w, err.Error())
+	}
+
+	for _, dir := range registry.Missing() {
+		w = append(w, "the scopes folder "+dir+" doesn't exist: no scopes there yet, and every claim the state file holds stays reserved until it does and the gate restarts")
+	}
+
+	for _, name := range registry.Reserved() {
+		w = append(w, "scope "+name+"'s file isn't valid: its last valid claims are held for it, and no other scope gets them")
+	}
+
+	return w
 }
 
 // scanInterval is how often socket-bound listeners look for scope files that came, changed or went
@@ -248,9 +225,17 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		return err
 	}
 
-	if err := crossListener(c); err != nil {
+	registry := gate.Registry(c)
+	if err := registry.Reload(); err != nil {
 		return err
 	}
+
+	for _, warn := range stateWarnings(c, registry, false) {
+		log.Warn("scopes", "warning", warn)
+	}
+
+	reported := map[string]string{}
+	report(c, registry, reported, log)
 
 	// SIGHUP rescans the scope folders; it's taken before any socket is made, so it never stops the
 	// process.
@@ -278,7 +263,7 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	defer stop()
 
 	for _, l := range c.Listeners {
-		g := gate.New(c, l, upstream, log)
+		g := gate.New(c, l, upstream, registry, log)
 
 		if l.SocketBound() {
 			sockets, err := gate.NewSockets(g, log)
@@ -326,9 +311,9 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		case err := <-failed:
 			return err
 		case <-hup:
-			scan(bound, log)
+			scan(registry, bound, reported, c, log)
 		case <-ticker.C:
-			scan(bound, log)
+			scan(registry, bound, reported, c, log)
 		}
 
 		for _, s := range bound {
@@ -341,14 +326,61 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	}
 }
 
-// scan brings each socket-bound listener's sockets in line with its scope files. What fails is
-// logged and tried again at the next scan: one scope's socket doesn't stop the others'.
-func scan(bound []*gate.Sockets, log *slog.Logger) {
+// scan reloads the scope files, and brings each socket-bound listener's sockets in line with them.
+// What fails is logged and tried again at the next scan: one scope's socket doesn't stop the others'.
+func scan(registry *scope.Registry, bound []*gate.Sockets, reported map[string]string, c *config.Config, log *slog.Logger) {
+	if err := registry.Reload(); err != nil {
+		log.Error("scope files", "error", err)
+	}
+
+	report(c, registry, reported, log)
+
 	for _, s := range bound {
 		if err := s.Scan(); err != nil {
 			log.Error("scope sockets", "error", err)
 		}
 	}
+}
+
+// report logs, once each, what the last reload refused on token listeners (socket-bound listeners
+// log theirs as they close the sockets) and what isn't held across a restart.
+func report(c *config.Config, registry *scope.Registry, reported map[string]string, log *slog.Logger) {
+	now := map[string]string{}
+
+	for _, l := range c.Listeners {
+		if l.Mode != config.Scoped || l.SocketBound() {
+			continue
+		}
+
+		_, invalid, err := registry.Store(l.Name).Scopes()
+		if err != nil {
+			continue
+		}
+
+		for name, why := range invalid {
+			now[l.Name+"/"+name] = why.Error()
+		}
+	}
+
+	if err := registry.StateProblem(); err != nil {
+		now["state"] = err.Error()
+	}
+
+	for key, why := range now {
+		if reported[key] == why {
+			continue
+		}
+
+		if key == "state" {
+			log.Error("state file", "reason", why)
+		} else {
+			listener, name, _ := strings.Cut(key, "/")
+			log.Warn("scope file isn't valid", "listener", listener, "scope", name, "reason", why)
+		}
+	}
+
+	clear(reported)
+	maps.Copy(reported, now)
 }
 
 // listen opens a listener's address; a unix socket is made readable and writable by its group only.

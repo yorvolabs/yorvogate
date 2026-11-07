@@ -52,13 +52,45 @@ func TestCheckRefusesCrossListenerCollision(t *testing.T) {
 	configFile := filepath.Join(dir, "yorvogate.yaml")
 	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: one, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+a+"}\n  - {name: two, address: 'tcp://127.0.0.1:2377', mode: scoped, scopes: "+b+"}\n"), 0o600)
 	// Two scopes on two listeners that share the owner label "shared": each passes its own folder,
-	// but one listener's scope could then reach the other's objects.
+	// but one listener's scope could then reach the other's objects. Neither held it: both are
+	// refused, and check names both.
 	_ = os.WriteFile(filepath.Join(a, "alpha.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "shared"}, "prefixes": ["alpha-"]}`), 0o600)
 	_ = os.WriteFile(filepath.Join(b, "beta.json"), []byte(`{"token_sha256": "`+strings.Repeat("b", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "shared"}, "prefixes": ["beta-"]}`), 0o600)
 
 	var out, errs bytes.Buffer
-	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 1 || !strings.Contains(errs.String(), "owner label") {
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 1 || !strings.Contains(errs.String(), "owner: com.docker.compose.project=shared") || !strings.Contains(errs.String(), "alpha.json") || !strings.Contains(errs.String(), "beta.json") {
 		t.Fatalf("a cross-listener owner-label collision: %d %q %q", code, out.String(), errs.String())
+	}
+}
+
+// Nested scopes on two listeners pass check, resolved as in one folder; a nested file that isn't
+// valid is named, and with a state file its claims are held.
+func TestCheckNestedScopesOnTwoListeners(t *testing.T) {
+	dir := t.TempDir()
+	a, b := filepath.Join(dir, "a"), filepath.Join(dir, "b")
+	_ = os.Mkdir(a, 0o700)
+	_ = os.Mkdir(b, 0o700)
+	state := filepath.Join(dir, "state.json")
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nstate_file: "+state+"\nlisteners:\n  - {name: one, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+a+"}\n  - {name: two, address: 'tcp://127.0.0.1:2377', mode: scoped, scopes: "+b+"}\n"), 0o600)
+	_ = os.WriteFile(filepath.Join(a, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
+	_ = os.WriteFile(filepath.Join(b, "jane-blog.json"), []byte(`{"token_sha256": "`+strings.Repeat("b", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane-blog"}, "prefixes": ["jane-blog-"]}`), 0o600)
+
+	var out, errs bytes.Buffer
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 || strings.Contains(out.String(), "state_file") {
+		t.Fatalf("nested on two listeners: %d %q %q", code, out.String(), errs.String())
+	}
+
+	// check never writes the state file
+	if _, err := os.Stat(state); err == nil {
+		t.Error("check wrote the state file")
+	}
+
+	_ = os.WriteFile(filepath.Join(b, "jane-blog.json"), []byte(`{"token_sha256": `), 0o600)
+	out.Reset()
+
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 1 || !strings.Contains(errs.String(), "jane-blog.json") {
+		t.Fatalf("a half-written nested file: %d %q", code, errs.String())
 	}
 }
 

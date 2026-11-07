@@ -83,6 +83,13 @@ for scope in jane blog; do
 	chmod 600 "$dir/scopes/$scope.json"
 done
 
+# jane-blog, nested in jane's names and image namespace, on a listener of its own: its names and
+# images are its own, not jane's, whichever listener each is on.
+mkdir -p "$dir/nested"
+nested='{"token_sha256":"'"$(head -c 32 /dev/urandom | sha256sum | cut -d' ' -f1)"'","owner":{"label":"com.docker.compose.project","value":"ygc-jane-blog"},"prefixes":["ygc-jane-blog-","ygc-jane-blog_"],"images":["ygc-jane/blog/"]}'
+printf '%s\n' "$nested" > "$dir/nested/jane-blog.json"
+chmod 600 "$dir/nested/jane-blog.json"
+
 cat > "$dir/yorvogate.yaml" <<EOF
 upstream: unix:///var/run/docker.sock
 listeners:
@@ -97,6 +104,10 @@ listeners:
       max_memory: 268435456
       max_pids: 128
       protected_images: [ygc-jane/, ygc-blog/]
+  - name: nested
+    address: tcp://127.0.0.1:2377
+    mode: scoped
+    scopes: $dir/nested
 EOF
 if [ "$listener" = sockets ]; then
 	cat >> "$dir/yorvogate.yaml" <<EOF
@@ -258,6 +269,26 @@ ctype=text/plain
 status "a pull with a body" 400 jane POST "/v1.56/images/create?fromImage=ygc-jane/app&tag=1" "fromImage=&fromSrc=http://127.0.0.1:9/rootfs.tar&repo=alpine&tag=yorvogate-import"
 ctype=
 status "no token" 401 nobody GET /v1.56/version
+
+say "== Nested scopes on two listeners"
+yorvogate=${YORVOGATE:-/yorvogate/yorvogate}
+works "check: jane and jane-blog on two listeners" "$yorvogate" check --config "$dir/yorvogate.yaml"
+refused "jane: a container name of jane-blog's (another listener)" "isn't one of scope jane's" \
+	as jane docker create --name ygc-jane-blog-php-1 --label com.docker.compose.project=ygc-jane --network none alpine:3.22
+refused "jane: a tag in jane-blog's namespace (another listener)" "image namespaces" \
+	as jane docker tag alpine:3.22 ygc-jane/blog/php:1
+# jane-blog's file caught half-written: its names are still no one else's
+printf '%s' "$nested" | head -c 60 > "$dir/nested/jane-blog.json"
+kill -HUP "$gate"
+sleep 1
+refused "jane: jane-blog's name while its file is half-written" "isn't one of scope jane's" \
+	as jane docker create --name ygc-jane-blog-php-1 --label com.docker.compose.project=ygc-jane --network none alpine:3.22
+refused "jane: jane-blog's namespace while its file is half-written" "image namespaces" \
+	as jane docker tag alpine:3.22 ygc-jane/blog/php:1
+refused "check: names the half-written file" "jane-blog.json" "$yorvogate" check --config "$dir/yorvogate.yaml"
+printf '%s\n' "$nested" > "$dir/nested/jane-blog.json"
+kill -HUP "$gate"
+sleep 1
 
 say "== Nothing was left behind"
 if [ "$(direct ps -aq --filter label=com.docker.compose.project=ygc-jane | wc -l)" = 1 ]; then ok "jane has its one container"; else ko "jane's containers" "$(direct ps -a --filter label=com.docker.compose.project=ygc-jane --format '{{.Names}}')"; fi

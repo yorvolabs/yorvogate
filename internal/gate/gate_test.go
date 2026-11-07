@@ -380,10 +380,15 @@ listeners:
 		t.Fatal(err)
 	}
 
+	registry := Registry(c)
+	if err := registry.Reload(); err != nil {
+		t.Fatal(err)
+	}
+
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for _, l := range c.Listeners {
 		if l.Name == listener {
-			server := httptest.NewServer(New(c, l, NewUpstream(c.UpstreamSocket(), log), log))
+			server := httptest.NewServer(New(c, l, NewUpstream(c.UpstreamSocket(), log), registry, log))
 			t.Cleanup(server.Close)
 
 			return server

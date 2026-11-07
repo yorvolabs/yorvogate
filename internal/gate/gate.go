@@ -32,6 +32,7 @@ const (
 type Gate struct {
 	config   *config.Config
 	listener config.Listener
+	registry *scope.Registry
 	scopes   *scope.Store
 	docker   *Docker
 	upstream *Upstream
@@ -39,14 +40,26 @@ type Gate struct {
 	log      *slog.Logger
 }
 
-// New makes the handler of a listener.
-func New(c *config.Config, l config.Listener, upstream *Upstream, log *slog.Logger) *Gate {
+// Registry holds the scopes of every scoped listener of a configuration: they share one Docker, so
+// their claims are decided together. Reload it before serving, and on each scan.
+func Registry(c *config.Config) *scope.Registry {
+	var folders []scope.Folder
+
+	for _, l := range c.Listeners {
+		if l.Mode == config.Scoped {
+			folders = append(folders, scope.Folder{Listener: l.Name, Dir: l.Scopes, Tokenless: l.SocketBound()})
+		}
+	}
+
+	return scope.NewRegistry(folders, c.StateFile)
+}
+
+// New makes the handler of a listener; a scoped one's scopes are the registry's.
+func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.Registry, log *slog.Logger) *Gate {
 	g := &Gate{config: c, listener: l, upstream: upstream, log: log.With("listener", l.Name)}
 	if l.Mode == config.Scoped {
-		g.scopes = scope.NewStore(l.Scopes)
-		if l.SocketBound() {
-			g.scopes = scope.NewSocketStore(l.Scopes)
-		}
+		g.registry = scopes
+		g.scopes = scopes.Store(l.Name)
 		g.docker = NewDocker(c.UpstreamSocket())
 		g.loads = newLoadLimiter()
 	}

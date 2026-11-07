@@ -30,6 +30,47 @@ func write(t *testing.T, dir, name, content string) string {
 	return path
 }
 
+// reloading is a listener's store that reloads before each lookup, as a test changes files between
+// them (a running gate reloads on its scan, or SIGHUP).
+type reloading struct {
+	t *testing.T
+	*Store
+}
+
+func (s reloading) Get(name string) (*Scope, error) {
+	s.t.Helper()
+	if err := s.registry.Reload(); err != nil {
+		s.t.Fatal(err)
+	}
+
+	return s.Store.Get(name)
+}
+
+func (s reloading) Authenticate(name, token string) (*Scope, error) {
+	s.t.Helper()
+	if err := s.registry.Reload(); err != nil {
+		s.t.Fatal(err)
+	}
+
+	return s.Store.Authenticate(name, token)
+}
+
+func (s reloading) Scopes() ([]string, map[string]error, error) {
+	s.t.Helper()
+	if err := s.registry.Reload(); err != nil {
+		s.t.Fatal(err)
+	}
+
+	return s.Store.Scopes()
+}
+
+// testStore is one listener's store over a folder.
+func testStore(t *testing.T, dir string, tokenless bool) reloading {
+	t.Helper()
+
+	return reloading{t, NewRegistry([]Folder{{Listener: "sites", Dir: dir, Tokenless: tokenless}}, "").Store("sites")}
+}
+
 func jane() string {
 	return `{"token_sha256": "` + digest(token) + `", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-", "jane_"]}`
 }
@@ -37,7 +78,7 @@ func jane() string {
 func TestAScopeIsItsTokens(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "jane", jane())
-	store := NewStore(dir)
+	store := testStore(t, dir, false)
 
 	s, err := store.Authenticate("jane", token)
 	if err != nil {
@@ -63,7 +104,7 @@ func TestAScopeIsItsTokens(t *testing.T) {
 func TestChangesNeedNoRestart(t *testing.T) {
 	dir := t.TempDir()
 	path := write(t, dir, "jane", jane())
-	store := NewStore(dir)
+	store := testStore(t, dir, false)
 
 	if _, err := store.Authenticate("jane", token); err != nil {
 		t.Fatal(err)
@@ -124,7 +165,7 @@ func TestScopeFilesAreChecked(t *testing.T) {
 		dir := t.TempDir()
 		write(t, dir, "jane", content)
 
-		if _, err := NewStore(dir).Authenticate("jane", token); err == nil || errors.Is(err, ErrUnknown) {
+		if _, err := testStore(t, dir, false).Authenticate("jane", token); err == nil || errors.Is(err, ErrUnknown) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
@@ -138,7 +179,7 @@ func TestOnlyPlainFilesOnlyItsOwnerWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := NewStore(dir).Authenticate("jane", token); err == nil {
+	if _, err := testStore(t, dir, false).Authenticate("jane", token); err == nil {
 		t.Error("a file anyone can write")
 	}
 
@@ -149,7 +190,7 @@ func TestOnlyPlainFilesOnlyItsOwnerWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := NewStore(dir).Authenticate("linked", token); err == nil {
+	if _, err := testStore(t, dir, false).Authenticate("linked", token); err == nil {
 		t.Error("a link")
 	}
 }
@@ -158,7 +199,7 @@ func TestWhatAScopeMayUse(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"images": ["quire-sites/jane/"], "builders": ["buildx_buildkit_jane0", "jane-tools"], "networks": {"quire-link-jane": {"aliases": ["jane.example.quire.internal"], "addresses": ["10.213.0.4"]}}, "prefixes"`, 1))
 
-	s, err := NewStore(dir).Authenticate("jane", token)
+	s, err := testStore(t, dir, false).Authenticate("jane", token)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +221,7 @@ func TestSubnets(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"subnets": ["10.213.0.32/27", "fd00:213::/64"], "prefixes"`, 1))
 
-	s, err := NewStore(dir).Authenticate("jane", token)
+	s, err := testStore(t, dir, false).Authenticate("jane", token)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +233,7 @@ func TestSubnets(t *testing.T) {
 	}
 
 	write(t, dir, "free", scopeFile("free", "free", "free/"))
-	free, err := NewStore(dir).Authenticate("free", token)
+	free, err := testStore(t, dir, false).Authenticate("free", token)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +252,7 @@ func TestAliasLengths(t *testing.T) {
 		dir := t.TempDir()
 		write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"aliases": ["`+alias+`"]}}, "prefixes"`, 1))
 
-		if _, err := NewStore(dir).Authenticate("jane", token); (err == nil) != valid {
+		if _, err := testStore(t, dir, false).Authenticate("jane", token); (err == nil) != valid {
 			t.Errorf("%d characters: %v", len(alias), err)
 		}
 	}
@@ -228,7 +269,7 @@ func TestANameIsTheLongestPrefixs(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "jane", scopeFile("jane", "jane", "quire-sites/jane/"))
 	write(t, dir, "jane-blog", scopeFile("jane-blog", "jane-blog", "quire-sites/jane/blog/"))
-	store := NewStore(dir)
+	store := testStore(t, dir, false)
 
 	jane, err := store.Get("jane")
 	if err != nil {
@@ -280,9 +321,9 @@ func TestANameIsTheLongestPrefixs(t *testing.T) {
 	}
 }
 
-// Two scopes may not share an owner label, a prefix or an image namespace: the one that came first
-// stays valid, the later is refused naming both; rewriting the first (a new token) doesn't change
-// which.
+// Two scopes may not share an owner label, a prefix or an image namespace: the one that held it
+// first stays valid, the later is refused naming both; rewriting the first (a new token) doesn't
+// change which, and neither do the files' times.
 func TestScopesThatShareAreRefused(t *testing.T) {
 	for what, second := range map[string]string{
 		"an owner label":      scopeFile("jane", "other", "quire-sites/other/"),
@@ -292,13 +333,17 @@ func TestScopesThatShareAreRefused(t *testing.T) {
 	} {
 		for _, order := range [][2]string{{"jane", "zed"}, {"zed", "jane"}} {
 			dir := t.TempDir()
-			past := time.Now().Add(-time.Hour)
+			store := testStore(t, dir, false)
 
-			earlier := write(t, dir, order[0], scopeFile("jane", "jane", "quire-sites/jane/"))
+			write(t, dir, order[0], scopeFile("jane", "jane", "quire-sites/jane/"))
+			if _, err := store.Get(order[0]); err != nil {
+				t.Fatalf("%s: %v", what, err)
+			}
+
 			later := write(t, dir, order[1], second)
-			_ = os.Chtimes(earlier, past, past)
-			_ = os.Chtimes(later, past.Add(time.Minute), past.Add(time.Minute))
-			store := NewStore(dir)
+			// An older time doesn't make it the first
+			past := time.Now().Add(-time.Hour)
+			_ = os.Chtimes(later, past, past)
 
 			if _, err := store.Get(order[0]); err != nil {
 				t.Errorf("%s, %s first: the first refused: %v", what, order[0], err)
@@ -323,13 +368,32 @@ func TestScopesThatShareAreRefused(t *testing.T) {
 	}
 }
 
+// Two scopes that collide when neither held the claim (both new, or a restart without a state file)
+// are both refused, whatever their files' times: there is no first to keep.
+func TestNewScopesThatShareAreBothRefused(t *testing.T) {
+	for _, times := range [][2]time.Duration{{0, time.Hour}, {time.Hour, 0}} {
+		dir := t.TempDir()
+		a := write(t, dir, "jane", scopeFile("jane", "jane", "quire-sites/jane/"))
+		b := write(t, dir, "zed", scopeFile("zed", "jane", "quire-sites/zed/"))
+		_ = os.Chtimes(a, time.Now().Add(-times[0]), time.Now().Add(-times[0]))
+		_ = os.Chtimes(b, time.Now().Add(-times[1]), time.Now().Add(-times[1]))
+		store := testStore(t, dir, false)
+
+		for _, name := range []string{"jane", "zed"} {
+			if _, err := store.Get(name); err == nil || !strings.Contains(err.Error(), "no one held it before") {
+				t.Errorf("%s: %v", name, err)
+			}
+		}
+	}
+}
+
 // Scopes may use different owner labels: having its own label doesn't make an object only its own.
 func TestLabelsOfAnotherScope(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "jane", scopeFile("jane", "jane", "quire-sites/jane/"))
 	write(t, dir, "ci", strings.Replace(scopeFile("job-7", "ci", "ci/"), "com.docker.compose.project", "example.ci.job", 1))
 
-	jane, err := NewStore(dir).Get("jane")
+	jane, err := testStore(t, dir, false).Get("jane")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,11 +417,11 @@ func TestATokenIsOptionalOnlyWithASocket(t *testing.T) {
 	write(t, dir, "blog", scopeFile("blog", "blog", "quire-sites/blog/"))
 	write(t, dir, "bad", `{"token_sha256": "abc", "owner": {"label": "com.docker.compose.project", "value": "bad"}, "prefixes": ["bad-"]}`)
 
-	if _, err := NewStore(dir).Get("jane"); err == nil {
+	if _, err := testStore(t, dir, false).Get("jane"); err == nil {
 		t.Error("a scope without a token, where each request sends one")
 	}
 
-	store := NewSocketStore(dir)
+	store := testStore(t, dir, true)
 	if s, err := store.Get("jane"); err != nil || s.TokenSHA256 != "" {
 		t.Fatalf("a socket's scope without a token: %v", err)
 	}
@@ -382,21 +446,20 @@ func TestBuilders(t *testing.T) {
 		dir := t.TempDir()
 		write(t, dir, "jane", content)
 
-		if _, err := NewStore(dir).Get("jane"); err == nil || !strings.Contains(err.Error(), want) {
+		if _, err := testStore(t, dir, false).Get("jane"); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", content, err)
 		}
 	}
 
 	dir := t.TempDir()
 	write(t, dir, "jane", strings.Replace(scopeFile("jane", "jane", "quire-sites/jane/"), `"prefixes"`, `"builders": ["bk-jane"], "prefixes"`, 1))
-	past := time.Now().Add(-time.Hour)
-	_ = os.Chtimes(filepath.Join(dir, "jane.json"), past, past)
-	write(t, dir, "blog", strings.Replace(scopeFile("blog", "blog", "quire-sites/blog/"), `"prefixes"`, `"builders": ["bk-jane"], "prefixes"`, 1))
 
-	store := NewStore(dir)
+	store := testStore(t, dir, false)
 	if _, err := store.Get("jane"); err != nil {
 		t.Fatal(err)
 	}
+
+	write(t, dir, "blog", strings.Replace(scopeFile("blog", "blog", "quire-sites/blog/"), `"prefixes"`, `"builders": ["bk-jane"], "prefixes"`, 1))
 
 	if _, err := store.Get("blog"); err == nil || !strings.Contains(err.Error(), `builders: "bk-jane" is scope jane's already`) {
 		t.Errorf("a builder of two scopes: %v", err)

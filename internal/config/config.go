@@ -50,6 +50,10 @@ type Config struct {
 	LoadLimit int64 `yaml:"load_limit"`
 	// Listeners are where clients connect.
 	Listeners []Listener `yaml:"listeners"`
+	// StateFile is where YorvoGate keeps each scope's last valid claims, so a scope file that isn't
+	// valid when the gate starts still keeps its names from the other scopes. YorvoGate's own file,
+	// outside every scopes folder; optional (without it, claims are held only while the process runs).
+	StateFile string `yaml:"state_file"`
 
 	lowest, highest route.Version
 }
@@ -232,6 +236,22 @@ func (c *Config) check() error {
 		}
 
 		names[l.Name], addresses[address] = true, true
+	}
+
+	if c.StateFile != "" {
+		if !filepath.IsAbs(c.StateFile) || filepath.Clean(c.StateFile) != c.StateFile || strings.HasSuffix(c.StateFile, "/") {
+			return fmt.Errorf("state_file: %q must be an absolute file name", c.StateFile)
+		}
+
+		for _, l := range c.Listeners {
+			if l.Scopes == "" {
+				continue
+			}
+
+			if rel, err := filepath.Rel(l.Scopes, c.StateFile); err == nil && !strings.HasPrefix(rel, "..") {
+				return fmt.Errorf("state_file: must be outside the scopes folders (listener %s's is %s): whoever writes scope files mustn't write it", l.Name, l.Scopes)
+			}
+		}
 	}
 
 	return nil

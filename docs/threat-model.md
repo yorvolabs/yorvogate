@@ -27,6 +27,7 @@ What YorvoGate holds, so you can tell a vulnerability from a limit, and set it u
 - A flaw in Docker, runc or the kernel, and what runs inside an allowed container.
 - A flaw in BuildKit, reached through a builder's `buildctl dial-stdio` (it runs rootless and unprivileged, which limits what one can do).
 - Anyone who can reach Docker's socket directly, or write the configuration or scope files.
+- Anyone who can write YorvoGate's [state file](configuration.md#the-state-file): they can keep names from scopes (deny service), never give a scope more than its own file.
 - Anyone who can open a scope's socket: they are that scope. Keep the `scope_sockets` folder out of clients' reach, and give each client only its own socket.
 - Resource use through allowed requests (how many containers a scope creates, how much it pulls).
 - A network an attacker can listen on: TCP listeners speak plain HTTP and the scope's token travels with each request. Bind TCP listeners to a private network only its clients reach, or use a unix socket.
@@ -35,4 +36,5 @@ What YorvoGate holds, so you can tell a vulnerability from a limit, and set it u
 
 - Run YorvoGate as the only way to Docker's socket for scoped clients; give them no other route to it.
 - Give each scope a long random token (32 bytes or more) and keep only its SHA-256 in the scope file; scope files and the configuration writable by their owner only (YorvoGate refuses a scope file others can write, and links).
+- Set a [`state_file`](configuration.md#the-state-file), and write each scope file by renaming a complete file over the old one: a scope file caught half-written then keeps its names, across restarts too.
 - Keep `api.max` at what YorvoGate knows: a newer Docker API is refused until YorvoGate is updated for it, so update YorvoGate before (or with) Docker.

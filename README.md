@@ -108,4 +108,4 @@ Questions and anything else: [contact@yorvolabs.com](mailto:contact@yorvolabs.co
 
 ## License
 
-Apache License 2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE). Licensing questions: [legal@poposki.mk](mailto:legal@poposki.mk).
+Apache License 2.0: see [LICENSE](LICENSE) and [NOTICE](NOTICE). Licensing questions: [contact@yorvolabs.com](mailto:contact@yorvolabs.com).

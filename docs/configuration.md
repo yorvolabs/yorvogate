@@ -11,6 +11,7 @@ api:                                    # Docker API versions accepted (optional
 
 body_limit: 1048576                     # the largest body read whole, in bytes (4096 to 64 MiB)
 load_limit: 8589934592                  # the largest image archive a scope loads (1 MiB to 256 GiB)
+state_file: /var/lib/yorvogate/state.json  # scopes' last valid claims, kept across restarts (optional; see below)
 
 listeners:                              # at least one
   - name: orchestrator                  # lowercase letters, digits and dashes; in logs
@@ -46,7 +47,7 @@ listeners:                              # at least one
 
 A scoped listener can give each scope a unix socket of its own instead of one address: `scope_sockets: <folder>` in place of `address`. For each valid scope file, YorvoGate makes `<folder>/<scope>.sock`; a request on it is that scope's, with no header and no token. This is how builds are scoped: buildx doesn't send `config.json`'s `HttpHeaders` on its own connections, but it connects to whatever socket its Docker context names.
 
-- A socket comes with its scope file and goes with it. The folder of scope files is read again every 2 seconds, and at once on `SIGHUP`. A scope removed, or no longer valid, has its socket closed, with every connection on it, streams (attach, exec) included.
+- A socket comes with its scope file and goes with it. The folders of scope files are read again every 2 seconds, and at once on `SIGHUP`. A scope removed, or no longer valid, has its socket closed, with every connection on it, streams (attach, exec) included.
 - A request on a scope's socket that names a scope (`X-YorvoGate-Scope`) must name that one: one that names another is refused, never acted on as the other.
 - `token_sha256` is optional in the scope files of such a listener. A scope file with one may serve a token listener too.
 - YorvoGate makes the sockets, so its user needs write access to the folder. Sockets are mode `0660`, owned by YorvoGate's user and `socket_group`. They're made so that no one else can connect before the mode and group are set. A file at a socket's path that isn't a socket is left alone, and the scope's socket isn't made (it's logged, and tried again at the next scan).
@@ -120,7 +121,7 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 
 ## Scope files (scoped listeners)
 
-`<scopes>/<name>.json`, one per scope. The name: lowercase letters, digits, `_`, `.` and `-`, up to 63 characters. The file must be a plain file (not a link) that only its owner can write. It's read again whenever it changes.
+`<scopes>/<name>.json`, one per scope. The name: lowercase letters, digits, `_`, `.` and `-`, up to 63 characters. The file must be a plain file (not a link) that only its owner can write. YorvoGate reads the scope folders again every 2 seconds, and at once on `SIGHUP`; a change takes effect then. Write a scope file by renaming a complete file over it (write `jane.json.new`, then `mv` it to `jane.json`), so YorvoGate never reads half of one.
 
 ```json
 {
@@ -139,14 +140,24 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 - `prefixes`: what the names of the containers, networks and volumes it creates start with. Each ends with `-`, `_` or `.`, so `jane-` never matches `janet-…`. A container may also take the name Compose gives one it recreates, 12 hex and `_` before one of the scope's names (`f5dba3e4fa27_jane-php-1`), so no prefix may start with 12 hex and `_`.
 - `images` (optional): its own image namespaces, as prefixes ending with `/`: it may use images there even where the listener protects them.
 
-Scopes' names may nest, as Compose projects' do (sites `jane` and `jane-blog`): a name belongs to the scope with the **longest** prefix it starts with. While scope `jane-blog` exists, `jane` can't create `jane-blog-php-1` or `jane-blog_default`; image namespaces work the same way. Two scopes may not share an owner label, a prefix or an image namespace: the scope that came later is refused (its requests fail), and `yorvogate check` names both. This holds across scoped listeners too — they share one Docker, so a label or name on two listeners would let one listener's scope reach the other's objects; `yorvogate check` refuses that, and `serve` won't start with it.
+Scopes' names may nest, as Compose projects' do (sites `jane` and `jane-blog`): a name belongs to the scope with the **longest** prefix it starts with. While scope `jane-blog` exists, `jane` can't create `jane-blog-php-1` or `jane-blog_default`; image namespaces work the same way. This holds across scoped listeners: they share one Docker, so YorvoGate decides every scope's names, images and labels over all of them, as if their scope files were in one folder. The same scope name on two listeners (one folder served by token and by socket) is one scope.
 
-A scope file that isn't valid (or that conflicts) is refused alone: its requests fail and its socket closes, the other scopes keep working, and YorvoGate keeps running. While it's refused, it has no names: `jane-blog-php-1` is `jane`'s to create again. The scope's objects keep its owner label, so they stay out of `jane`'s reach. `yorvogate check` exits with the first scope file it refuses.
+Two scopes may not share an owner label, a prefix, an image namespace or a builder, on one listener or two. The scope that held it first keeps it and the other is refused (its requests fail); two new scopes that collide (or two at a start without a [state file](#the-state-file)) are both refused. Files' times play no part. `yorvogate check` names every scope it refuses, and why.
+
+A scope file that isn't valid (or that conflicts) is refused alone: its requests fail and its socket closes, the other scopes keep working, and YorvoGate keeps running. **It keeps what it claimed:** the owner label, prefixes, image namespaces and builders it last had while valid stay its own, so while `jane-blog.json` is half-written or wrong, `jane` can't create `jane-blog-php-1` or tag over `quire-sites/jane/blog/`. Its claims go when its file does. With a [state file](#the-state-file) they're held across restarts too; without one, a scope file that isn't valid when YorvoGate starts claims nothing until it's fixed. (Until 0.2.2, a refused scope's names were its neighbour's at once.)
 
 One case is left to the orchestrator: if tenant `jane` has a Compose service named `blog-php` before a scope `jane-blog` exists, its container `jane-blog-php-1` is jane's. Once `jane-blog` arrives, `jane-blog`'s Compose project can't take that name. Nothing crosses between the scopes, since ownership is by label, but it's a denial of service. An orchestrator that lets tenants pick nested names should refuse dashes in service names.
 - `networks` (optional): shared networks it may join besides its own, each with the `aliases` it may take and the `addresses` it may ask for there (none if left out).
 - `subnets` (optional): where its networks' addresses must be, in CIDR form: each network it creates names its subnet, inside one of these (otherwise Docker picks from its own pools).
 - `builders` (optional): its BuildKit builders, by exact name (no wildcard), each one scope's only. See [builders](#builders). 0.1's `containers` key is refused: a container a scope "used" was fully its own, privileged or not.
+
+## The state file
+
+`state_file` (optional) is where YorvoGate keeps each scope's last valid claims (owner label, prefixes, image namespaces, builders), so they're held across restarts. It's YorvoGate's own file: written at once (a new file renamed over it), readable by its owner only, in a folder YorvoGate can write. It must be outside every scopes folder, where whoever writes scope files can't write it.
+
+- It only keeps names from other scopes. It's read only to refuse a scope a name, label or image another scope held, never to let a scope do anything its own file doesn't allow: an edited state file can deny a scope names, never give one any.
+- A record goes when its scope file does. While a scopes folder doesn't exist at the start, every record is kept.
+- A state file that's missing, or that YorvoGate can't trust (others can write it, or it isn't valid), holds nothing. `yorvogate check` and the logs say so, and `check` warns when there's no `state_file` at all.
 
 ## Builders
 

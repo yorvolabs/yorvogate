@@ -4,6 +4,23 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Changed
+
+- **Scopes' claims are decided over every scoped listener, as one folder.** Scoped listeners share one Docker, so a name belongs to the scope with the longest prefix it starts with whichever listener each scope is on; image namespaces and owner labels work the same way. `yorvogate check` and a running gate decide the same way, from one snapshot of every scope file, rebuilt every 2 seconds and on `SIGHUP`; a request reads no file.
+- **Breaking: of two scopes that collide, the one that held the claim keeps it; two new ones are both refused.** Files' modification times no longer decide which. `serve` starts with a collision, refusing the scopes in it, as it does within one listener.
+- **Breaking: a scope file that isn't valid keeps its claims** until it's removed: its names and image namespaces are no other scope's meanwhile. Until now they were its neighbour's at once.
+- **Breaking: a change to a scope file on a token listener takes effect at the next scan** (2 seconds, or `SIGHUP`), as on socket listeners. Write scope files by renaming a complete file over the old one.
+- **`yorvogate check` names every scope file it refuses**, not only the first, and warns about what isn't held across a restart.
+
+### Added
+
+- **`state_file`**: where YorvoGate keeps each scope's last valid claims across restarts. It only ever refuses names to scopes, never grants any.
+
+### Security
+
+- **Nested names on two scoped listeners weren't resolved (High where a host has two scoped listeners).** The longest-prefix rule saw one listener's scopes only, so with `jane` on one listener and `jane-blog` on another, `jane` could create `jane-blog`'s container names and tag over its image namespace (its next container would run `jane`'s image); `check` passed. Now every listener's scopes are resolved together.
+- **A scope file caught half-written gave its names to its neighbour (Medium).** Now it keeps them, as above.
+
 ## [0.2.2] - 2026-11-03
 
 Hardening from a security audit of 0.2.1, and a fix for rootless builders on CIS-hardened daemons. Check your configuration with `yorvogate check` before you update: two scoped listeners on one Docker may no longer share an owner label, prefix, image namespace or builder.
