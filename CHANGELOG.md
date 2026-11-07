@@ -12,6 +12,8 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 - **Breaking: a change to a scope file on a token listener takes effect at the next scan** (2 seconds, or `SIGHUP`), as on socket listeners. Write scope files by renaming a complete file over the old one.
 - **`yorvogate check` names every scope file it refuses**, not only the first, and warns about what isn't held across a restart.
 
+- **Every answer advertises an API version the gate serves.** A newer Docker's `Api-Version` header and `/version` API version are given as the gate's `api.max`, and an older Docker minimum as `api.min`, on every listener; an older Docker keeps its own version, never one it can't serve, so the Docker CLI, Compose and buildx negotiate a version YorvoGate accepts. Before, upgrading Docker past YorvoGate's API version made every negotiating client ask for the newer version and be refused.
+
 ### Added
 
 - **`state_file`**: where YorvoGate keeps each scope's last valid claims across restarts. It only ever refuses names to scopes, never grants any.

@@ -52,7 +52,7 @@ func boundGate(t *testing.T, d *docker, group string) (*Sockets, string, string)
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	s, err := NewSockets(New(c, c.Listeners[0], NewUpstream(c.UpstreamSocket(), log), Registry(c), log), log)
+	s, err := NewSockets(New(c, c.Listeners[0], NewUpstream(c, log), Registry(c), log), log)
 	if err != nil {
 		t.Fatal(err)
 	}

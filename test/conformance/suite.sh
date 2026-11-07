@@ -309,6 +309,20 @@ if [ "$listener" = sockets ]; then
 	works "jane's socket is still open" as jane docker version
 fi
 
+say "== A Docker newer than the gate"
+# A gate that accepts at most API 1.50, in front of a Docker with a newer one: the CLI negotiates the
+# version the gate advertises, and works. Without the clamp it would ask for Docker's and be refused.
+sed -e 's|^upstream: .*|&\napi: {max: "1.50"}|' -e 's|127.0.0.1:2376|127.0.0.1:2386|' -e 's|127.0.0.1:2377|127.0.0.1:2387|' \
+	-e "s|scope_sockets: $dir/sockets|scope_sockets: $dir/sockets-old|" "$dir/yorvogate.yaml" > "$dir/yorvogate-old.yaml"
+mkdir -p "$dir/sockets-old"
+"$yorvogate" serve --config "$dir/yorvogate-old.yaml" 2> "$dir/yorvogate-old.log" &
+old=$!
+sleep 1
+negotiated=$(DOCKER_HOST=tcp://127.0.0.1:2386 DOCKER_CONFIG="$dir/jane" docker version --format '{{.Client.APIVersion}}' 2>&1)
+if [ "$negotiated" = 1.50 ]; then ok "the CLI negotiates the gate's 1.50"; else ko "the CLI negotiates the gate's 1.50" "$negotiated"; fi
+works "jane: docker ps, at the gate's version" env DOCKER_HOST=tcp://127.0.0.1:2386 DOCKER_CONFIG="$dir/jane" docker ps
+kill "$old" 2>/dev/null
+
 say ""
 say "$passed passed, $failed failed"
 grep "\"refused\"" "$dir/yorvogate.log" | grep -i "status\":5" | tail -3

@@ -44,6 +44,19 @@ type docker struct {
 	socket    string
 	// jane's builder as Docker has it: rootless, as a builder must be, unless a test changes it
 	builder map[string]any
+	// The API version Docker has ("1.56" unless a test changes it)
+	api string
+}
+
+func (d *docker) apiVersion() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.api == "" {
+		return "1.56"
+	}
+
+	return d.api
 }
 
 // rootlessBuilder is a builder's inspection as the orchestrator creates it (measured on the droplet):
@@ -194,9 +207,16 @@ func startDocker(t testing.TB) *docker {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		// Docker sends its API version with every answer
+		w.Header().Set("Api-Version", d.apiVersion())
 
 		// Answers a rule changes: the image list, and the shared network with every scope on it
 		switch {
+		case strings.HasSuffix(r.URL.Path, "/version"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"Version": "30.0.0", "ApiVersion": d.apiVersion(), "MinAPIVersion": "1.40", "Os": "linux",
+				"Components": []map[string]any{{"Name": "Engine", "Version": "30.0.0", "Details": map[string]any{"ApiVersion": d.apiVersion(), "MinAPIVersion": "1.40", "Os": "linux"}}},
+			})
 		case r.URL.Path == "/v1.56/images/json":
 			list := []map[string]any{}
 			for _, img := range images {
@@ -388,7 +408,7 @@ listeners:
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for _, l := range c.Listeners {
 		if l.Name == listener {
-			server := httptest.NewServer(New(c, l, NewUpstream(c.UpstreamSocket(), log), registry, log))
+			server := httptest.NewServer(New(c, l, NewUpstream(c, log), registry, log))
 			t.Cleanup(server.Close)
 
 			return server

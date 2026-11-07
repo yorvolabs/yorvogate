@@ -3,13 +3,18 @@ package gate
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"regexp"
 	"strconv"
 	"time"
+
+	"github.com/yorvolabs/yorvogate/internal/config"
+	"github.com/yorvolabs/yorvogate/internal/route"
 )
 
 // Upstream is Docker's socket, which allowed requests are forwarded to.
@@ -17,8 +22,13 @@ type Upstream struct {
 	proxy *httputil.ReverseProxy
 }
 
-// NewUpstream forwards to Docker's unix socket.
-func NewUpstream(socket string, log *slog.Logger) *Upstream {
+// NewUpstream forwards to the configuration's Docker socket. Every answer advertises an API version
+// the gate accepts, never a newer one, so a client that negotiates (the Docker CLI, Compose, buildx)
+// asks for a version the gate serves, whatever version Docker itself has.
+func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
+	socket := c.UpstreamSocket()
+	lowest, highest := c.Versions()
+
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	transport := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -40,7 +50,15 @@ func NewUpstream(socket string, log *slog.Logger) *Upstream {
 		// A rule may change Docker's answer before the client sees it (a list or an inspection with
 		// other scopes' objects left out).
 		ModifyResponse: func(res *http.Response) error {
+			if v := res.Header.Get("Api-Version"); v != "" {
+				res.Header.Set("Api-Version", clamp(v, highest))
+			}
+
 			change, ok := res.Request.Context().Value(answerKey{}).(func([]byte) ([]byte, error))
+			if versionPath.MatchString(res.Request.URL.Path) && res.Request.Method == http.MethodGet {
+				change, ok = func(body []byte) ([]byte, error) { return versionAnswer(body, lowest, highest) }, true
+			}
+
 			if !ok || res.StatusCode != http.StatusOK {
 				return nil
 			}
@@ -71,6 +89,71 @@ func NewUpstream(socket string, log *slog.Logger) *Upstream {
 			answer(w, http.StatusBadGateway, "Docker didn't answer")
 		},
 	}}
+}
+
+// versionPath is system.version's path.
+var versionPath = regexp.MustCompile(`^/v[0-9]+\.[0-9]+/version$`)
+
+// clamp is the newest API version both Docker and the gate serve: Docker's, or the gate's highest
+// if Docker's is newer. A Docker older than the gate's lowest keeps its own (no version is served by
+// both, and its clients' requests are refused, saying why). One that isn't a version is left as it is.
+func clamp(v string, highest route.Version) string {
+	parsed, err := route.ParseVersion(v)
+	if err != nil || !highest.Less(parsed) {
+		return v
+	}
+
+	return highest.String()
+}
+
+// clampMin is the oldest API version both serve: Docker's minimum, or the gate's lowest if Docker's
+// is older.
+func clampMin(v string, lowest route.Version) string {
+	parsed, err := route.ParseVersion(v)
+	if err != nil || !parsed.Less(lowest) {
+		return v
+	}
+
+	return lowest.String()
+}
+
+// versionAnswer is system.version's answer with the API versions both Docker and the gate serve: the
+// server's, and its Engine component's. The rest is Docker's, as it was.
+func versionAnswer(body []byte, lowest, highest route.Version) ([]byte, error) {
+	var answer map[string]json.RawMessage
+	if err := json.Unmarshal(body, &answer); err != nil {
+		return nil, err
+	}
+
+	fix := func(fields map[string]json.RawMessage) {
+		var v string
+		if raw, ok := fields["ApiVersion"]; ok && json.Unmarshal(raw, &v) == nil {
+			fields["ApiVersion"], _ = json.Marshal(clamp(v, highest))
+		}
+
+		if raw, ok := fields["MinAPIVersion"]; ok && json.Unmarshal(raw, &v) == nil {
+			fields["MinAPIVersion"], _ = json.Marshal(clampMin(v, lowest))
+		}
+	}
+
+	fix(answer)
+
+	if raw, ok := answer["Components"]; ok {
+		var components []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &components); err == nil {
+			for _, component := range components {
+				var details map[string]json.RawMessage
+				if json.Unmarshal(component["Details"], &details) == nil && details != nil {
+					fix(details)
+					component["Details"], _ = json.Marshal(details)
+				}
+			}
+
+			answer["Components"], _ = json.Marshal(components)
+		}
+	}
+
+	return json.Marshal(answer)
 }
 
 // answerKey carries, in a forwarded request's context, the change a rule makes to Docker's answer.

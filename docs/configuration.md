@@ -43,6 +43,8 @@ listeners:                              # at least one
     # allow_privileged_builders: true   # any builder, privileged included: the scope is root on the host
 ```
 
+Every answer tells the client the newest API version both Docker and YorvoGate serve: a newer Docker's own (in the `Api-Version` header and in `/version`) is given as `max`, and Docker's minimum as `min` when it's older. A Docker older than `min` keeps its own version: no version is served by both, and YorvoGate refuses its clients' requests, saying so. A client that negotiates its version, as the Docker CLI, Compose and buildx do, then asks for one YorvoGate serves, so upgrading Docker before YorvoGate doesn't lock clients out.
+
 ## Scope sockets
 
 A scoped listener can give each scope a unix socket of its own instead of one address: `scope_sockets: <folder>` in place of `address`. For each valid scope file, YorvoGate makes `<folder>/<scope>.sock`; a request on it is that scope's, with no header and no token. This is how builds are scoped: buildx doesn't send `config.json`'s `HttpHeaders` on its own connections, but it connects to whatever socket its Docker context names.

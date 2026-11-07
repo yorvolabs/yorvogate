@@ -243,7 +243,7 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	signal.Notify(hup, syscall.SIGHUP)
 	defer signal.Stop(hup)
 
-	upstream := gate.NewUpstream(c.UpstreamSocket(), log)
+	upstream := gate.NewUpstream(c, log)
 	servers := make([]*http.Server, 0, len(c.Listeners))
 	bound := []*gate.Sockets{}
 	failed := make(chan error, len(c.Listeners))

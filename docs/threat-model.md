@@ -37,4 +37,4 @@ What YorvoGate holds, so you can tell a vulnerability from a limit, and set it u
 - Run YorvoGate as the only way to Docker's socket for scoped clients; give them no other route to it.
 - Give each scope a long random token (32 bytes or more) and keep only its SHA-256 in the scope file; scope files and the configuration writable by their owner only (YorvoGate refuses a scope file others can write, and links).
 - Set a [`state_file`](configuration.md#the-state-file), and write each scope file by renaming a complete file over the old one: a scope file caught half-written then keeps its names, across restarts too.
-- Keep `api.max` at what YorvoGate knows: a newer Docker API is refused until YorvoGate is updated for it, so update YorvoGate before (or with) Docker.
+- Keep `api.max` at what YorvoGate knows. YorvoGate tells clients the API version it serves, never a newer Docker's, so the Docker CLI, Compose and buildx keep working when Docker is upgraded first; but a newer Docker's new endpoints and fields stay closed until YorvoGate is updated for them.
