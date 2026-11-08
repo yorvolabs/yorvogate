@@ -52,7 +52,11 @@ func examples(t *testing.T) (configs, scopes map[string]string) {
 	return configs, scopes
 }
 
-// Every example configuration and scope file in the docs is one "yorvogate check" passes.
+// A scopes folder the example names that this host doesn't have: about the host, not the example
+var missingFolder = regexp.MustCompile(`^warning: the scopes folder \S+ doesn't exist: `)
+
+// Every example configuration and scope file in the docs is one "yorvogate check" passes, and an
+// example configuration gets no warning: what's copied from the docs is what YorvoGate recommends.
 func TestEveryExampleIsValid(t *testing.T) {
 	configs, scopes := examples(t)
 	if len(configs) < 3 || len(scopes) < 2 {
@@ -66,6 +70,13 @@ func TestEveryExampleIsValid(t *testing.T) {
 		var out, errs bytes.Buffer
 		if code := run([]string{"check", "--config", path}, &out, &errs); code != 0 {
 			t.Errorf("%s: %s", name, errs.String())
+		}
+
+		for _, line := range strings.Split(out.String(), "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "warning:") && !missingFolder.MatchString(line) {
+				t.Errorf("%s: %s", name, line)
+			}
 		}
 	}
 

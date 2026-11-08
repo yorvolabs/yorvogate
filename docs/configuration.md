@@ -16,8 +16,8 @@ state_file: /var/lib/yorvogate/state.json  # scopes' last valid claims, kept acr
 
 listeners:                              # at least one
   - name: orchestrator                  # lowercase letters, digits and dashes; in logs
-    address: tcp://10.10.0.2:2375       # tcp://host:port, or unix:///absolute/path (made 0660)
-    # socket_group: docker-orchestrator # a unix socket's group, a name or a number (optional)
+    address: unix:///run/yorvogate/orchestrator.sock  # unix:///absolute/path (made 0660), or tcp://host:port
+    socket_group: orchestrator          # a unix socket's group, a name or a number (optional)
     mode: trusted
     allow:                              # endpoint group => read or write
       system: read
@@ -25,6 +25,7 @@ listeners:                              # at least one
 
   - name: tenants
     address: unix:///run/yorvogate/tenants.sock
+    socket_group: tenants
     mode: scoped
     scopes: /etc/yorvogate/scopes       # the folder of scope files
     containers:                         # what scopes' containers may ask of the host (below)
@@ -230,6 +231,8 @@ On a listener with an address, a client sends its scope with each request. With 
 ```json
 {"HttpHeaders": {"X-YorvoGate-Scope": "jane", "X-YorvoGate-Token": "<the token>"}}
 ```
+
+Each request is decided on the scope files as last read. A request already being answered ends at the next read when its scope file is removed, is no longer valid, or has a new `token_sha256`: streams (attach, exec, logs that follow) included, as a scope's socket closes on a [scope-sockets](#scope-sockets) listener. Another scope's requests go on.
 
 ## Scope status
 

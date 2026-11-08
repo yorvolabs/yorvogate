@@ -11,6 +11,9 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 - **Breaking: a scope file that isn't valid keeps its claims** until it's removed: its names and image namespaces are no other scope's meanwhile. Until now they were its neighbour's at once.
 - **Breaking: a change to a scope file on a token listener takes effect at the next scan** (2 seconds, or `SIGHUP`), as on socket listeners. Write scope files by renaming a complete file over the old one.
 - **`yorvogate check` names every scope file it refuses**, not only the first, and warns about what isn't held across a restart.
+- **On a listener with an address, a scope removed, no longer valid, or given a new token ends the requests it's being answered**, streams included (attach, exec, logs that follow), at the next read of the scope files, as closing a scope's socket does. Until now a stream begun before went on until the client ended it.
+- **The examples in the docs and `examples/yorvogate.yaml` get no warning from `yorvogate check`:** the trusted listener with `write` is on a unix socket instead of a TCP address, each socket has its `socket_group`, and a `state_file` is set. The README's Compose service mounts the sockets' folder and a volume for the state file.
+- **The image has its state file's folder, `/var/lib/yorvogate`, owned by YorvoGate's user**, so a volume mounted there is YorvoGate's to write.
 
 - **Every answer advertises an API version the gate serves.** A newer Docker's `Api-Version` header and `/version` API version are given as the gate's `api.max`, and an older Docker minimum as `api.min`, on every listener; an older Docker keeps its own version, never one it can't serve, so the Docker CLI, Compose and buildx negotiate a version YorvoGate accepts. Before, upgrading Docker past YorvoGate's API version made every negotiating client ask for the newer version and be refused.
 

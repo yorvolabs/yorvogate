@@ -318,6 +318,41 @@ if printf '%s' "$answer" | grep -q "a trusted listener's only"; then ok "a scope
 kill -HUP "$gate"
 sleep 1
 
+say "== A scope removed ends its streams"
+# An exec's stream begun before blog's file goes ends when it goes; jane's goes on. On a token
+# listener as on a scope's socket.
+# alive PID: running (an exited one not yet reaped is a zombie, and kill -0 still finds it)
+alive() {
+	[ -r "/proc/$1/stat" ] && ! sed 's/^.*) //' "/proc/$1/stat" | grep -q '^Z'
+}
+# gone PID: it ends within 10 seconds
+gone() {
+	i=0
+	while alive "$1" && [ $i -lt 10 ]; do
+		sleep 1
+		i=$((i + 1))
+	done
+	! alive "$1"
+}
+blogs=$(direct ps --filter label=com.docker.compose.project=ygc-blog --format '{{.Names}}' | head -1)
+janes=$(direct ps --filter label=com.docker.compose.project=ygc-jane --format '{{.Names}}' | head -1)
+# Started from this shell, so it reaps them (a pid in a $(…) would be left a zombie)
+sleep 60 | as blog docker exec -i "$blogs" cat >/dev/null 2>&1 &
+blogstream=$!
+sleep 60 | as jane docker exec -i "$janes" cat >/dev/null 2>&1 &
+janestream=$!
+sleep 2
+if alive "$blogstream" && alive "$janestream"; then ok "blog's and jane's execs stream"; else ko "blog's and jane's execs stream"; fi
+mv "$dir/scopes/blog.json" "$dir/blog.json.away"
+kill -HUP "$gate"
+if gone "$blogstream"; then ok "blog's stream ends when its file is removed"; else ko "blog's stream ends when its file is removed"; fi
+if alive "$janestream"; then ok "jane's stream goes on"; else ko "jane's stream goes on"; fi
+kill "$janestream" "$blogstream" 2>/dev/null
+mv "$dir/blog.json.away" "$dir/scopes/blog.json"
+kill -HUP "$gate"
+sleep 1
+works "blog's file back: blog works again" as blog docker ps
+
 say "== Nothing was left behind"
 if [ "$(direct ps -aq --filter label=com.docker.compose.project=ygc-jane | wc -l)" = 1 ]; then ok "jane has its one container"; else ko "jane's containers" "$(direct ps -a --filter label=com.docker.compose.project=ygc-jane --format '{{.Names}}')"; fi
 if direct image inspect alpine:yorvogate-hijack >/dev/null 2>&1; then ko "a shared name was retagged"; else ok "no shared name retagged"; fi

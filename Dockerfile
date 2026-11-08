@@ -20,6 +20,9 @@ COPY internal internal/
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -buildvcs=false \
         -ldflags "-s -w -buildid= -X main.version=${VERSION}" -o /yorvogate ./cmd/yorvogate
 
+# Its state file's folder, its own: a volume mounted there starts as YorvoGate's
+RUN mkdir -p /out/var/lib/yorvogate
+
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329
 
 ARG VERSION=dev
@@ -32,6 +35,7 @@ LABEL org.opencontainers.image.title="YorvoGate" \
       org.opencontainers.image.version="${VERSION}"
 
 COPY --from=build /yorvogate /usr/local/bin/yorvogate
+COPY --from=build --chown=65532:65532 /out/var/lib/yorvogate /var/lib/yorvogate
 
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/yorvogate"]

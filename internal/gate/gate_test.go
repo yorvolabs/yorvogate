@@ -210,6 +210,16 @@ func startDocker(t testing.TB) *docker {
 		// Docker sends its API version with every answer
 		w.Header().Set("Api-Version", d.apiVersion())
 
+		// Logs that follow: an answer that goes on until the request ends
+		if r.URL.Query().Get("follow") == "1" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("log line\n"))
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
+
+			return
+		}
+
 		// Answers a rule changes: the image list, and the shared network with every scope on it
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/version"):

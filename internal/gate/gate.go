@@ -37,7 +37,9 @@ type Gate struct {
 	docker   *Docker
 	upstream *Upstream
 	loads    *loadLimiter
-	log      *slog.Logger
+	// A token listener's requests being answered, ended when their scope's allowance goes
+	streams streams
+	log     *slog.Logger
 }
 
 // Registry holds the scopes of every scoped listener of a configuration: they share one Docker, so
@@ -88,9 +90,9 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	forward, done, err := g.decide(r, entry)
-	if done != nil {
-		defer done()
+	forward, decision, err := g.decided(r, entry)
+	if decision != nil && decision.cleanup != nil {
+		defer decision.cleanup()
 	}
 
 	if err != nil {
@@ -105,20 +107,18 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if decision != nil && !g.listener.SocketBound() {
+		var answered func()
+
+		forward, answered = g.streams.track(g.scopes, decision.scope, forward)
+		defer answered()
+	}
+
 	g.upstream.Forward(w, forward)
 }
 
-// decide returns the request to forward (with what YorvoGate checked as its body), and what to do
-// once it's forwarded; or why not.
-func (g *Gate) decide(r *http.Request, entry *slog.Logger) (*http.Request, func(), error) {
-	forward, decision, err := g.decided(r, entry)
-	if decision == nil {
-		return forward, nil, err
-	}
-
-	return forward, decision.cleanup, err
-}
-
+// decided returns the request to forward (with what YorvoGate checked as its body) and, on a scoped
+// listener, the decision (what to do once it's forwarded); or why not.
 func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *scoped, error) {
 	lowest, highest := g.config.Versions()
 

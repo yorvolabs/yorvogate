@@ -268,6 +268,8 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	upstream := gate.NewUpstream(c, log)
 	servers := make([]*http.Server, 0, len(c.Listeners))
 	bound := []*gate.Sockets{}
+	// Token listeners' gates: each ends the requests of a scope whose allowance goes
+	tokens := []*gate.Gate{}
 	failed := make(chan error, len(c.Listeners))
 
 	stop := func() {
@@ -309,6 +311,10 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 			return fmt.Errorf("listener %s: %w", l.Name, err)
 		}
 
+		if l.Mode == config.Scoped {
+			tokens = append(tokens, g)
+		}
+
 		server := gate.NewServer(g)
 		servers = append(servers, server)
 
@@ -336,12 +342,12 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		case err := <-failed:
 			return err
 		case <-hup:
-			scan(registry, bound, reported, c, log)
+			scan(registry, bound, tokens, reported, c, log)
 		case <-ticker.C:
-			scan(registry, bound, reported, c, log)
+			scan(registry, bound, tokens, reported, c, log)
 		case <-registry.Requests():
 			// A scope-status request waits for a scope file just written or removed
-			scan(registry, bound, reported, c, log)
+			scan(registry, bound, tokens, reported, c, log)
 		}
 
 		for _, s := range bound {
@@ -354,15 +360,20 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	}
 }
 
-// scan reloads the scope files, brings each socket-bound listener's sockets in line with them, then
-// publishes the snapshot to the scope-status read. What fails is logged and tried again at the next
-// scan: one scope's socket doesn't stop the others'.
-func scan(registry *scope.Registry, bound []*gate.Sockets, reported map[string]string, c *config.Config, log *slog.Logger) {
+// scan reloads the scope files, ends token listeners' requests whose scope no longer allows them,
+// brings each socket-bound listener's sockets in line with the files, then publishes the snapshot to
+// the scope-status read. What fails is logged and tried again at the next scan: one scope's socket
+// doesn't stop the others'.
+func scan(registry *scope.Registry, bound []*gate.Sockets, tokens []*gate.Gate, reported map[string]string, c *config.Config, log *slog.Logger) {
 	if err := registry.Reload(); err != nil {
 		log.Error("scope files", "error", err)
 	}
 
 	report(c, registry, reported, log)
+
+	for _, g := range tokens {
+		g.Revoke()
+	}
 
 	for _, s := range bound {
 		if err := s.Scan(); err != nil {

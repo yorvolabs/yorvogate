@@ -2,10 +2,15 @@
 version: 1
 upstream: unix:///var/run/docker.sock
 
+# Each scope's last valid claims, kept across restarts: a folder only YorvoGate writes
+state_file: /var/lib/yorvogate/state.json
+
 listeners:
-  # The orchestrator's own operations: trusted (it's root-equivalent anyway).
+  # The orchestrator's own operations: trusted (it's root-equivalent anyway). On a unix socket only
+  # its group may connect to, never on a network address: anyone who reaches it controls Docker.
   - name: orchestrator
-    address: tcp://10.10.0.2:2375
+    address: unix:///run/yorvogate/orchestrator.sock
+    socket_group: "2000"   # the orchestrator's group; YorvoGate's user must be in it
     mode: trusted
     allow:
       system: read
@@ -18,5 +23,6 @@ listeners:
   # Each tenant's Compose runs: one scope per tenant, in /etc/yorvogate/scopes/<name>.json.
   - name: tenants
     address: unix:///run/yorvogate/tenants.sock
+    socket_group: "2001"   # the tenants' clients' group
     mode: scoped
     scopes: /etc/yorvogate/scopes

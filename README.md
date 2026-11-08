@@ -26,7 +26,7 @@ The image, `ghcr.io/yorvolabs/yorvogate`, for x86_64 and arm64: the static binar
 services:
   yorvogate:
     image: ghcr.io/yorvolabs/yorvogate:0.2.2   # better: by its digest, from the release notes
-    group_add: ["${DOCKER_GID}"]                # stat -c %g /var/run/docker.sock
+    group_add: ["${DOCKER_GID}", "2000", "2001"]  # Docker's socket's group (stat -c %g /var/run/docker.sock), and its sockets' groups
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -34,7 +34,14 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ./yorvogate.yaml:/etc/yorvogate/yorvogate.yaml:ro
       - ./scopes:/etc/yorvogate/scopes:ro
+      - /run/yorvogate:/run/yorvogate           # its sockets, for the host's clients
+      - yorvogate-state:/var/lib/yorvogate     # its state file
+
+volumes:
+  yorvogate-state:
 ```
+
+`/run/yorvogate` is a folder YorvoGate's user (65532) can write, on the host: `sudo install -d -o 65532 -g 65532 -m 0755 /run/yorvogate`.
 
 Or a binary from the [releases](https://github.com/yorvolabs/yorvogate/releases) (Linux, x86_64 and arm64), with `SHA256SUMS` and its signature. Each release also carries the JSON Schemas of its [configuration and scope file formats](docs/configuration.md#formats-and-versions) and the [AppArmor profile](docs/configuration.md#builders) for rootless BuildKit builders, covered by the same checksums.
 
@@ -60,17 +67,23 @@ The binaries are reproducible: built from the tag (`make dist VERSION=$version` 
 version: 1
 upstream: unix:///var/run/docker.sock
 
+state_file: /var/lib/yorvogate/state.json
+
 listeners:
   - name: orchestrator
-    address: tcp://10.10.0.2:2375
+    address: unix:///run/yorvogate/orchestrator.sock
+    socket_group: "2000"
     mode: trusted
     allow: {system: read, containers: write, exec: write, images: write, networks: write, volumes: write}
 
   - name: tenants
     address: unix:///run/yorvogate/tenants.sock
+    socket_group: "2001"
     mode: scoped
     scopes: /etc/yorvogate/scopes
 ```
+
+Each listener's socket is its group's only: the orchestrator's (2000) and the tenants' clients' (2001). A trusted listener with `write` is full control of Docker, so keep it on a unix socket, never a network address.
 
 A scope is a file in the scoped listener's folder, written by your orchestrator (`/etc/yorvogate/scopes/jane.json`):
 

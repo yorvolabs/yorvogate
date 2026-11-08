@@ -26,6 +26,7 @@ Each agent is a [scope](configuration.md#scope-files-scoped-listeners) of a scop
 ```yaml
 version: 1
 upstream: unix:///var/run/docker.sock
+state_file: /var/lib/yorvogate/state.json
 listeners:
   - name: agents
     scope_sockets: /run/yorvogate/agents   # ana.sock, bob.sock: one per scope file
@@ -91,6 +92,7 @@ An agent running as a user on the host reaches what its user may open. The socke
 ```yaml
 version: 1
 upstream: unix:///var/run/docker.sock
+state_file: /var/lib/yorvogate/state.json
 listeners:
   - name: agent-ana
     scope_sockets: /run/yorvogate/agent-ana   # only ana.sock in it
