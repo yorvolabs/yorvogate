@@ -61,7 +61,7 @@ cleanup() {
 		direct network ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker network rm >/dev/null 2>&1
 		direct volume ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker volume rm >/dev/null 2>&1
 	done
-	direct rmi ygc-jane/app:1 ygc-blog/app:1 >/dev/null 2>&1
+	direct rmi ygc-jane/app:1 ygc-blog/app:1 ygc-jane/hello:1 hello-world:linux >/dev/null 2>&1
 	direct rm -f ygc-builder-privileged ygc-builder-rootless >/dev/null 2>&1
 	[ -n "${gate:-}" ] && kill "$gate" 2>/dev/null
 }
@@ -211,6 +211,20 @@ if grep -q '"org.opencontainers.image.ref.name"' "$dir/archive/index.json"; then
 else
 	ko "docker save writes ref.name annotations in index.json" "$(cat "$dir/archive/index.json")"
 fi
+
+say "== Query parameters: only those YorvoGate lists"
+status "a parameter YorvoGate doesn't list" 403 jane GET "/v1.56/containers/json?yorvogate-unknown=1"
+# Docker refuses it too (403), so it's YorvoGate's message that tells
+answer=$(raw jane POST "/v1.56/containers/ygc-jane-app-1/start?checkpoint-dir=/tmp")
+if printf '%s' "$answer" | grep -q 'yorvogate: container.start: the parameter'; then ok "a checkpoint restored from a host path"; else ko "a checkpoint restored from a host path (not refused by YorvoGate)" "$answer"; fi
+# A shared image tagged into jane's namespace: deleting a platform's content through jane's name
+# would delete it from the shared image too, for every scope.
+direct pull -q hello-world:linux >/dev/null
+works "jane: tag a shared image into its namespace" as jane docker tag hello-world:linux ygc-jane/hello:1
+platform=$(printf '%%7B%%22os%%22%%3A%%22linux%%22%%2C%%22architecture%%22%%3A%%22%s%%22%%7D' "$(direct version -f '{{.Server.Arch}}')")
+status "jane: delete a platform's content through its own name" 403 jane DELETE "/v1.56/images/ygc-jane/hello:1?force=1&platforms=$platform"
+works "the shared image still runs" direct run --rm hello-world:linux
+works "jane: delete its own name" as jane docker rmi ygc-jane/hello:1
 
 say "== It sees only its own"
 if [ "$(as jane docker ps --format '{{.Names}}')" = "ygc-jane-app-1" ]; then ok "docker ps: its container only"; else ko "docker ps" "$(as jane docker ps --format '{{.Names}}')"; fi

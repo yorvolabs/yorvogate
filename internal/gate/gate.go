@@ -14,6 +14,7 @@ import (
 	"mime"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yorvolabs/yorvogate/internal/config"
@@ -39,6 +40,8 @@ type Gate struct {
 	loads    *loadLimiter
 	// A token listener's requests being answered, ended when their scope's allowance goes
 	streams streams
+	// The headers a scope sent that weren't forwarded, each warned of once
+	dropped sync.Map
 	log     *slog.Logger
 }
 
@@ -157,6 +160,11 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			return nil, nil, err
 		}
 
+		headers, dropped, err := forwarded(r.Header, req.Endpoint.Name)
+		if err != nil {
+			return nil, nil, err
+		}
+
 		body, err := g.readBody(r, req.Endpoint)
 		if err != nil {
 			return nil, nil, err
@@ -181,8 +189,15 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			return nil, decision, err
 		}
 
+		g.notForwarded(dropped)
+		if len(dropped) > 0 {
+			entry = entry.With("headers_not_forwarded", dropped)
+		}
+
 		entry.Info("allowed", "endpoint", req.Endpoint.Name)
-		out := withoutGateHeaders(r)
+		// The headers Docker gets are those listed, copied: none other goes (forwardedHeaders).
+		out := r.Clone(r.Context())
+		out.Header = headers
 		out.URL.Path, out.URL.RawPath = decision.path, ""
 		out.URL.RawQuery = decision.query.Encode()
 
@@ -300,6 +315,16 @@ func upgrading(r *http.Request) bool {
 	}
 
 	return false
+}
+
+// notForwarded warns, once for each name on this listener, of a header a scope sent that Docker
+// doesn't get: a proxy that adds one to every request is said once, not on each.
+func (g *Gate) notForwarded(names []string) {
+	for _, name := range names {
+		if _, seen := g.dropped.LoadOrStore(name, true); !seen {
+			g.log.Warn("a header scopes send isn't forwarded: Docker gets only the headers YorvoGate lists", "header", name)
+		}
+	}
 }
 
 // withoutGateHeaders drops YorvoGate's own headers: Docker never sees a scope's token.

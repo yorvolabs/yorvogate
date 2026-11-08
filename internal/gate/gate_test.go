@@ -361,6 +361,13 @@ const scopeFile = `{
 // gate serves one listener in front of the fake Docker.
 func gate(t testing.TB, d *docker, listener string) *httptest.Server {
 	t.Helper()
+
+	return gateLogging(t, d, listener, slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+// gateLogging is gate, logging to log.
+func gateLogging(t testing.TB, d *docker, listener string, log *slog.Logger) *httptest.Server {
+	t.Helper()
 	scopes := t.TempDir()
 	sum := sha256.Sum256([]byte(token))
 
@@ -415,7 +422,6 @@ listeners:
 		t.Fatal(err)
 	}
 
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	for _, l := range c.Listeners {
 		if l.Name == listener {
 			server := httptest.NewServer(New(c, l, NewUpstream(c, log), registry, log))

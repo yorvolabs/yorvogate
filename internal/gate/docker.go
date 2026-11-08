@@ -35,11 +35,15 @@ func NewDocker(socket string) *Docker {
 	}}
 }
 
+// resolvedID is an object's full ID (a volume's name), as Docker answered it to YorvoGate's own
+// lookup: what a checked request names its object by, never a name or prefix the client gave.
+type resolvedID string
+
 // object is what YorvoGate needs to know of a container, network or volume: its full ID or name,
 // and its labels. A container's whole inspection comes with it (a builder's configuration is
 // checked on each use).
 type object struct {
-	ID     string
+	ID     resolvedID
 	Name   string
 	Labels map[string]string
 
@@ -65,7 +69,7 @@ func (d *Docker) Container(ctx context.Context, version, id string) (*object, er
 		labels = answer.Config.Labels
 	}
 
-	return &object{ID: answer.ID, Name: strings.TrimPrefix(answer.Name, "/"), Labels: labels, inspection: &answer}, nil
+	return &object{ID: resolvedID(answer.ID), Name: strings.TrimPrefix(answer.Name, "/"), Labels: labels, inspection: &answer}, nil
 }
 
 // Network looks a network up by ID or name; nil when there's none.
@@ -81,7 +85,7 @@ func (d *Docker) Network(ctx context.Context, version, id string) (*object, erro
 		return nil, err
 	}
 
-	return &object{ID: answer.ID, Name: answer.Name, Labels: answer.Labels}, nil
+	return &object{ID: resolvedID(answer.ID), Name: answer.Name, Labels: answer.Labels}, nil
 }
 
 // Volume looks a volume up by name; nil when there's none.
@@ -98,7 +102,7 @@ func (d *Docker) Volume(ctx context.Context, version, name string) (*object, err
 		return nil, err
 	}
 
-	return &object{ID: answer.Name, Name: answer.Name, Labels: answer.Labels, Driver: answer.Driver, Options: answer.Options}, nil
+	return &object{ID: resolvedID(answer.Name), Name: answer.Name, Labels: answer.Labels, Driver: answer.Driver, Options: answer.Options}, nil
 }
 
 // image is what YorvoGate needs to know of an image: its ID and names.

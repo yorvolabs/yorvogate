@@ -170,7 +170,7 @@ func TestImages(t *testing.T) {
 		{"GET", "/v1.56/images/" + leftover + "/json", "No such image"},
 		{"GET", "/v1.56/images/docker.io/quire-sites/blog/php-prod/json", "No such image"},
 		{"POST", "/v1.56/images/create?fromImage=quire-sites/blog/php-prod", "isn't its own"},
-		{"POST", "/v1.56/images/create?fromSrc=http://evil.example/rootfs.tar&repo=quire-sites/jane/x", "importing (fromSrc) isn't allowed"},
+		{"POST", "/v1.56/images/create?fromSrc=http://evil.example/rootfs.tar", "importing (fromSrc) isn't allowed"},
 		{"POST", "/v1.56/images/alpine:3.22/tag?repo=postgres&tag=18-alpine", "isn't in one of scope jane's image namespaces"},
 		{"POST", "/v1.56/images/quire-sites/blog/php-prod/tag?repo=quire-sites/jane/stolen", "No such image"},
 		{"DELETE", "/v1.56/images/alpine:3.22", "isn't in one of scope jane's image namespaces"},

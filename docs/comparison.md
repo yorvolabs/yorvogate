@@ -24,13 +24,12 @@ Each tool is described as its own README describes it, checked on 8 November 202
 ## What YorvoGate does differently
 
 - **What Docker gets is what was checked.** Every body YorvoGate allows is decoded into the Docker Engine's own API types and then re-encoded, and the re-encoded value is what's forwarded. Duplicate keys, a key's case, `Content-Length: 0` or a form body can't make Docker read a request other than the one YorvoGate decided on ([threat model](threat-model.md), point 4). This is the class of flaw that bypassed Docker's AuthZ plugins in [CVE-2024-41110](https://github.com/moby/moby/security/advisories/GHSA-v23v-6jw2-98fq): the plugin was asked about a request without its body, and Docker then acted on the body. A gate that checks a request and then forwards the client's own bytes has to read them exactly as Docker will. One that forwards what it checked doesn't. None of the tools above documents forwarding the checked value.
-- **Allowlist, not denylist.** A field YorvoGate doesn't know is refused, so a field a newer Docker adds stays closed until YorvoGate is updated for it. A gate that looks only at the fields it knows to be dangerous lets new ones through.
+- **Allowlist, not denylist.** A field YorvoGate doesn't know is refused, so a field a newer Docker adds stays closed until YorvoGate is updated for it. Query parameters are too, per endpoint, and Docker gets only the headers YorvoGate lists. A gate that looks only at the fields it knows to be dangerous lets new ones through.
 - **Many scopes on one gate.** Each request is one scope's, by its token or the socket it comes on. Scopes' names, labels, image namespaces and builders are decided together over every scoped listener on the same Docker, so names that nest (`jane`, `jane-blog`) stay apart across listeners too. The owner-label tools above keep one owner per proxy instance.
 - **Image names are owned.** A scope writes image names only in its own namespaces, and reads none in another's protected ones, so it can't retag what other scopes' containers run next.
 
 ## What YorvoGate doesn't do (yet)
 
 - **TLS** on its listeners: a token on a TCP listener travels in cleartext, so use unix sockets or a private network (0.3).
-- **Query parameters and headers** are passed on unchecked unless an endpoint's rule reads them; making them default-deny is planned (0.3).
 - **Podman, Swarm, image signatures, rate limits and read redaction**, which CodesWhat's sockguard covers.
 - **`docker build` on Docker's own builder.** A scope builds on a rootless BuildKit builder of its own ([builders](configuration.md#builders)).

@@ -103,6 +103,22 @@ A container's configuration is read field by field with Docker's own types: each
 
 Another scope's objects are answered as Docker answers objects that don't exist. A request names its object by the full ID YorvoGate checked, so what Docker acts on is what was checked.
 
+### Query parameters and headers
+
+**Query parameters: an allow-list, and an unlisted one is refused.** Each endpoint a scope may use forwards the query parameters Docker reads for it, and refuses any other, so a parameter a newer Docker adds stays closed until YorvoGate lists it. Most parameters are Docker's to read (a log's `tail`, a stop's `t`, a `platform`); the rule reads the rest (a create's `name`, a list's `filters`, a pull's `fromImage`). A parameter given twice is refused, except `names` on `image.save-many`. Some parameters Docker reads are refused outright:
+
+| Endpoint | Refused | Why |
+|---|---|---|
+| containers: start | `checkpoint`, `checkpoint-dir` | Restoring a checkpoint; `checkpoint-dir` names a folder on the host |
+| containers: delete | `link` | It removes a legacy link by name, not the container checked |
+| images: delete | `platforms` | Docker deletes a platform's content from every image that has it, other scopes' too |
+| images: pull | `fromSrc`, `repo`, `message`, `changes` | An import's |
+| images: list | `filter` | The filter of API versions before 1.25 |
+
+A pull's `platform` isn't checked yet: until 0.3-d, a scope may pull another platform of a shared name.
+
+**Headers: an allow-list, and an unlisted one isn't forwarded.** Docker gets only the headers it reads that YorvoGate lists, copied from the request: `User-Agent`, `Accept`, `Accept-Encoding`, `traceparent`, `tracestate` and `baggage` everywhere, `X-Registry-Auth` on a pull and a distribution inspect only, `Upgrade` and `Connection` on attach and exec start only. Any other header (a proxy's `Via` or `X-Forwarded-For`, a client's `X-Request-Id`) is left out, without refusing the request, and named in the decision's log line (`headers_not_forwarded`); the first time each name is seen on a listener, it's also a warning. A listed header given twice, under any spelling of its name, or longer than its limit is refused. `Content-Type` is YorvoGate's own, from what it forwards. A trusted listener forwards the client's headers as they come, YorvoGate's own aside.
+
 ## Endpoint groups (trusted listeners)
 
 `read` allows a group's endpoints that change nothing; `write` allows all of them.
@@ -280,4 +296,4 @@ Run `yorvogate check` with the new version on your configuration and scope folde
 
 ## Logs
 
-One JSON line per decision on standard error: `listener`, `method`, `path`, `scope` (scoped listeners), `endpoint`, and for a refusal its `status` and `reason`.
+One JSON line per decision on standard error: `listener`, `method`, `path`, `scope` (scoped listeners), `endpoint`, the headers that weren't forwarded (`headers_not_forwarded`, names only), and for a refusal its `status` and `reason`.

@@ -52,150 +52,135 @@ type scoped struct {
 	answer func([]byte) ([]byte, error)
 }
 
-// container endpoints that act on one container and take no body: allowed on the scope's own
-var onOwnContainer = map[string]bool{
-	"container.inspect": true, "container.top": true, "container.logs": true, "container.changes": true,
-	"container.export": true, "container.stats": true, "container.resize": true, "container.start": true,
-	"container.stop": true, "container.restart": true, "container.kill": true, "container.pause": true,
-	"container.unpause": true, "container.attach": true, "container.attach-websocket": true,
-	"container.wait": true, "container.delete": true, "container.archive-info": true, "container.archive-get": true,
-}
-
 // decide returns the body to forward (nil for none, or a stream forwarded as it comes).
 func (s *scoped) decide(body []byte) ([]byte, error) {
 	name := s.req.Endpoint.Name
 
-	if !s.req.Endpoint.Stream && !takesBody[name] && len(body) > 0 {
+	d, ok := forScopes[name]
+	if !ok {
+		return nil, refuse(http.StatusForbidden, "%s isn't allowed for scope %s", name, s.scope.Name)
+	}
+
+	if !s.req.Endpoint.Stream && !d.body && len(body) > 0 {
 		return nil, refuse(http.StatusBadRequest, "%s has no body", name)
 	}
 
-	// Docker reads the first of a repeated parameter; a check could read another.
-	for key, values := range s.query {
-		if len(values) > 1 && !(name == "image.save-many" && key == "names") {
-			return nil, refuse(http.StatusBadRequest, "the parameter %q is given more than once", key)
+	if err := d.parameters(name, s.query); err != nil {
+		return nil, err
+	}
+
+	return d.rule(s, body)
+}
+
+// onOwnContainer allows what acts on one of the scope's containers and takes no body; on a builder,
+// only its inspection.
+func (s *scoped) onOwnContainer() error {
+	builder, err := s.container()
+	if err == nil && builder && s.req.Endpoint.Name != "container.inspect" {
+		return s.notOnBuilder()
+	}
+
+	return err
+}
+
+func (s *scoped) updateOwnContainer(body []byte) ([]byte, error) {
+	if err := s.ownContainer(); err != nil {
+		return nil, err
+	}
+
+	return s.updateContainer(body)
+}
+
+func (s *scoped) rename() error {
+	if err := s.ownContainer(); err != nil {
+		return err
+	}
+
+	if to := s.single("name"); !s.scope.Names(to) {
+		return refuse(http.StatusForbidden, "container.rename: the name %q isn't one of scope %s's", to, s.scope.Name)
+	}
+
+	return nil
+}
+
+// createExecIn checks an exec: in a builder, only its dial-stdio.
+func (s *scoped) createExecIn(body []byte) ([]byte, error) {
+	builder, err := s.container()
+	if err != nil {
+		return nil, err
+	}
+
+	if builder {
+		return s.createDialStdio(body)
+	}
+
+	return s.createExec(body)
+}
+
+func (s *scoped) startOwnExec(body []byte) ([]byte, error) {
+	if err := s.exec(); err != nil {
+		return nil, err
+	}
+
+	return s.startExec(body)
+}
+
+func (s *scoped) inspectNetwork() error {
+	_, err := s.network()
+	s.answer = s.sharedContainers
+
+	return err
+}
+
+func (s *scoped) listImages() error {
+	s.answer = s.images
+
+	return nil
+}
+
+// inspectImage and imageHistory: another scope's image holds its code, and its configuration its
+// environment.
+func (s *scoped) inspectImage() error {
+	s.answer = s.imageNames
+
+	return s.readsImage(s.req.Params["name"])
+}
+
+func (s *scoped) imageHistory() error {
+	s.answer = s.history
+
+	return s.readsImage(s.req.Params["name"])
+}
+
+func (s *scoped) saveImage() error {
+	return s.readsImage(s.req.Params["name"])
+}
+
+func (s *scoped) saveMany() error {
+	for _, n := range s.query["names"] {
+		if err := s.readsImage(n); err != nil {
+			return err
 		}
 	}
 
-	switch {
-	case name == "system.ping" || name == "system.version" || name == "system.info":
-		return nil, nil
-	case name == "container.list" || name == "container.prune" || name == "network.list" || name == "volume.list":
-		return nil, s.ownOnly()
-	case name == "network.inspect":
-		_, err := s.network()
-		s.answer = s.sharedContainers
+	return nil
+}
 
-		return nil, err
-	case name == "network.create":
-		return s.createNetwork(body)
-	case name == "network.delete":
-		return nil, s.ownNetwork()
-	case name == "network.prune" || name == "volume.prune":
-		return nil, s.ownOnly()
-	case name == "volume.inspect" || name == "volume.delete":
-		return nil, s.volume()
-	case name == "volume.create":
-		return s.createVolume(body)
-	case name == "image.create":
-		return nil, s.pull()
-	case name == "image.tag":
-		return nil, s.tag()
-	case name == "image.delete":
-		return nil, s.ownsImageName(s.req.Params["name"], "image.delete")
-	case name == "image.save":
-		return nil, s.readsImage(s.req.Params["name"])
-	case name == "image.save-many":
-		for _, n := range s.query["names"] {
-			if err := s.readsImage(n); err != nil {
-				return nil, err
-			}
-		}
+func (s *scoped) deleteImage() error {
+	return s.ownsImageName(s.req.Params["name"], "image.delete")
+}
 
-		return nil, nil
-	case name == "image.search":
-		return nil, nil
-	case name == "image.load":
-		return nil, s.load()
-	case name == "distribution.inspect":
-		if err := s.image(s.req.Params["name"]); err != nil {
-			return nil, refuse(http.StatusNotFound, "No such image: %s", s.req.Params["name"])
-		}
-
-		return nil, nil
-	case name == "container.create":
-		return s.createContainer(body)
-	case onOwnContainer[name] || name == "container.archive-put":
-		builder, err := s.container()
-		if err == nil && builder && name != "container.inspect" {
-			return nil, s.notOnBuilder()
-		}
-
-		return nil, err
-	case name == "container.update":
-		if err := s.ownContainer(); err != nil {
-			return nil, err
-		}
-
-		return s.updateContainer(body)
-	case name == "container.rename":
-		if err := s.ownContainer(); err != nil {
-			return nil, err
-		}
-
-		if to := s.single("name"); !s.scope.Names(to) {
-			return nil, refuse(http.StatusForbidden, "container.rename: the name %q isn't one of scope %s's", to, s.scope.Name)
-		}
-
-		return nil, nil
-	case name == "exec.create":
-		builder, err := s.container()
-		if err != nil {
-			return nil, err
-		}
-
-		if builder {
-			return s.createDialStdio(body)
-		}
-
-		return s.createExec(body)
-	case name == "exec.start":
-		if err := s.exec(); err != nil {
-			return nil, err
-		}
-
-		return s.startExec(body)
-	case name == "exec.resize" || name == "exec.inspect":
-		return nil, s.exec()
-	case name == "image.list":
-		s.answer = s.images
-
-		return nil, nil
-	case name == "image.inspect" || name == "image.history":
-		// Another scope's image holds its code, and its configuration its environment.
-		s.answer = s.imageNames
-		if name == "image.history" {
-			s.answer = s.history
-		}
-
-		return nil, s.readsImage(s.req.Params["name"])
-	case name == "network.connect":
-		return s.connect(body)
-	case name == "network.disconnect":
-		return s.disconnect(body)
+func (s *scoped) distribution() error {
+	if err := s.image(s.req.Params["name"]); err != nil {
+		return refuse(http.StatusNotFound, "No such image: %s", s.req.Params["name"])
 	}
 
-	return nil, refuse(http.StatusForbidden, "%s isn't allowed for scope %s", name, s.scope.Name)
+	return nil
 }
 
 // The streams whose body is an archive: one YorvoGate reads (image.load), or one that goes into the
 // scope's own container as it comes (container.archive-put). Docker gets them as application/x-tar.
 var sendsArchive = map[string]bool{"image.load": true, "container.archive-put": true}
-
-// The endpoints whose body YorvoGate reads (a JSON value); any other has none.
-var takesBody = map[string]bool{
-	"container.create": true, "container.update": true, "exec.create": true, "exec.start": true,
-	"network.connect": true, "network.disconnect": true, "network.create": true, "volume.create": true,
-}
 
 // container checks that the container the path names is the scope's (by its label) or one of its
 // builders, and names it by its full ID. Another scope's container is answered as Docker answers one
@@ -296,7 +281,7 @@ func (s *scoped) connect(body []byte) ([]byte, error) {
 		return nil, refuse(http.StatusNotFound, "No such container: %s", req.Container)
 	}
 
-	req.Container = c.ID
+	req.Container = string(c.ID)
 
 	var problems []string
 	s.endpoint(name, req.EndpointConfig, func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) })
@@ -327,7 +312,7 @@ func (s *scoped) disconnect(body []byte) ([]byte, error) {
 		return nil, refuse(http.StatusNotFound, "No such container: %s", req.Container)
 	}
 
-	req.Container = c.ID
+	req.Container = string(c.ID)
 
 	return json.Marshal(req)
 }
@@ -368,7 +353,7 @@ func (s *scoped) volume() error {
 		return refuse(http.StatusNotFound, "get %s: no such volume", name)
 	}
 
-	s.with("name", v.Name)
+	s.with("name", v.ID)
 
 	return nil
 }
@@ -421,7 +406,7 @@ func (s *scoped) single(name string) string {
 }
 
 // with names the object of the path by what was checked.
-func (s *scoped) with(param, value string) {
-	s.req.Params[param] = value
-	s.path = "/v" + s.version + strings.NewReplacer("{"+param+"}", url.PathEscape(value)).Replace(s.req.Endpoint.Pattern)
+func (s *scoped) with(param string, id resolvedID) {
+	s.req.Params[param] = string(id)
+	s.path = "/v" + s.version + strings.NewReplacer("{"+param+"}", url.PathEscape(string(id))).Replace(s.req.Endpoint.Pattern)
 }
