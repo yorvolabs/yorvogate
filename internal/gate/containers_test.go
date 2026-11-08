@@ -439,6 +439,27 @@ func TestItReadsImagesButNotAnotherScopes(t *testing.T) {
 	}
 }
 
+// A container runs an image the scope may read, by whatever name: never one all of whose names are
+// another's, by its ID or by as few digits of it as Docker takes, nor a nameless leftover.
+func TestAContainerRunsOnlyAnImageItMayRead(t *testing.T) {
+	d := startDocker(t)
+	server := gate(t, d, "sites")
+
+	for _, image := range []string{"sha256:" + strings.Repeat("3", 64), strings.Repeat("3", 64), "3333", "sha256:333333", "sha256:" + strings.Repeat("4", 64), "4444", "quire-sites/jane/nothing", "alpine:9"} {
+		before := d.count()
+		if status, answer := send(t, server, "POST", "/v1.56/containers/create?name=jane-php-1", encode(set(compose(), "Image", image)), asJane); status != http.StatusNotFound || !strings.Contains(message(t, answer), "No such image") || d.count() != before {
+			t.Errorf("%s: %d %s", image, status, answer)
+		}
+	}
+
+	// Its own, a shared one (also tagged by another scope), by name or ID
+	for _, image := range []string{"quire-sites/jane/php-prod", "2222", "alpine:3.22", "sha256:" + strings.Repeat("1", 64), "busybox:1", "5555"} {
+		if status, answer := send(t, server, "POST", "/v1.56/containers/create?name=jane-php-1", encode(set(compose(), "Image", image)), asJane); status != http.StatusOK {
+			t.Errorf("%s: %d %s", image, status, answer)
+		}
+	}
+}
+
 func TestItSeesItsOwnNetworksAndVolumes(t *testing.T) {
 	d := startDocker(t)
 	server := gate(t, d, "sites")

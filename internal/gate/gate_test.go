@@ -123,6 +123,7 @@ var (
 	}
 
 	inspection   = regexp.MustCompile(`^/v[0-9.]+/(containers|networks|volumes|exec)/([^/]+)(/json)?$`)
+	shortID      = regexp.MustCompile(`^(sha256:)?[0-9a-f]{4,64}$`)
 	imageLookup  = regexp.MustCompile(`^/v[0-9.]+/images/(.+)/json$`)
 	imageHistory = regexp.MustCompile(`^/v[0-9.]+/images/(.+)/history$`)
 )
@@ -150,7 +151,8 @@ func findImage(ref string) *fakeImage {
 			return img
 		}
 
-		if img.id == ref || strings.TrimPrefix(img.id, "sha256:")[:12] == strings.TrimPrefix(ref, "sha256:") {
+		// By its ID, or (as Docker takes one) as few as 4 of its digits
+		if img.id == ref || shortID.MatchString(ref) && strings.HasPrefix(strings.TrimPrefix(img.id, "sha256:"), strings.TrimPrefix(ref, "sha256:")) {
 			return img
 		}
 

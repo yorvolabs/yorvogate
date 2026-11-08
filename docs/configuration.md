@@ -82,7 +82,7 @@ A container's configuration is read field by field with Docker's own types: each
 | Endpoints | Allowed |
 |---|---|
 | `_ping`, `version`, `info` | Yes |
-| Containers: create | With the rules above; its name starts with a prefix of its scope, it carries the owner label |
+| Containers: create | With the rules above; its name starts with a prefix of its scope, it carries the owner label; its image is one it may read, as for an inspect, by name or ID |
 | Containers: inspect, logs, stats, start, stop, kill, wait, attach, archive, delete, rename… | Its own only (by the owner label); a rename keeps a name of its own. Its builders: inspect only |
 | Exec: create, start | In its own containers, never privileged. In its builders, only `buildctl dial-stdio` (no resize, no inspect) |
 | Containers: update | New limits, checked as at create |
