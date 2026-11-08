@@ -160,3 +160,32 @@ func keys(t reflect.Type, format string) []string {
 
 	return all
 }
+
+// The AppArmor profile the docs show is the one the release ships (examples/apparmor), its
+// comments aside.
+func TestTheDocsShowTheShippedAppArmorProfile(t *testing.T) {
+	doc, err := os.ReadFile("../../docs/configuration.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shipped, err := os.ReadFile("../../examples/apparmor/yorvogate-buildkit-rootless")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var profile []string
+
+	for _, line := range strings.Split(string(shipped), "\n") {
+		if !strings.HasPrefix(line, "#") {
+			profile = append(profile, line)
+		}
+	}
+
+	want := strings.TrimSpace(strings.Join(profile, "\n"))
+	shown := regexp.MustCompile("(?ms)^```\n(abi .*?)^```").FindStringSubmatch(string(doc))
+
+	if shown == nil || strings.TrimSpace(shown[1]) != want {
+		t.Errorf("docs/configuration.md shows a profile other than examples/apparmor/yorvogate-buildkit-rootless:\n%v\nwant:\n%s", shown, want)
+	}
+}

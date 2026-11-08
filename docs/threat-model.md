@@ -22,6 +22,10 @@ What YorvoGate holds, so you can tell a vulnerability from a limit, and set it u
 
 **Names are owned.** Docker names images globally: a scope that retags or loads an image as `postgres:18` would change what every other container that names it runs next. So a scope writes image names (tag, load, delete) only in its own namespaces, and reads none in another's protected namespace.
 
+## Compared with other gates
+
+A gate that checks a request and then forwards the client's own bytes holds only if it reads them exactly as Docker will; CVE-2024-41110 is Docker's AuthZ plugins failing that. YorvoGate forwards the value it checked (point 4 above), so it doesn't depend on reading as Docker does. [How YorvoGate compares](comparison.md) sets this, and the rest, against the other proxies and AuthZ plugins.
+
 ## Out of scope
 
 - A flaw in Docker, runc or the kernel, and what runs inside an allowed container.
