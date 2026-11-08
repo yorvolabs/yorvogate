@@ -27,6 +27,7 @@ What YorvoGate holds, so you can tell a vulnerability from a limit, and set it u
 - A flaw in Docker, runc or the kernel, and what runs inside an allowed container.
 - A flaw in BuildKit, reached through a builder's `buildctl dial-stdio` (it runs rootless and unprivileged, which limits what one can do).
 - Anyone who can reach Docker's socket directly, or write the configuration or scope files.
+- A client of a trusted listener reading [scope status](configuration.md#scope-status): it learns which scopes exist and whether each is in effect. A trusted client is root-equivalent anyway; scoped listeners and scope sockets never answer it.
 - Anyone who can write YorvoGate's [state file](configuration.md#the-state-file): they can keep names from scopes (deny service), never give a scope more than its own file.
 - Anyone who can open a scope's socket: they are that scope. Keep the `scope_sockets` folder out of clients' reach, and give each client only its own socket.
 - Resource use through allowed requests (how many containers a scope creates, how much it pulls).

@@ -108,6 +108,10 @@ listeners:
     address: tcp://127.0.0.1:2377
     mode: scoped
     scopes: $dir/nested
+  - name: orchestrator
+    address: tcp://127.0.0.1:2380
+    mode: trusted
+    allow: {system: read}
 EOF
 if [ "$listener" = sockets ]; then
 	cat >> "$dir/yorvogate.yaml" <<EOF
@@ -290,6 +294,30 @@ printf '%s\n' "$nested" > "$dir/nested/jane-blog.json"
 kill -HUP "$gate"
 sleep 1
 
+say "== Scope status (the orchestrator waits on a fact)"
+# scopestatus PORT PATH: YorvoGate's answer, as raw HTTP (kept open while it waits and answers)
+scopestatus() {
+	{ printf 'GET %s HTTP/1.1\r\nHost: yorvogate\r\nConnection: close\r\n\r\n' "$2"; sleep 3; } | nc 127.0.0.1 "$1"
+}
+rewritten='{"version":1,'"${nested#\{}"
+printf '%s\n' "$rewritten" > "$dir/nested/jane-blog.json.new"
+mv "$dir/nested/jane-blog.json.new" "$dir/nested/jane-blog.json"
+sum=$(sha256sum "$dir/nested/jane-blog.json" | cut -d' ' -f1)
+answer=$(scopestatus 2380 "/_yorvogate/v1/scopes/jane-blog?listener=nested&sha256=$sum")
+if printf '%s' "$answer" | grep -q '"state":"loaded"' && printf '%s' "$answer" | grep -q "\"file_sha256\":\"$sum\"" && printf '%s' "$answer" | grep -q '"matched":true'; then
+	ok "a file just written: loaded, by its SHA-256"
+else
+	ko "a file just written: loaded, by its SHA-256" "$answer"
+fi
+mv "$dir/nested/jane-blog.json" "$dir/jane-blog.json.away"
+answer=$(scopestatus 2380 "/_yorvogate/v1/scopes/jane-blog?listener=nested&absent")
+if printf '%s' "$answer" | grep -q '"state":"unknown"' && printf '%s' "$answer" | grep -q '"matched":true'; then ok "a file just removed: unknown"; else ko "a file just removed: unknown" "$answer"; fi
+mv "$dir/jane-blog.json.away" "$dir/nested/jane-blog.json"
+answer=$(scopestatus 2376 "/_yorvogate/v1/scopes/jane-blog?listener=nested")
+if printf '%s' "$answer" | grep -q "a trusted listener's only"; then ok "a scoped listener doesn't answer it"; else ko "a scoped listener doesn't answer it" "$answer"; fi
+kill -HUP "$gate"
+sleep 1
+
 say "== Nothing was left behind"
 if [ "$(direct ps -aq --filter label=com.docker.compose.project=ygc-jane | wc -l)" = 1 ]; then ok "jane has its one container"; else ko "jane's containers" "$(direct ps -a --filter label=com.docker.compose.project=ygc-jane --format '{{.Names}}')"; fi
 if direct image inspect alpine:yorvogate-hijack >/dev/null 2>&1; then ko "a shared name was retagged"; else ok "no shared name retagged"; fi
@@ -312,7 +340,7 @@ fi
 say "== A Docker newer than the gate"
 # A gate that accepts at most API 1.50, in front of a Docker with a newer one: the CLI negotiates the
 # version the gate advertises, and works. Without the clamp it would ask for Docker's and be refused.
-sed -e 's|^upstream: .*|&\napi: {max: "1.50"}|' -e 's|127.0.0.1:2376|127.0.0.1:2386|' -e 's|127.0.0.1:2377|127.0.0.1:2387|' \
+sed -e 's|^upstream: .*|&\napi: {max: "1.50"}|' -e 's|127.0.0.1:2376|127.0.0.1:2386|' -e 's|127.0.0.1:2377|127.0.0.1:2387|' -e 's|127.0.0.1:2380|127.0.0.1:2390|' \
 	-e "s|scope_sockets: $dir/sockets|scope_sockets: $dir/sockets-old|" "$dir/yorvogate.yaml" > "$dir/yorvogate-old.yaml"
 mkdir -p "$dir/sockets-old"
 "$yorvogate" serve --config "$dir/yorvogate-old.yaml" 2> "$dir/yorvogate-old.log" &

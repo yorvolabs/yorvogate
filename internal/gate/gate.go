@@ -56,9 +56,8 @@ func Registry(c *config.Config) *scope.Registry {
 
 // New makes the handler of a listener; a scoped one's scopes are the registry's.
 func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.Registry, log *slog.Logger) *Gate {
-	g := &Gate{config: c, listener: l, upstream: upstream, log: log.With("listener", l.Name)}
+	g := &Gate{config: c, listener: l, upstream: upstream, registry: scopes, log: log.With("listener", l.Name)}
 	if l.Mode == config.Scoped {
-		g.registry = scopes
 		g.scopes = scopes.Store(l.Name)
 		g.docker = NewDocker(c.UpstreamSocket())
 		g.loads = newLoadLimiter()
@@ -82,6 +81,12 @@ func refuse(status int, format string, args ...any) *refusal {
 // ServeHTTP decides on a request, and forwards it if it's allowed.
 func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	entry := g.log.With("method", r.Method, "path", r.URL.EscapedPath())
+
+	if strings.HasPrefix(r.URL.EscapedPath(), "/_yorvogate/") {
+		g.own(w, r, entry)
+
+		return
+	}
 
 	forward, done, err := g.decide(r, entry)
 	if done != nil {

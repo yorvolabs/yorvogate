@@ -208,9 +208,31 @@ On a listener with an address, a client sends its scope with each request. With 
 {"HttpHeaders": {"X-YorvoGate-Scope": "jane", "X-YorvoGate-Token": "<the token>"}}
 ```
 
+## Scope status
+
+An orchestrator that writes or removes a scope file can ask YorvoGate when it's in effect, rather than sleep and hope. A trusted listener answers (a scoped listener or a scope's socket never does):
+
+```
+GET /_yorvogate/v1/scopes/<name>?listener=<scoped listener>
+GET /_yorvogate/v1/scopes/<name>?listener=<scoped listener>&sha256=<the file's SHA-256>
+GET /_yorvogate/v1/scopes/<name>?listener=<scoped listener>&absent
+```
+
+`listener` may be left out where there is one scoped listener. The answer ([schema](../schemas/yorvogate-scope-status.v1.schema.json), published with each release):
+
+```
+{"version": 1, "generation": 12, "listener": "sites", "scope": "jane", "file_sha256": "…", "state": "loaded", "matched": true}
+```
+
+- `state`: `loaded` (in effect; on a listener with scope sockets, its socket is open), `refused` (its file isn't valid, or collides, and it holds no claims), `reserved` (refused, but the claims it last had while valid are held for it) or `unknown` (no file). `reason` says why it's refused or reserved.
+- `file_sha256`: the SHA-256 of the scope file the state is about, a refused one included.
+- With `sha256`, the request waits (10 seconds at most) until that listener's scope file is the one with that SHA-256, whatever its state: write the file (by renaming a complete one over it), then ask with its SHA-256, and the answer is about that file and no older one. With `absent`, it waits until the scope has no file (`unknown`). YorvoGate scans the folders at once for such a request, rather than at its next scan.
+- A wait that ends without what it waited for answers **408** with `"matched": false` and the state as it is: treat it as a failure, never as the state you waited for. A match answers 200 with `"matched": true`.
+- `generation` counts the snapshots of the scope files since the start: it's for information, not proof that a write is in one.
+
 ## Formats and versions
 
-The configuration and the scope files each say their format: `version: 1` (YAML) and `"version": 1` (JSON). YorvoGate refuses a version it doesn't read, so a file written for a newer format fails at once, saying so, instead of being half-understood. Each format has a JSON Schema, published with every release (`yorvogate-config.v1.schema.json`, `yorvogate-scope.v1.schema.json`) and kept in [`schemas/`](../schemas): an orchestrator can check what it writes before YorvoGate reads it.
+The configuration and the scope files each say their format: `version: 1` (YAML) and `"version": 1` (JSON). YorvoGate refuses a version it doesn't read, so a file written for a newer format fails at once, saying so, instead of being half-understood. Each format has a JSON Schema, published with every release (`yorvogate-config.v1.schema.json`, `yorvogate-scope.v1.schema.json`, and `yorvogate-scope-status.v1.schema.json` for the [scope status](#scope-status) answer) and kept in [`schemas/`](../schemas): an orchestrator can check what it writes before YorvoGate reads it.
 
 - Before 1.0, a change that breaks a format ships only in a minor release (0.4, 0.5), never in a patch release (0.3.1).
 - An old format keeps working for at least one minor release after its successor, with a warning from `yorvogate check` and in the logs.

@@ -186,15 +186,30 @@ func (s *Store) Scopes() ([]string, map[string]error, error) {
 	return names, invalid, nil
 }
 
-func read(path string, info os.FileInfo, tokenless bool) (*Scope, error) {
-	// Only a plain file that no one but its owner can change: a link could point anywhere.
-	if !info.Mode().IsRegular() || info.Mode().Perm()&0o022 != 0 {
-		return nil, fmt.Errorf("scope file %s: must be a plain file, writable by its owner only", path)
+// read reads a scope file, and the SHA-256 (hex) of what it read ("" for what isn't a plain file).
+func read(path string, info os.FileInfo, tokenless bool) (*Scope, string, error) {
+	// Only a plain file: a link could point anywhere.
+	if !info.Mode().IsRegular() {
+		return nil, "", fmt.Errorf("scope file %s: must be a plain file, writable by its owner only", path)
 	}
 
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, "", err
+	}
+
+	sum := sha256.Sum256(content)
+	digest := hex.EncodeToString(sum[:])
+
+	scope, err := parse(path, content, info, tokenless)
+
+	return scope, digest, err
+}
+
+func parse(path string, content []byte, info os.FileInfo, tokenless bool) (*Scope, error) {
+	// Only a file that no one but its owner can change
+	if info.Mode().Perm()&0o022 != 0 {
+		return nil, fmt.Errorf("scope file %s: must be a plain file, writable by its owner only", path)
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(content))

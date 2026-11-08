@@ -323,6 +323,9 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		log.Info("listening", "listener", l.Name, "mode", l.Mode, "address", l.Address)
 	}
 
+	// Every listener is up, its scopes' sockets open: what the scope-status read answers from
+	registry.Publish()
+
 	ticker := time.NewTicker(scanInterval)
 	defer ticker.Stop()
 
@@ -336,6 +339,9 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 			scan(registry, bound, reported, c, log)
 		case <-ticker.C:
 			scan(registry, bound, reported, c, log)
+		case <-registry.Requests():
+			// A scope-status request waits for a scope file just written or removed
+			scan(registry, bound, reported, c, log)
 		}
 
 		for _, s := range bound {
@@ -348,8 +354,9 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	}
 }
 
-// scan reloads the scope files, and brings each socket-bound listener's sockets in line with them.
-// What fails is logged and tried again at the next scan: one scope's socket doesn't stop the others'.
+// scan reloads the scope files, brings each socket-bound listener's sockets in line with them, then
+// publishes the snapshot to the scope-status read. What fails is logged and tried again at the next
+// scan: one scope's socket doesn't stop the others'.
 func scan(registry *scope.Registry, bound []*gate.Sockets, reported map[string]string, c *config.Config, log *slog.Logger) {
 	if err := registry.Reload(); err != nil {
 		log.Error("scope files", "error", err)
@@ -362,6 +369,8 @@ func scan(registry *scope.Registry, bound []*gate.Sockets, reported map[string]s
 			log.Error("scope sockets", "error", err)
 		}
 	}
+
+	registry.Publish()
 }
 
 // report logs, once each, what the last reload refused on token listeners (socket-bound listeners

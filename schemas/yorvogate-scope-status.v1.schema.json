@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yorvolabs/yorvogate/schemas/yorvogate-scope-status.v1.schema.json",
+  "title": "YorvoGate scope status, format 1",
+  "description": "The answer of GET /_yorvogate/v1/scopes/<name> on a trusted listener (docs/configuration.md#scope-status). With sha256 or absent, the request waited: matched tells whether what it waited for came. A 408 answer has matched false and the current state, which is never the state waited for: treat it as a failure.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "generation", "listener", "scope", "state"],
+  "properties": {
+    "version": {"const": 1},
+    "generation": {"type": "integer", "minimum": 0, "description": "Snapshots of the scope files swapped in since the gate started: information only, not proof that a write is in it."},
+    "listener": {"type": "string"},
+    "scope": {"type": "string"},
+    "file_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "The SHA-256 of the scope file the state is about, a refused one included. Absent when there is no file."},
+    "state": {
+      "enum": ["loaded", "refused", "reserved", "unknown"],
+      "description": "loaded: in effect (its socket open, on a listener with scope sockets). refused: its file isn't valid, or collides, and it holds no claims. reserved: refused, but its last valid claims are held for it. unknown: no scope file."
+    },
+    "reason": {"type": "string", "description": "Why it's refused or reserved."},
+    "matched": {"type": "boolean"}
+  },
+  "allOf": [
+    {"if": {"properties": {"state": {"const": "unknown"}}}, "then": {"not": {"required": ["file_sha256"]}}, "else": {"required": ["file_sha256"]}},
+    {"if": {"properties": {"state": {"enum": ["refused", "reserved"]}}}, "then": {"required": ["reason"]}, "else": {"not": {"required": ["reason"]}}}
+  ]
+}

@@ -507,3 +507,69 @@ func TestReloadUnderTraffic(t *testing.T) {
 	default:
 	}
 }
+
+// Status answers from the published snapshot only, and its channel closes when another is
+// published: a scope is loaded, reserved, refused or unknown, with its file's SHA-256.
+func TestStatusIsThePublishedSnapshots(t *testing.T) {
+	r, one, _ := twoListeners(t, "")
+	write(t, one, "jane", scopeFile("jane", "jane", "quire-sites/jane/"))
+	reload(t, r)
+
+	if s, _, ok := r.Status("one", "jane"); !ok || s.State != "unknown" || s.Generation != 0 {
+		t.Errorf("before a publish: %+v", s)
+	}
+
+	r.Publish()
+
+	s, next, _ := r.Status("one", "jane")
+	if s.State != "loaded" || s.Generation != 1 || len(s.FileSHA256) != 64 || s.Reason != "" || s.Listener != "one" || s.Scope != "jane" {
+		t.Errorf("published: %+v", s)
+	}
+
+	// Nothing new: the channel stays open
+	r.Publish()
+	select {
+	case <-next:
+		t.Fatal("closed with nothing new")
+	default:
+	}
+
+	write(t, one, "jane", "{")
+	write(t, one, "blog", "{")
+	reload(t, r)
+	r.Publish()
+
+	select {
+	case <-next:
+	default:
+		t.Fatal("not closed by a new snapshot")
+	}
+
+	if s, _, _ := r.Status("one", "jane"); s.State != "reserved" || s.Reason == "" || s.Generation != 2 {
+		t.Errorf("jane: %+v", s)
+	}
+
+	if s, _, _ := r.Status("one", "blog"); s.State != "refused" || s.Reason == "" || len(s.FileSHA256) != 64 {
+		t.Errorf("blog: %+v", s)
+	}
+
+	if s, _, _ := r.Status("two", "jane"); s.State != "unknown" || s.FileSHA256 != "" {
+		t.Errorf("another listener: %+v", s)
+	}
+
+	if _, _, ok := r.Status("nope", "jane"); ok {
+		t.Error("a listener it doesn't have")
+	}
+
+	if strings.Join(r.Listeners(), ",") != "one,two" {
+		t.Errorf("listeners: %v", r.Listeners())
+	}
+
+	// Reload requests coalesce into one
+	r.RequestReload()
+	r.RequestReload()
+
+	if len(r.Requests()) != 1 {
+		t.Error("requests don't coalesce")
+	}
+}

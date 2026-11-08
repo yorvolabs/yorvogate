@@ -53,13 +53,27 @@ type Registry struct {
 	writeErr error
 	missing  []string
 	snapshot atomic.Pointer[snapshot]
+	// Snapshots swapped in so far
+	generation uint64
+
+	// What Status answers: the snapshot whose sockets are in line with it too (Publish), and a
+	// channel closed when the next is published
+	published struct {
+		sync.Mutex
+		snap *snapshot
+		next chan struct{}
+	}
+	// Asks for a reload now (one pending at most)
+	requests chan struct{}
 }
 
 type entry struct {
 	modified time.Time
 	size     int64
-	scope    *Scope
-	err      error
+	// The SHA-256 of what was read
+	digest string
+	scope  *Scope
+	err    error
 }
 
 // claims are what a scope has that no other scope may have.
@@ -71,13 +85,17 @@ type claims struct {
 }
 
 type snapshot struct {
-	folders  []folderView
-	reserved []string
+	// How many snapshots were swapped in before this one, and it
+	generation uint64
+	folders    []folderView
+	reserved   []string
 }
 
 type folderView struct {
 	views  map[string]*Scope
 	errors map[string]error
+	// The SHA-256 of each scope file, as read
+	digests map[string]string
 	// The valid scopes whose files have no version
 	unversioned []string
 }
@@ -98,7 +116,10 @@ func NewRegistry(folders []Folder, state string) *Registry {
 		loaded[i] = map[string]entry{}
 	}
 
-	return &Registry{folders: folders, state: state, loaded: loaded, dirty: true}
+	r := &Registry{folders: folders, state: state, loaded: loaded, dirty: true, requests: make(chan struct{}, 1)}
+	r.published.next = make(chan struct{})
+
+	return r
 }
 
 // ReadOnly makes the registry read its state file but never write it (for yorvogate check, which
@@ -156,6 +177,8 @@ func (r *Registry) Reload() error {
 
 	// While a folder is missing, which scopes it had is unknown: every claim held stays reserved.
 	snap, held := resolve(r.folders, r.loaded, r.held, len(r.missing) > 0)
+	r.generation++
+	snap.generation = r.generation
 	r.snapshot.Store(snap)
 	r.dirty = false
 
@@ -231,12 +254,12 @@ func scanFolder(f Folder, loaded map[string]entry) (bool, error) {
 			continue
 		}
 
-		scope, err := read(path, info, f.Tokenless)
+		scope, digest, err := read(path, info, f.Tokenless)
 		if scope != nil {
 			scope.Name = name
 		}
 
-		loaded[name] = entry{modified: info.ModTime(), size: info.Size(), scope: scope, err: err}
+		loaded[name] = entry{modified: info.ModTime(), size: info.Size(), digest: digest, scope: scope, err: err}
 		changed = true
 	}
 
@@ -446,9 +469,11 @@ func resolve(folders []Folder, loaded []map[string]entry, held map[string]claims
 	}
 
 	for i, files := range loaded {
-		view := folderView{views: map[string]*Scope{}, errors: map[string]error{}}
+		view := folderView{views: map[string]*Scope{}, errors: map[string]error{}, digests: map[string]string{}}
 
 		for name, e := range files {
+			view.digests[name] = e.digest
+
 			switch {
 			case e.err != nil:
 				view.errors[name] = e.err
@@ -502,4 +527,99 @@ func equalHeld(a, b map[string]claims) bool {
 	}
 
 	return true
+}
+
+// Publish makes the snapshot in use the one Status answers from. Serve calls it once the sockets are
+// in line with the snapshot, so a scope Status says is loaded has its socket open.
+func (r *Registry) Publish() {
+	snap := r.snapshot.Load()
+
+	r.published.Lock()
+	defer r.published.Unlock()
+
+	if snap == nil || snap == r.published.snap {
+		return
+	}
+
+	r.published.snap = snap
+	close(r.published.next)
+	r.published.next = make(chan struct{})
+}
+
+// RequestReload asks for a reload and a Publish as soon as possible (Requests), rather than at the
+// next scan.
+func (r *Registry) RequestReload() {
+	select {
+	case r.requests <- struct{}{}:
+	default:
+	}
+}
+
+// Requests gives a value when a reload was asked for.
+func (r *Registry) Requests() <-chan struct{} {
+	return r.requests
+}
+
+// Status is what the last published snapshot has of one scope on one listener.
+type Status struct {
+	Generation uint64
+	Listener   string
+	Scope      string
+	// The SHA-256 of the scope file the state is about ("" when there is none)
+	FileSHA256 string
+	// "loaded", "refused" (its file isn't valid, or collides, and it holds no claims), "reserved"
+	// (refused, but its last valid claims are held for it) or "unknown" (no file)
+	State  string
+	Reason string
+}
+
+// Status tells a scope's state on a listener, from the last published snapshot, and gives a channel
+// closed when another is published. ok is false for a listener the registry doesn't have.
+func (r *Registry) Status(listener, name string) (status Status, next <-chan struct{}, ok bool) {
+	folder := -1
+
+	for i, f := range r.folders {
+		if f.Listener == listener {
+			folder = i
+		}
+	}
+
+	if folder < 0 {
+		return Status{}, nil, false
+	}
+
+	r.published.Lock()
+	snap, next := r.published.snap, r.published.next
+	r.published.Unlock()
+
+	status = Status{Listener: listener, Scope: name, State: "unknown"}
+	if snap == nil {
+		return status, next, true
+	}
+
+	status.Generation = snap.generation
+	view := snap.folders[folder]
+	digest, present := view.digests[name]
+
+	switch {
+	case !present:
+	case view.views[name] != nil:
+		status.State, status.FileSHA256 = "loaded", digest
+	case slices.Contains(snap.reserved, name):
+		status.State, status.FileSHA256, status.Reason = "reserved", digest, view.errors[name].Error()
+	default:
+		status.State, status.FileSHA256, status.Reason = "refused", digest, view.errors[name].Error()
+	}
+
+	return status, next, true
+}
+
+// Listeners names the listeners whose scopes the registry holds.
+func (r *Registry) Listeners() []string {
+	names := make([]string, len(r.folders))
+	for i, f := range r.folders {
+		names[i] = f.Listener
+	}
+
+	return names
 }
