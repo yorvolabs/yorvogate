@@ -121,7 +121,7 @@ The first release.
   - Networks and volumes: its own, without driver options; shared networks it may join, with only its aliases and addresses; a shared network's inspection without other scopes' containers.
   - Images: names written only in its own namespaces (tag, load, delete); none of another scope's read; image archives' names checked before Docker loads them.
 - **Every decision logged** as JSON; every refusal a Docker-style error that says why.
-- **Releases:** an image for x86_64 and arm64 (static, on distroless, as a user without privileges), signed with Sigstore, with its SBOM and build provenance; reproducible binaries with signed checksums.
+- **Releases:** an image for x86_64 and arm64 (static, on distroless, as a user without privileges), with its SBOM and build provenance; reproducible binaries with signed checksums. The image of this release isn't signed: image signatures start with 0.2.0.
 
 [Unreleased]: https://github.com/yorvolabs/yorvogate/compare/v0.2.2...HEAD
 [0.2.2]: https://github.com/yorvolabs/yorvogate/compare/v0.2.1...v0.2.2
