@@ -240,6 +240,7 @@ func scanFolder(f Folder, loaded map[string]entry) (bool, error) {
 
 		path := filepath.Join(f.Dir, file.Name())
 
+		// Only to tell whether it changed since the last read; what's checked is what read opens.
 		info, err := os.Lstat(path)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -254,9 +255,15 @@ func scanFolder(f Folder, loaded map[string]entry) (bool, error) {
 			continue
 		}
 
-		scope, digest, err := read(path, info, f.Tokenless)
+		scope, digest, opened, err := read(path, f.Tokenless)
 		if scope != nil {
 			scope.Name = name
+		}
+
+		// What was read is remembered as it was read: if the file changed since the look above, the
+		// next scan reads it again.
+		if opened != nil {
+			info = opened
 		}
 
 		loaded[name] = entry{modified: info.ModTime(), size: info.Size(), digest: digest, scope: scope, err: err}

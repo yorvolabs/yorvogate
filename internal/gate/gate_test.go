@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/yorvolabs/yorvogate/internal/config"
 )
@@ -46,6 +47,8 @@ type docker struct {
 	builder map[string]any
 	// The API version Docker has ("1.56" unless a test changes it)
 	api string
+	// How long it takes to answer a lookup of an object that exists (none unless a test sets it)
+	slow time.Duration
 }
 
 func (d *docker) apiVersion() string {
@@ -326,6 +329,11 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
+
+	d.mu.Lock()
+	slow := d.slow
+	d.mu.Unlock()
+	time.Sleep(slow)
 
 	_ = json.NewEncoder(w).Encode(answer)
 }

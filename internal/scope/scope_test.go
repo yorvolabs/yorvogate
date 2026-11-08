@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -171,6 +172,29 @@ func TestScopeFilesAreChecked(t *testing.T) {
 		if _, err := testStore(t, dir, false).Authenticate("jane", token); err == nil || errors.Is(err, ErrUnknown) {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// A pipe in a scope file's place is refused, not waited on: no reload is held up by one.
+func TestAPipeIsntAScopeFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := syscall.Mkfifo(filepath.Join(dir, "jane.json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := testStore(t, dir, false).Authenticate("jane", token)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "must be a plain file") {
+			t.Errorf("a pipe: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reload waited on a pipe")
 	}
 }
 

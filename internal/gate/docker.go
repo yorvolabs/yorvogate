@@ -167,6 +167,9 @@ func (d *Docker) get(ctx context.Context, version, path string, into any) (bool,
 		return false, fmt.Errorf("asking Docker %s: %s", path, res.Status)
 	}
 
+	// The decision found an object: its time is remembered (refusals.go)
+	foundObject(ctx)
+
 	if err := json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(into); err != nil {
 		return false, fmt.Errorf("the answer of Docker to %s: %w", path, err)
 	}

@@ -42,7 +42,9 @@ type Gate struct {
 	streams streams
 	// The headers a scope sent that weren't forwarded, each warned of once
 	dropped sync.Map
-	log     *slog.Logger
+	// How long its recent decisions took, each endpoint's: a refusal is held as long (refusals.go)
+	decisions decisionTimes
+	log       *slog.Logger
 }
 
 // Registry holds the scopes of every scoped listener of a configuration: they share one Docker, so
@@ -170,8 +172,9 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			return nil, nil, err
 		}
 
+		ctx, found := lookingUp(r.Context())
 		decision := &scoped{
-			ctx: r.Context(), req: req, scope: s, policy: g.listener.Containers, docker: g.docker,
+			ctx: ctx, req: req, scope: s, policy: g.listener.Containers, docker: g.docker,
 			builderProfiles: g.listener.BuilderAppArmorProfiles, anyBuilder: g.listener.AllowPrivilegedBuilders,
 			path: r.URL.EscapedPath(), query: r.URL.Query(), upgrading: upgrading(r),
 			stream: r.Body, hasBody: r.ContentLength != 0, loadLimit: g.config.LoadLimit, loads: g.loads,
@@ -180,8 +183,19 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			decision.version = req.Version.String()
 		}
 
+		started := time.Now()
 		checked, err := decision.decide(body)
+
+		took := time.Since(started)
+		if took > longestHold && found.Load() {
+			// A refusal here is held less than this took: how long it took could tell what exists.
+			entry.Debug("a decision took longer than a refusal is held", "endpoint", req.Endpoint.Name, "took", took)
+		}
+
+		held := g.decisions.record(req.Endpoint.Name, took, found.Load())
 		if err != nil {
+			hold(r.Context(), started, held)
+
 			return nil, decision, err
 		}
 
