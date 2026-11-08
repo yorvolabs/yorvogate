@@ -59,9 +59,14 @@ jobs:
         run: docker compose -f compose.dev.yaml run --rm go make fuzz FUZZTIME=${{ github.event_name == 'schedule' && '10m' || '30s' }}
 
   conformance:
-    name: Conformance (a real Docker, real Compose)
+    name: Conformance (a real Docker, real Compose; ${{ matrix.store }} image store)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Docker's two image stores name what image.load loads by different files of the archive
+        store: [containerd, classic]
     env:
       # The Docker Engine the suite runs against; its CLI, Compose (5.6.1) and buildx (0.38.1) come
       # with the pinned docker:29.9.2-cli image run.sh uses.
@@ -89,7 +94,14 @@ jobs:
           sudo apt-get update -q
           version="5:$DOCKER_VERSION-1~ubuntu.$VERSION_ID~$VERSION_CODENAME"
           sudo apt-get install -y -q --allow-downgrades "docker-ce=$version" "docker-ce-cli=$version" containerd.io
+          # The image store, set either way (the default depends on how Docker was installed)
+          sudo python3 -c 'import json, os, sys; p = "/etc/docker/daemon.json"; c = json.load(open(p)) if os.path.exists(p) else {}; c.setdefault("features", {})["containerd-snapshotter"] = sys.argv[1] == "containerd"; json.dump(c, open(p, "w"))' "${{ matrix.store }}"
           sudo systemctl restart docker
+          driver=$(docker info --format '{{json .DriverStatus}}')
+          case "${{ matrix.store }}" in
+            containerd) echo "$driver" | grep -q io.containerd.snapshotter ;;
+            classic) ! echo "$driver" | grep -q io.containerd.snapshotter ;;
+          esac
           [ "$(docker version --format '{{.Server.Version}} {{.Server.APIVersion}}')" = "$DOCKER_VERSION $DOCKER_API" ]
       - name: Build
         run: docker compose -f compose.dev.yaml run --rm go make build

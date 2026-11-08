@@ -252,6 +252,22 @@ func TestLoadingAnArchiveChecksItsNames(t *testing.T) {
 		t.Errorf("its own, compressed: %d %s", status, answer)
 	}
 
+	// The name an entry has is its io.containerd.image.name: its ref.name then names nothing, as in
+	// docker save's archives ("latest"), whatever it says.
+	named := archive(t, entry{name: "index.json", content: `{"manifests":[{"annotations":{"io.containerd.image.name":"quire-sites/jane/php-prod:2","org.opencontainers.image.ref.name":"postgres:18"}}]}`})
+	if status, answer := send(t, server, "POST", "/v1.56/images/load", string(named), asJane); status != 200 {
+		t.Errorf("its own name, with a ref.name that names nothing: %d %s", status, answer)
+	}
+
+	// An index an index lists isn't named: only index.json's own entries are
+	nested := archive(t,
+		entry{name: "index.json", content: `{"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"sha256:bb","annotations":{"io.containerd.image.name":"quire-sites/jane/multi:1"}}]}`},
+		entry{name: "blobs/sha256/bb", content: `{"manifests":[{"annotations":{"org.opencontainers.image.ref.name":"postgres"}}]}`},
+	)
+	if status, answer := send(t, server, "POST", "/v1.56/images/load", string(nested), asJane); status != 200 {
+		t.Errorf("its own name, on an index that lists another: %d %s", status, answer)
+	}
+
 	before := d.count()
 
 	for name, body := range map[string][]byte{
@@ -260,12 +276,17 @@ func TestLoadingAnArchiveChecksItsNames(t *testing.T) {
 		"compressed":                   gzipped(archive(t, entry{name: "manifest.json", content: `[{"RepoTags":["alpine:3.22"]}]`})),
 		"in the OCI index":             archive(t, entry{name: "index.json", content: `{"manifests":[{"annotations":{"io.containerd.image.name":"docker.io/library/postgres:18"}}]}`}),
 		"a full reference as ref.name": archive(t, entry{name: "index.json", content: `{"manifests":[{"annotations":{"org.opencontainers.image.ref.name":"quire-sites/blog/php-prod:latest"}}]}`}),
-		"in the legacy repositories":   archive(t, entry{name: "repositories", content: `{"quire-sites/blog/php-prod":{"latest":"abc"}}`}),
-		"a second manifest":            archive(t, entry{name: "manifest.json", content: `[{"RepoTags":["quire-sites/jane/x:1"]}]`}, entry{name: "./manifest.json", content: `[{"RepoTags":["alpine:3.22"]}]`}),
-		"a manifest that's a link":     archive(t, entry{name: "manifest.json", link: true}),
-		"xz":                           append([]byte{0xfd, '7', 'z', 'X', 'Z', 0x00}, make([]byte, 600)...),
-		"zstd":                         append([]byte{0x28, 0xb5, 0x2f, 0xfd}, make([]byte, 600)...),
-		"too large":                    bytes.Repeat([]byte{0}, 1<<20+1),
+		// containerd names an image by a bare ref.name as it is: it's a name like any other
+		"a bare ref.name":                           archive(t, entry{name: "index.json", content: `{"manifests":[{"annotations":{"org.opencontainers.image.ref.name":"postgres"}}]}`}),
+		"a bare tag as ref.name":                    archive(t, entry{name: "index.json", content: `{"manifests":[{"annotations":{"org.opencontainers.image.ref.name":"latest"}}]}`}),
+		"its own name, then a bare one":             archive(t, entry{name: "index.json", content: `{"manifests":[{"annotations":{"io.containerd.image.name":"quire-sites/jane/legit:1"}},{"annotations":{"org.opencontainers.image.ref.name":"poison"}}]}`}),
+		"its own in the index, not in the manifest": archive(t, entry{name: "index.json", content: `{"manifests":[{"annotations":{"io.containerd.image.name":"quire-sites/jane/legit:1"}}]}`}, entry{name: "manifest.json", content: `[{"RepoTags":["alpine:3.22"]}]`}),
+		"in the legacy repositories":                archive(t, entry{name: "repositories", content: `{"quire-sites/blog/php-prod":{"latest":"abc"}}`}),
+		"a second manifest":                         archive(t, entry{name: "manifest.json", content: `[{"RepoTags":["quire-sites/jane/x:1"]}]`}, entry{name: "./manifest.json", content: `[{"RepoTags":["alpine:3.22"]}]`}),
+		"a manifest that's a link":                  archive(t, entry{name: "manifest.json", link: true}),
+		"xz":                                        append([]byte{0xfd, '7', 'z', 'X', 'Z', 0x00}, make([]byte, 600)...),
+		"zstd":                                      append([]byte{0x28, 0xb5, 0x2f, 0xfd}, make([]byte, 600)...),
+		"too large":                                 bytes.Repeat([]byte{0}, 1<<20+1),
 	} {
 		if status, answer := send(t, server, "POST", "/v1.56/images/load", string(body), asJane); status/100 != 4 {
 			t.Errorf("%s: %d %s", name, status, answer)

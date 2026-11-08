@@ -98,9 +98,10 @@ func (s *scoped) load() error {
 	return nil
 }
 
-// archiveNames reads the names an image archive gives its images, wherever Docker reads them: a
-// Docker archive's manifest.json (RepoTags) and repositories, an OCI archive's index.json
-// (annotations). Docker loads plain, gzip and bzip2 archives (and xz and zstd, which are refused
+// archiveNames reads the names an image archive gives its images, wherever a Docker reads them,
+// whichever its image store: a Docker archive's manifest.json (RepoTags) and repositories (the
+// classic store's legacy format, until Docker 28), an OCI archive's index.json (the containerd
+// store). Every name any of them would give is checked, so the store Docker has doesn't matter. Docker loads plain, gzip and bzip2 archives (and xz and zstd, which are refused
 // here: YorvoGate can't read them).
 func archiveNames(r io.Reader) ([]string, error) {
 	buffered := bufio.NewReader(r)
@@ -198,14 +199,18 @@ func namesIn(file string, content []byte) ([]string, error) {
 			return nil, err
 		}
 
+		// As containerd names what it imports (Docker 25 to 29 give it no name translator): each
+		// image the index lists by its io.containerd.image.name, or else by its
+		// org.opencontainers.image.ref.name as it is, a bare one ("latest", "postgres") too. Only the
+		// index.json's own entries are named, never those of an index it lists.
 		for _, m := range index.Manifests {
-			if name := m.Annotations["io.containerd.image.name"]; name != "" {
-				names = append(names, name)
+			name := m.Annotations["io.containerd.image.name"]
+			if name == "" {
+				name = m.Annotations["org.opencontainers.image.ref.name"]
 			}
 
-			// A bare tag ("latest") names nothing; a full reference does.
-			if ref := m.Annotations["org.opencontainers.image.ref.name"]; strings.ContainsAny(ref, "/:@") {
-				names = append(names, ref)
+			if name != "" {
+				names = append(names, name)
 			}
 		}
 	}

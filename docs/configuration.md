@@ -97,7 +97,7 @@ A container's configuration is read field by field with Docker's own types: each
 | Images: inspect, history, save, distribution | By name or ID, unless one of the image's names is in another's protected namespace |
 | Images: pull | From a registry, by name, not into another's protected namespace; never an import (`fromSrc`) |
 | Images: tag, delete | Only names in its own image namespaces (its scope file's `images`): any other name may be another's to run |
-| Images: load | The archive is kept on disk (up to `load_limit`) while every name it gives (Docker's `manifest.json` and `repositories`, the OCI `index.json`) is checked: only names in its own namespaces. Plain, gzip and bzip2 archives (xz and zstd are refused) |
+| Images: load | The archive is kept on disk (up to `load_limit`) while every name it gives, whichever image store Docker has, is checked: only names in its own namespaces. That's `manifest.json`'s tags and `repositories` (the classic store), and each image `index.json` lists, by its `io.containerd.image.name` or else its `org.opencontainers.image.ref.name` as it is, a bare one too (the containerd store). Plain, gzip and bzip2 archives (xz and zstd are refused) |
 | Images: search | Yes |
 | Everything else | No: push, prune, commit, import, build, events, auth, plugins, swarm, BuildKit sessions |
 

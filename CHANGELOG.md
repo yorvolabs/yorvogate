@@ -11,6 +11,7 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 - **Breaking: a scope file that isn't valid keeps its claims** until it's removed: its names and image namespaces are no other scope's meanwhile. Until now they were its neighbour's at once.
 - **Breaking: a change to a scope file on a token listener takes effect at the next scan** (2 seconds, or `SIGHUP`), as on socket listeners. Write scope files by renaming a complete file over the old one.
 - **`yorvogate check` names every scope file it refuses**, not only the first, and warns about what isn't held across a restart.
+- **The conformance suite runs on both of Docker's image stores**, containerd and classic, and loads real `docker save` archives through a scope: its own, one named only by a bare `ref.name`, and one whose `manifest.json` names another scope's image.
 - **On a listener with an address, a scope removed, no longer valid, or given a new token ends the requests it's being answered**, streams included (attach, exec, logs that follow), at the next read of the scope files, as closing a scope's socket does. Until now a stream begun before went on until the client ended it.
 - **The examples in the docs and `examples/yorvogate.yaml` get no warning from `yorvogate check`:** the trusted listener with `write` is on a unix socket instead of a TCP address, each socket has its `socket_group`, and a `state_file` is set. The README's Compose service mounts the sockets' folder and a volume for the state file.
 - **The image has its state file's folder, `/var/lib/yorvogate`, owned by YorvoGate's user**, so a volume mounted there is YorvoGate's to write.
@@ -30,6 +31,7 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 - **Nested names on two scoped listeners weren't resolved (High where a host has two scoped listeners).** The longest-prefix rule saw one listener's scopes only, so with `jane` on one listener and `jane-blog` on another, `jane` could create `jane-blog`'s container names and tag over its image namespace (its next container would run `jane`'s image); `check` passed. Now every listener's scopes are resolved together.
 - **A scope file caught half-written gave its names to its neighbour (Medium).** Now it keeps them, as above.
+- **An OCI archive's image named only by a bare `org.opencontainers.image.ref.name` was loaded unchecked (Medium).** On the containerd image store, Docker names such an image by the bare value as it is (`postgres`, `latest`); YorvoGate read a `ref.name` only when it looked like a full reference, so the name escaped the scope's namespaces. No client could resolve such a name, so it couldn't replace an image anything ran. Now every name is read as containerd reads it, and checked.
 
 ## [0.2.2] - 2026-11-03
 

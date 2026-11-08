@@ -189,6 +189,29 @@ works "jane: tag into its namespace" as jane docker tag alpine:3.22 ygc-jane/app
 works "blog: tag into its namespace" as blog docker tag alpine:3.22 ygc-blog/app:1
 works "jane: inspect its image" as jane docker image inspect ygc-jane/app:1
 
+say "== Image archives, named as Docker names them"
+# docker save's own archive of jane's image, then the same archive renamed: in index.json only by a
+# bare ref.name (containerd names the image by it as it is), and in manifest.json as blog's (the
+# classic store reads that one).
+direct save -o "$dir/own.tar" ygc-jane/app:1
+works "jane: load its own archive" as jane docker load -q -i "$dir/own.tar"
+rm -rf "$dir/archive" && mkdir -p "$dir/archive" && tar -xf "$dir/own.tar" -C "$dir/archive"
+if grep -q '"org.opencontainers.image.ref.name"' "$dir/archive/index.json"; then
+	sed -e 's/"io.containerd.image.name":"[^"]*",//' -e 's/"org.opencontainers.image.ref.name":"[^"]*"/"org.opencontainers.image.ref.name":"ygc-bare"/' \
+		"$dir/archive/index.json" > "$dir/index.json" && mv "$dir/index.json" "$dir/archive/index.json"
+	mv "$dir/archive/manifest.json" "$dir/manifest.json"
+	tar -cf "$dir/bare.tar" -C "$dir/archive" .
+	refused "jane: an archive named only by a bare ref.name" "ygc-bare isn't in one of scope jane's image namespaces" \
+		as jane docker load -q -i "$dir/bare.tar"
+	tar -xf "$dir/own.tar" -C "$dir/archive" index.json
+	sed 's|"RepoTags":\["[^"]*"\]|"RepoTags":["ygc-blog/app:9"]|' "$dir/manifest.json" > "$dir/archive/manifest.json"
+	tar -cf "$dir/foreign.tar" -C "$dir/archive" .
+	refused "jane: its own name in index.json, blog's in manifest.json" "ygc-blog/app:9 isn't in one of scope jane's image namespaces" \
+		as jane docker load -q -i "$dir/foreign.tar"
+else
+	ko "docker save writes ref.name annotations in index.json" "$(cat "$dir/archive/index.json")"
+fi
+
 say "== It sees only its own"
 if [ "$(as jane docker ps --format '{{.Names}}')" = "ygc-jane-app-1" ]; then ok "docker ps: its container only"; else ko "docker ps" "$(as jane docker ps --format '{{.Names}}')"; fi
 if [ "$(as jane docker network ls --format '{{.Name}}')" = "ygc-jane_default" ]; then ok "docker network ls: its network only"; else ko "docker network ls" "$(as jane docker network ls --format '{{.Name}}')"; fi
