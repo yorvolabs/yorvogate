@@ -36,7 +36,7 @@ services:
       - ./scopes:/etc/yorvogate/scopes:ro
 ```
 
-Or a binary from the [releases](https://github.com/yorvolabs/yorvogate/releases) (Linux, x86_64 and arm64), with `SHA256SUMS` and its signature. Each release also carries the JSON Schemas of its [configuration and scope file formats](docs/configuration.md#formats-and-versions), covered by the same checksums.
+Or a binary from the [releases](https://github.com/yorvolabs/yorvogate/releases) (Linux, x86_64 and arm64), with `SHA256SUMS` and its signature. Each release also carries the JSON Schemas of its [configuration and scope file formats](docs/configuration.md#formats-and-versions) and the [AppArmor profile](docs/configuration.md#builders) for rootless BuildKit builders, covered by the same checksums.
 
 **Check what you install.** Each release is signed by this repository's release workflow, for its own tag (Sigstore, keyless). Check the signature names the version you install: a signature of another release (an older one, with its known flaws) doesn't check out.
 

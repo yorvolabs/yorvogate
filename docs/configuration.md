@@ -190,7 +190,30 @@ docker run -d --name buildkit-jane \
 
 Don't add `no-new-privileges`: it breaks rootless BuildKit (`newuidmap: Could not set caps`).
 
-On Ubuntu 24.04 and later, unprivileged user namespaces are restricted by AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`), and rootless BuildKit doesn't start under `apparmor=unconfined`. Load the profile in [`examples/apparmor/yorvogate-buildkit-rootless`](../examples/apparmor/yorvogate-buildkit-rootless): it grants only `userns`. Prefer it to setting that sysctl to 0, which lifts the restriction for every process on the host.
+On Ubuntu 24.04 and later, unprivileged user namespaces are restricted by AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`), and rootless BuildKit doesn't start under `apparmor=unconfined`. Load YorvoGate's profile for it, `yorvogate-buildkit-rootless`, and list it in the listener's `builder_apparmor_profiles`. It grants only `userns`, which is all the restriction takes away:
+
+```
+abi <abi/4.0>,
+include <tunables/global>
+
+profile yorvogate-buildkit-rootless flags=(unconfined) {
+  userns,
+}
+```
+
+Each release carries it, in its `SHA256SUMS` (signed, as the [README](../README.md#installing) shows), so take the copy of the version you run:
+
+```sh
+version=0.3.0
+base=https://github.com/yorvolabs/yorvogate/releases/download/v$version
+curl -fsSLO "$base/yorvogate-buildkit-rootless" -O "$base/SHA256SUMS" -O "$base/SHA256SUMS.sigstore.json"
+# check SHA256SUMS's signature as the README shows, then:
+sha256sum --check --ignore-missing SHA256SUMS
+sudo install -m 0644 yorvogate-buildkit-rootless /etc/apparmor.d/
+sudo apparmor_parser -r /etc/apparmor.d/yorvogate-buildkit-rootless
+```
+
+It's also in the repo, at [`examples/apparmor/yorvogate-buildkit-rootless`](../examples/apparmor/yorvogate-buildkit-rootless). Prefer it to setting that sysctl to 0, which lifts the restriction for every process on the host.
 
 The scope uses the builder with buildx's `remote` driver, on its own [socket](#scope-sockets) (buildx sends no header tokens on its own connections). In the scope's `DOCKER_CONFIG`, a context whose endpoint is the scope's socket must be both the current context and the builder's, since `--load` sends the image to the current endpoint (where `image.load` checks its names against the scope's `images`):
 
@@ -244,7 +267,7 @@ Run `yorvogate check` with the new version on your configuration and scope folde
 
 - **`containers` in a scope file is refused.** Name the scope's BuildKit builders in `builders`, exactly (no `*`). A builder is no longer a container the scope may use: it may only be inspected and reached with `buildctl dial-stdio`, and only while it's configured as [builders](#builders) says. In practice:
   - create each builder yourself, with BuildKit's rootless image (buildx's `docker-container` driver always makes privileged ones), and register it with buildx's `remote` driver;
-  - on Ubuntu 23.10 and later, load the AppArmor profile in `examples/apparmor` and list it in the listener's `builder_apparmor_profiles`;
+  - on Ubuntu 23.10 and later, load the [AppArmor profile](#builders) (a release file, and in `examples/apparmor`) and list it in the listener's `builder_apparmor_profiles`;
   - builds go through a [scope socket](#scope-sockets), since buildx sends no header tokens on its own connections.
 - **Scopes may not share an owner label, a prefix, an image namespace or a builder.** The scope file that came later is refused. Names that nest (`jane`, `jane-blog`) are fine: a name belongs to the longest prefix it starts with.
 - **What a scope creates may not carry another scope's owner label**, and a volume a container's mount creates gets the scope's own.

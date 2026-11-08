@@ -5,7 +5,8 @@ name: Release
 #   - the image, ghcr.io/yorvolabs/yorvogate:<version>, for x86_64 and arm64, with its SBOM and build
 #     provenance, scanned (no fixable high or critical flaw), and signed with Sigstore (keyless: the
 #     signature says this workflow made it, for this tag);
-#   - the binaries for Linux (x86_64, arm64), their SHA256SUMS, and its signature (a Sigstore bundle);
+#   - the binaries for Linux (x86_64, arm64), the formats' JSON Schemas, the AppArmor profile for
+#     rootless BuildKit, their SHA256SUMS, and its signature (a Sigstore bundle);
 #   - a GitHub release with them, and the changelog's section for the version as its notes.
 on:
   push:
@@ -133,3 +134,13 @@ jobs:
           prerelease=
           case "$VERSION" in *-*) prerelease=--prerelease ;; esac
           gh release create "v$VERSION" --title "YorvoGate $VERSION" --notes-file notes.md --verify-tag $prerelease dist/*
+
+      # The release as published, downloaded: every file there, in SHA256SUMS, and the copied ones
+      # (the schemas, the AppArmor profile) the repo's at this tag
+      - name: The release's files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release download "v$VERSION" --dir published
+          test/dist.sh published "$VERSION"

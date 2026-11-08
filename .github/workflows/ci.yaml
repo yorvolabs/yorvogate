@@ -122,6 +122,22 @@ jobs:
           curl -fsSL "https://raw.githubusercontent.com/${repository#https://github.com/}/$commit/$path" -o /tmp/quire.yaml
           diff -u /tmp/quire.yaml test/conformance/quire/yorvogate.yaml
 
+  dist:
+    name: A release's files
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # What the release workflow publishes: the binaries, the schemas and the AppArmor profile, each
+      # in SHA256SUMS, the copied files the repo's
+      - name: make dist
+        run: HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose -f compose.dev.yaml run --rm go make dist VERSION=0.0.0-ci
+      - name: The files, and their checksums
+        run: test/dist.sh dist 0.0.0-ci
+
   scripts:
     name: Shell scripts
     runs-on: ubuntu-26.04
