@@ -1,0 +1,6 @@
+# Quire Server's real YorvoGate configuration, copied verbatim: quire.sh runs on it (only its paths
+# moved to the test's own), and CI fails when this copy differs from the file at the commit below.
+# To follow Quire Server: copy its gate/yorvogate.yaml here and set commit to the commit it's from.
+repository=https://github.com/quirecms/server
+path=gate/yorvogate.yaml
+commit=225797838ef18cb9d1093400d7b3bc063597e869

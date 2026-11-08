@@ -25,6 +25,9 @@ import (
 type Scope struct {
 	// Name is the file's name, without ".json".
 	Name string `json:"-"`
+	// Version is the format: 1. Without it, a scope file is read as 1 with a warning until 0.4,
+	// which refuses it.
+	Version *int `json:"version,omitempty"`
 	// TokenSHA256 is the SHA-256 (hex) of the token the client sends. A scope with a socket of its
 	// own needs none: whoever can open the socket is the scope.
 	TokenSHA256 string `json:"token_sha256"`
@@ -147,6 +150,17 @@ func (s *Store) Get(name string) (*Scope, error) {
 	return nil, fmt.Errorf("scope %s: %w", name, os.ErrNotExist)
 }
 
+// Unversioned names the valid scopes whose files have no version: read as version 1 until 0.4, which
+// refuses them.
+func (s *Store) Unversioned() []string {
+	snap := s.registry.snapshot.Load()
+	if snap == nil {
+		return nil
+	}
+
+	return slices.Clone(snap.folders[s.folder].unversioned)
+}
+
 // Scopes returns the names of the valid scopes as the last reload found them, and why each other
 // scope file isn't valid.
 func (s *Store) Scopes() ([]string, map[string]error, error) {
@@ -202,7 +216,14 @@ func read(path string, info os.FileInfo, tokenless bool) (*Scope, error) {
 	return &scope, nil
 }
 
+// formatVersion is the scope files' format (config.FormatVersion: the two move together).
+const formatVersion = 1
+
 func (s *Scope) check(tokenless bool) error {
+	if s.Version != nil && *s.Version != formatVersion {
+		return fmt.Errorf("version: %d isn't a format this build reads (%d)", *s.Version, formatVersion)
+	}
+
 	switch {
 	case !validDigest.MatchString(s.TokenSHA256) && (s.TokenSHA256 != "" || !tokenless):
 		return errors.New("token_sha256: the token's SHA-256, as 64 lowercase hex digits")

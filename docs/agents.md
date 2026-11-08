@@ -24,6 +24,7 @@ Filtering what an agent may call as a tool doesn't close this: an agent that can
 Each agent is a [scope](configuration.md#scope-files-scoped-listeners) of a scoped listener with [scope sockets](configuration.md#scope-sockets): YorvoGate makes a socket for it, and a request on that socket is that agent's. No token to hand out or leak: the agent's Docker client needs nothing but the socket, which it uses as it would use Docker's.
 
 ```yaml
+version: 1
 upstream: unix:///var/run/docker.sock
 listeners:
   - name: agents
@@ -39,6 +40,7 @@ YorvoGate's own user must be in the group to give it its sockets (in its contain
 
 ```json
 {
+  "version": 1,
   "owner": {"label": "com.docker.compose.project", "value": "ana"},
   "prefixes": ["ana-", "ana_"],
   "images": ["agents/ana/"]
@@ -87,6 +89,7 @@ docker run -d --name agent-ana \
 An agent running as a user on the host reaches what its user may open. The sockets of one listener share one `socket_group`, so a user in that group could open every one of them. On the host, give each agent a user of its own and a listener of its own, with its own folder and group:
 
 ```yaml
+version: 1
 upstream: unix:///var/run/docker.sock
 listeners:
   - name: agent-ana

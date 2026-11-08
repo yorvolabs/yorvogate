@@ -60,28 +60,15 @@ cat > "$dir/scopes/jane-blog.json" <<EOF
 EOF
 chmod 600 "$dir/scopes/"*.json
 
-profiles=""
-[ -n "$apparmor" ] && profiles="builder_apparmor_profiles: [$apparmor]"
-
-cat > "$dir/yorvogate.yaml" <<EOF
-upstream: unix:///var/run/docker.sock
-listeners:
-  - name: orchestrator
-    address: unix://$dir/orchestrator.sock
-    mode: trusted
-    allow: {system: read, containers: write, exec: write, images: write, networks: write, volumes: write}
-  - name: sites
-    scope_sockets: $dir/sockets
-    mode: scoped
-    scopes: $dir/scopes
-    $profiles
-    containers:
-      drop_all_capabilities: true
-      no_new_privileges: true
-      max_memory: 268435456
-      max_pids: 128
-      protected_images: [quire-sites/]
-EOF
+# Quire Server's own configuration (test/conformance/quire, pinned to the commit it's from), with
+# only its paths moved to this test's: the policy under test is the one Quire runs.
+sed -e "s|unix:///run/yorvogate/trusted/trusted.sock|unix://$dir/orchestrator.sock|" \
+	-e "s|scope_sockets: /run/yorvogate/sites|scope_sockets: $dir/sockets|" \
+	-e "s|scopes: /etc/yorvogate/sites|scopes: $dir/scopes|" \
+	"$(dirname "$0")/quire/yorvogate.yaml" > "$dir/yorvogate.yaml"
+if grep -v '^[[:space:]]*#' "$dir/yorvogate.yaml" | grep -q '/run/yorvogate\|/etc/yorvogate'; then
+	ko "Quire Server's configuration has a path this test doesn't move" "$(grep -v '^[[:space:]]*#' "$dir/yorvogate.yaml" | grep '/run/yorvogate\|/etc/yorvogate')"
+fi
 
 ${YORVOGATE:-/yorvogate/yorvogate} serve --config "$dir/yorvogate.yaml" 2> "$dir/yorvogate.log" &
 gate=$!

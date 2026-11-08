@@ -105,6 +105,23 @@ jobs:
           YGC_APPARMOR: yorvogate-buildkit-rootless
         run: test/conformance/run.sh
 
+  quire-config:
+    name: Quire Server's configuration is the pinned one
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # quire.sh runs Quire Server's configuration as test/conformance/quire pins it; the copy must be
+      # the file at the commit it names, or the conformance tests a policy Quire doesn't run.
+      - name: The copy is the file at its commit
+        run: |
+          . test/conformance/quire/SOURCE
+          curl -fsSL "https://raw.githubusercontent.com/${repository#https://github.com/}/$commit/$path" -o /tmp/quire.yaml
+          diff -u /tmp/quire.yaml test/conformance/quire/yorvogate.yaml
+
   scripts:
     name: Shell scripts
     runs-on: ubuntu-26.04

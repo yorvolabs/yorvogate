@@ -36,7 +36,7 @@ services:
       - ./scopes:/etc/yorvogate/scopes:ro
 ```
 
-Or a binary from the [releases](https://github.com/yorvolabs/yorvogate/releases) (Linux, x86_64 and arm64), with `SHA256SUMS` and its signature.
+Or a binary from the [releases](https://github.com/yorvolabs/yorvogate/releases) (Linux, x86_64 and arm64), with `SHA256SUMS` and its signature. Each release also carries the JSON Schemas of its [configuration and scope file formats](docs/configuration.md#formats-and-versions), covered by the same checksums.
 
 **Check what you install.** Each release is signed by this repository's release workflow, for its own tag (Sigstore, keyless). Check the signature names the version you install: a signature of another release (an older one, with its known flaws) doesn't check out.
 
@@ -57,6 +57,7 @@ The binaries are reproducible: built from the tag (`make dist VERSION=$version` 
 ## Configuration
 
 ```yaml
+version: 1
 upstream: unix:///var/run/docker.sock
 
 listeners:
@@ -75,6 +76,7 @@ A scope is a file in the scoped listener's folder, written by your orchestrator 
 
 ```json
 {
+  "version": 1,
   "token_sha256": "<the SHA-256 of the scope's token, as hex>",
   "owner": {"label": "com.docker.compose.project", "value": "jane"},
   "prefixes": ["jane-", "jane_"]

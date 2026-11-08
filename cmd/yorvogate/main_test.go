@@ -296,3 +296,34 @@ func TestServeScopeSockets(t *testing.T) {
 		t.Errorf("left behind: %v", left)
 	}
 }
+
+// check names what has no version, and refuses what has one it doesn't read.
+func TestCheckFormatVersions(t *testing.T) {
+	dir := t.TempDir()
+	scopes := filepath.Join(dir, "scopes")
+	_ = os.Mkdir(scopes, 0o700)
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	body := "upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: " + scopes + "}\n"
+	_ = os.WriteFile(configFile, []byte(body), 0o600)
+	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
+
+	var out, errs bytes.Buffer
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 || !strings.Contains(out.String(), "the configuration has no version") || !strings.Contains(out.String(), "1 scope files have no version (jane)") {
+		t.Fatalf("no versions: %d %q %q", code, out.String(), errs.String())
+	}
+
+	_ = os.WriteFile(configFile, []byte("version: 1\n"+body), 0o600)
+	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"version": 1, "token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
+	out.Reset()
+
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 || strings.Contains(out.String(), "no version") {
+		t.Fatalf("versioned: %d %q %q", code, out.String(), errs.String())
+	}
+
+	_ = os.WriteFile(configFile, []byte("version: 2\n"+body), 0o600)
+	errs.Reset()
+
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 1 || !strings.Contains(errs.String(), "version: 2 isn't a format this build reads") {
+		t.Fatalf("version 2: %d %q", code, errs.String())
+	}
+}

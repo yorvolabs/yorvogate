@@ -16,6 +16,7 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ### Added
 
+- **Versioned formats.** The configuration (`version: 1`) and scope files (`"version": 1`) say their format, and a version YorvoGate doesn't read is refused. Without one, a file is read as version 1 with a warning from `yorvogate check` and in the logs; 0.4 refuses it. JSON Schemas for both are published with each release. From now on, before 1.0, a breaking change to a format ships only in a minor release, never in a patch, and an old format keeps working for at least one minor release with a warning.
 - **`state_file`**: where YorvoGate keeps each scope's last valid claims across restarts. It only ever refuses names to scopes, never grants any.
 
 ### Security

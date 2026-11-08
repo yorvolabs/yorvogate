@@ -1,4 +1,5 @@
 # YorvoGate in front of Docker for an orchestrator and its tenants. See docs/configuration.md.
+version: 1
 upstream: unix:///var/run/docker.sock
 
 listeners:

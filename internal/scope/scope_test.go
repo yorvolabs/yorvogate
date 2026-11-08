@@ -159,6 +159,9 @@ func TestScopeFilesAreChecked(t *testing.T) {
 		"a network key unknown":   strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"mac": "x"}}, "prefixes"`, 1),
 		"a subnet not a network":  strings.Replace(jane(), `"prefixes"`, `"subnets": ["10.213.0.33/27"], "prefixes"`, 1),
 		"an address as a subnet":  strings.Replace(jane(), `"prefixes"`, `"subnets": ["10.213.0.32"], "prefixes"`, 1),
+		"a newer format":          strings.Replace(jane(), `"prefixes"`, `"version": 2, "prefixes"`, 1),
+		"format 0":                strings.Replace(jane(), `"prefixes"`, `"version": 0, "prefixes"`, 1),
+		"a format as a string":    strings.Replace(jane(), `"prefixes"`, `"version": "1", "prefixes"`, 1),
 	}
 
 	for name, content := range cases {
@@ -463,5 +466,25 @@ func TestBuilders(t *testing.T) {
 
 	if _, err := store.Get("blog"); err == nil || !strings.Contains(err.Error(), `builders: "bk-jane" is scope jane's already`) {
 		t.Errorf("a builder of two scopes: %v", err)
+	}
+}
+
+// A scope file says its format; one without is valid, and named as one 0.4 refuses.
+func TestScopeFormatVersions(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"version": 1, "prefixes"`, 1))
+	write(t, dir, "old", scopeFile("old", "old", "old/"))
+	store := testStore(t, dir, false)
+
+	if _, err := store.Get("jane"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Get("old"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := store.Unversioned(); len(got) != 1 || got[0] != "old" {
+		t.Errorf("unversioned: %v", got)
 	}
 }

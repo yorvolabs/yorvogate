@@ -3,6 +3,7 @@
 One YAML file (`--config`, by default `/etc/yorvogate/yorvogate.yaml`). It's read strictly: an unknown key, a second document or an invalid value stops YorvoGate with the reason, never a default in its place. `yorvogate check --config …` reads it and every scope file without starting.
 
 ```yaml
+version: 1                              # the format (required from 0.4)
 upstream: unix:///var/run/docker.sock   # Docker's socket (required)
 
 api:                                    # Docker API versions accepted (optional)
@@ -127,6 +128,7 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 
 ```json
 {
+  "version": 1,
   "token_sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
   "owner": {"label": "com.docker.compose.project", "value": "jane"},
   "prefixes": ["jane-", "jane_"],
@@ -137,6 +139,7 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 }
 ```
 
+- `version`: the format, `1`. A scope file without one is read as version 1, with a warning; YorvoGate 0.4 refuses it. See [formats and versions](#formats-and-versions).
 - `token_sha256`: the SHA-256 of the scope's token, 64 lowercase hex digits. The client sends the token itself. Optional where each scope has its own socket ([scope sockets](#scope-sockets)).
 - `owner`: the label (and its value) that marks the scope's objects. For Compose projects, `com.docker.compose.project` and the project's name. An object is a scope's by this label only, never by its name. What a scope creates must carry it, and no other scope's owner label; a volume a container's mount creates gets it from YorvoGate.
 - `prefixes`: what the names of the containers, networks and volumes it creates start with. Each ends with `-`, `_` or `.`, so `jane-` never matches `janet-…`. A container may also take the name Compose gives one it recreates, 12 hex and `_` before one of the scope's names (`f5dba3e4fa27_jane-php-1`), so no prefix may start with 12 hex and `_`.
@@ -204,6 +207,14 @@ On a listener with an address, a client sends its scope with each request. With 
 ```json
 {"HttpHeaders": {"X-YorvoGate-Scope": "jane", "X-YorvoGate-Token": "<the token>"}}
 ```
+
+## Formats and versions
+
+The configuration and the scope files each say their format: `version: 1` (YAML) and `"version": 1` (JSON). YorvoGate refuses a version it doesn't read, so a file written for a newer format fails at once, saying so, instead of being half-understood. Each format has a JSON Schema, published with every release (`yorvogate-config.v1.schema.json`, `yorvogate-scope.v1.schema.json`) and kept in [`schemas/`](../schemas): an orchestrator can check what it writes before YorvoGate reads it.
+
+- Before 1.0, a change that breaks a format ships only in a minor release (0.4, 0.5), never in a patch release (0.3.1).
+- An old format keeps working for at least one minor release after its successor, with a warning from `yorvogate check` and in the logs.
+- Files without `version` are read as version 1 in 0.3, with that warning, and refused from 0.4.
 
 ## Migrating from 0.1.0
 

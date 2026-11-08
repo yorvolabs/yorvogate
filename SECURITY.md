@@ -33,6 +33,8 @@ Please give us a reasonable chance to fix the issue before you disclose it publi
 
 Until 1.0, security fixes go into the latest release only: update to it. After 1.0, the latest minor version receives security fixes, and the previous minor receives them for six months after its successor is released.
 
+The configuration and scope file formats are versioned ([formats and versions](docs/configuration.md#formats-and-versions)): before 1.0, a breaking change to either ships only in a minor release, never in a patch release, so a security fix in a patch release never requires a change to your files.
+
 Releases are signed: check the signature names the version you install (see "Installing" in the [README](README.md)).
 
 ## Scope

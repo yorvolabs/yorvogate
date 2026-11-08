@@ -127,7 +127,11 @@ func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 		"min above max":                  valid + "api: {min: '1.50', max: '1.45'}\n",
 		"a version that isn't one":       valid + "api: {min: 'latest'}\n",
 		"a tiny body limit":              valid + "body_limit: 10\n",
+		"a newer format":                 valid + "version: 2\n",
+		"format 0":                       valid + "version: 0\n",
+		"a format that isn't a number":   valid + "version: one\n",
 		"a relative state file":          valid + "state_file: state.json\n",
+		"a state file not clean":         valid + "state_file: /var/lib/../state.json\n",
 		"a state file in scopes":         valid + "state_file: /etc/yorvogate/scopes/state.json\n",
 		"the scopes folder as state":     valid + "state_file: /etc/yorvogate/scopes\n",
 		"no listeners":                   "upstream: unix:///var/run/docker.sock\n",
@@ -159,5 +163,18 @@ func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 		if _, err := Parse([]byte(content)); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
+	}
+}
+
+// A configuration says its format; without one it's read as 1, with a warning (0.4 refuses it).
+func TestTheFormatVersion(t *testing.T) {
+	c, err := Parse([]byte(valid + "version: 1\n"))
+	if err != nil || len(c.Deprecations()) != 0 {
+		t.Errorf("version 1: %v %v", err, c.Deprecations())
+	}
+
+	c, err = Parse([]byte(valid))
+	if err != nil || len(c.Deprecations()) != 1 || !strings.Contains(c.Deprecations()[0], "0.4 refuses it") {
+		t.Errorf("no version: %v %v", err, c.Deprecations())
 	}
 }

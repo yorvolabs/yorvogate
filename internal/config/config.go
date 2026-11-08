@@ -37,8 +37,14 @@ const (
 	DefaultLoadLimit = 8 << 30
 )
 
+// FormatVersion is the configuration's and the scope files' format: what `version` says.
+const FormatVersion = 1
+
 // Config is the whole configuration.
 type Config struct {
+	// Version is the format: 1. Without it, a configuration is read as 1 with a warning until 0.4,
+	// which refuses it.
+	Version *int `yaml:"version"`
 	// Upstream is Docker's socket: "unix:///var/run/docker.sock".
 	Upstream string `yaml:"upstream"`
 	// API is the range of Docker API versions accepted.
@@ -162,7 +168,20 @@ func (c *Config) UpstreamSocket() string {
 	return strings.TrimPrefix(c.Upstream, "unix://")
 }
 
+// Deprecations are what the configuration still uses that a later version refuses.
+func (c *Config) Deprecations() []string {
+	if c.Version == nil {
+		return []string{fmt.Sprintf("the configuration has no version: it's read as version %d, and YorvoGate 0.4 refuses it without one (add version: %d)", FormatVersion, FormatVersion)}
+	}
+
+	return nil
+}
+
 func (c *Config) check() error {
+	if c.Version != nil && *c.Version != FormatVersion {
+		return fmt.Errorf("version: %d isn't a format this build reads (%d)", *c.Version, FormatVersion)
+	}
+
 	socket, ok := strings.CutPrefix(c.Upstream, "unix://")
 	if !ok || !filepath.IsAbs(socket) || filepath.Clean(socket) != socket {
 		return fmt.Errorf("upstream: %q must be Docker's socket, as unix:///absolute/path", c.Upstream)

@@ -67,4 +67,5 @@ dist:
 		tar -C dist --owner=0 --group=0 --numeric-owner --mtime='2026-01-01 00:00Z' -czf dist/yorvogate-$(VERSION)-linux-$$arch.tar.gz yorvogate && \
 		rm dist/yorvogate || exit 1; \
 	done
-	cd dist && sha256sum yorvogate-*.tar.gz > SHA256SUMS
+	cp schemas/*.schema.json dist/
+	cd dist && sha256sum yorvogate-*.tar.gz *.schema.json > SHA256SUMS

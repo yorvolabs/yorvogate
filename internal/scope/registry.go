@@ -78,6 +78,8 @@ type snapshot struct {
 type folderView struct {
 	views  map[string]*Scope
 	errors map[string]error
+	// The valid scopes whose files have no version
+	unversioned []string
 }
 
 // index is every claim of the snapshot (accepted and reserved), by what is claimed: whose it is.
@@ -456,8 +458,14 @@ func resolve(folders []Folder, loaded []map[string]entry, held map[string]claims
 				s := *e.scope
 				s.index = idx
 				view.views[name] = &s
+
+				if s.Version == nil {
+					view.unversioned = append(view.unversioned, name)
+				}
 			}
 		}
+
+		sort.Strings(view.unversioned)
 
 		snap.folders[i] = view
 	}

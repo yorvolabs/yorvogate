@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yorvolabs/yorvogate/schemas/yorvogate-config.v1.schema.json",
+  "title": "YorvoGate configuration, format 1",
+  "description": "The YAML configuration (docs/configuration.md). YorvoGate itself is stricter in places (an address's host and port, a path's form, the listeners' names and addresses being their own): run yorvogate check. Without version, a file is read as version 1 until YorvoGate 0.4, which requires it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["upstream", "listeners"],
+  "properties": {
+    "version": {"const": 1},
+    "upstream": {"type": "string", "pattern": "^unix:///"},
+    "api": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "min": {"$ref": "#/$defs/apiVersion"},
+        "max": {"$ref": "#/$defs/apiVersion"}
+      }
+    },
+    "body_limit": {"type": "integer", "minimum": 4096, "maximum": 67108864},
+    "load_limit": {"type": "integer", "minimum": 1048576, "maximum": 274877906944},
+    "state_file": {"type": "string", "pattern": "^/.*[^/]$"},
+    "listeners": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/listener"}}
+  },
+  "$defs": {
+    "apiVersion": {"type": "string", "pattern": "^[1-9][0-9]*\\.(0|[1-9][0-9]*)$"},
+    "absolute": {"type": "string", "pattern": "^/"},
+    "listener": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "mode"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"},
+        "address": {"type": "string", "pattern": "^(tcp://.+:[0-9]+|unix:///.*)$"},
+        "mode": {"enum": ["trusted", "scoped"]},
+        "scope_sockets": {"$ref": "#/$defs/absolute"},
+        "socket_group": {"anyOf": [{"type": "string", "pattern": "^([a-z_][a-z0-9_-]{0,31}|[0-9]{1,10})$"}, {"type": "integer", "minimum": 0, "maximum": 9999999999}]},
+        "allow": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"enum": ["system", "containers", "exec", "images", "build", "networks", "volumes", "distribution", "plugins", "swarm", "session"]},
+          "additionalProperties": {"enum": ["read", "write"]}
+        },
+        "scopes": {"$ref": "#/$defs/absolute"},
+        "containers": {"$ref": "#/$defs/containers"},
+        "builder_apparmor_profiles": {"type": "array", "items": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"}},
+        "allow_privileged_builders": {"type": "boolean"}
+      },
+      "oneOf": [
+        {"required": ["address"], "not": {"required": ["scope_sockets"]}},
+        {"required": ["scope_sockets"], "not": {"required": ["address"]}, "properties": {"mode": {"const": "scoped"}}}
+      ],
+      "if": {"properties": {"mode": {"const": "trusted"}}},
+      "then": {
+        "required": ["allow"],
+        "not": {"anyOf": [{"required": ["scopes"]}, {"required": ["containers"]}, {"required": ["builder_apparmor_profiles"]}, {"required": ["allow_privileged_builders"]}]}
+      },
+      "else": {"required": ["scopes"], "not": {"required": ["allow"]}}
+    },
+    "containers": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "capabilities": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z][A-Z_]{1,31}$", "not": {"anyOf": [{"pattern": "^CAP_"}, {"const": "ALL"}]}}},
+        "drop_all_capabilities": {"type": "boolean"},
+        "no_new_privileges": {"type": "boolean"},
+        "security_options": {"type": "array", "items": {"type": "string", "pattern": "^[^ \\t\\n]+$"}},
+        "runtimes": {"$ref": "#/$defs/names"},
+        "log_drivers": {"$ref": "#/$defs/names"},
+        "ulimits": {"$ref": "#/$defs/names"},
+        "max_memory": {"type": "integer", "anyOf": [{"const": 0}, {"minimum": 6291456}]},
+        "max_pids": {"type": "integer", "minimum": 0},
+        "protected_images": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._/-]{0,254}/$"}}
+      }
+    },
+    "names": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"}}
+  }
+}

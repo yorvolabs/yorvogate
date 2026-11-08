@@ -1,0 +1,49 @@
+# The Docker gate (YorvoGate, https://github.com/yorvolabs/yorvogate): the only way to Docker for the
+# agent. Every request's body is read and checked before Docker gets it. Two listeners, by who asks:
+#
+#   - trusted: the agent's own operations (the Composer sandbox, each site's BuildKit, the server's
+#     PostgreSQL dumps, Docker's information). The agent is root-equivalent by design (SECURITY.md):
+#     this listener only leaves out what it never needs (builds on Docker itself, swarm, plugins).
+#   - sites: each site's Compose, on a socket of its own (/run/yorvogate/sites/<project>.sock), for a
+#     scope file the agent writes before each operation (/etc/yorvogate/sites/<project>.json). A site
+#     acts only on what carries its project's label, takes only its own names, images and builder,
+#     and its containers get no more of the host than the Compose policy allows them (ComposePolicy):
+#     the policy checks first, from the files, with readable messages; the gate holds what Docker
+#     actually receives, so a gap in the policy isn't root on the host.
+#
+# Only the agent mounts the sockets. The settings below mirror ComposePolicy: a test keeps them equal.
+upstream: unix:///var/run/docker.sock
+
+listeners:
+  - name: trusted
+    address: unix:///run/yorvogate/trusted/trusted.sock
+    # Root's group, named rather than left to the gate's own: the agent (root) is the only client,
+    # and the only container that mounts the sockets' volumes
+    socket_group: 0
+    mode: trusted
+    allow:
+      system: read
+      containers: write
+      exec: write
+      images: write
+      networks: write
+      volumes: write
+      distribution: read
+
+  - name: sites
+    scope_sockets: /run/yorvogate/sites
+    socket_group: 0
+    mode: scoped
+    scopes: /etc/yorvogate/sites
+    # Sites' BuildKit runs rootless under this AppArmor profile, which grants it only a user namespace
+    # (the server's host-setup loads it), or unconfined where the host's AppArmor is too old for it
+    # (and so has no restriction on user namespaces to lift). Never privileged.
+    builder_apparmor_profiles: [yorvogate-buildkit-rootless, unconfined]
+    containers:
+      capabilities: [NET_BIND_SERVICE, CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+      drop_all_capabilities: true
+      no_new_privileges: true
+      ulimits: [nofile, nproc, core, stack]
+      max_memory: 68719476736
+      max_pids: 4096
+      protected_images: [quire-sites/]

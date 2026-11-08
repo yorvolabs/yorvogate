@@ -133,6 +133,10 @@ func check(path string, stdout io.Writer) error {
 		return err
 	}
 
+	for _, d := range c.Deprecations() {
+		fmt.Fprintf(stdout, "warning: %s\n", d)
+	}
+
 	var refused []string
 
 	seen := map[string]bool{}
@@ -170,6 +174,10 @@ func check(path string, stdout io.Writer) error {
 			fmt.Fprintf(stdout, "  warning: %s\n", warn)
 		}
 
+		if old := registry.Store(l.Name).Unversioned(); len(old) > 0 {
+			fmt.Fprintf(stdout, "  warning: %s\n", unversioned(old))
+		}
+
 		for _, name := range slices.Sorted(maps.Keys(invalid)) {
 			if msg := invalid[name].Error(); !seen[msg] {
 				seen[msg] = true
@@ -189,6 +197,16 @@ func check(path string, stdout io.Writer) error {
 	}
 
 	return nil
+}
+
+// unversioned says which scope files have no version (the first few of them).
+func unversioned(names []string) string {
+	list := names
+	if len(list) > 5 {
+		list = append(slices.Clone(list[:5]), fmt.Sprintf("and %d more", len(names)-5))
+	}
+
+	return fmt.Sprintf("%d scope files have no version (%s): they're read as version %d, and YorvoGate 0.4 refuses them without one (add \"version\": %d)", len(names), strings.Join(list, ", "), config.FormatVersion, config.FormatVersion)
 }
 
 // stateWarnings tells what isn't held across a restart.
@@ -232,6 +250,10 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 
 	for _, warn := range stateWarnings(c, registry, false) {
 		log.Warn("scopes", "warning", warn)
+	}
+
+	for _, d := range c.Deprecations() {
+		log.Warn("configuration", "warning", d)
 	}
 
 	reported := map[string]string{}
@@ -362,6 +384,14 @@ func report(c *config.Config, registry *scope.Registry, reported map[string]stri
 		}
 	}
 
+	for _, l := range c.Listeners {
+		if l.Mode == config.Scoped {
+			if old := registry.Store(l.Name).Unversioned(); len(old) > 0 {
+				now["unversioned/"+l.Name] = unversioned(old)
+			}
+		}
+	}
+
 	if err := registry.StateProblem(); err != nil {
 		now["state"] = err.Error()
 	}
@@ -373,6 +403,8 @@ func report(c *config.Config, registry *scope.Registry, reported map[string]stri
 
 		if key == "state" {
 			log.Error("state file", "reason", why)
+		} else if listener, ok := strings.CutPrefix(key, "unversioned/"); ok {
+			log.Warn("scope files", "listener", listener, "warning", why)
 		} else {
 			listener, name, _ := strings.Cut(key, "/")
 			log.Warn("scope file isn't valid", "listener", listener, "scope", name, "reason", why)
