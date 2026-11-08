@@ -18,6 +18,8 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 - **Breaking: a scope's query parameters and headers are allow-lists.** Each endpoint forwards the query parameters Docker reads for it that YorvoGate lists, and refuses any other (403, naming it), so one a newer Docker adds stays closed until it's listed. Docker gets only the headers it reads that YorvoGate lists (`User-Agent`, `Accept`, `Accept-Encoding`, the OpenTelemetry context, a pull's `X-Registry-Auth`, an attach's `Upgrade`); any other isn't forwarded, and is named in the log. A listed header given twice is refused. See [query parameters and headers](docs/configuration.md#query-parameters-and-headers).
 
+- **A scope file that isn't valid is answered as a scope that doesn't exist** (401, "no such scope, or not its token") to a client of a listener with an address, not with a 500 that named the file and why; the gate's log says why (`scope_error`), as `yorvogate check` and scope status do. On such a listener, a request that couldn't be decided on is answered without the error, which only the log has.
+
 - **Every answer advertises an API version the gate serves.** A newer Docker's `Api-Version` header and `/version` API version are given as the gate's `api.max`, and an older Docker minimum as `api.min`, on every listener; an older Docker keeps its own version, never one it can't serve, so the Docker CLI, Compose and buildx negotiate a version YorvoGate accepts. Before, upgrading Docker past YorvoGate's API version made every negotiating client ask for the newer version and be refused.
 
 ### Added

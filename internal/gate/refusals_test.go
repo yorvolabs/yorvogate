@@ -1,7 +1,11 @@
 package gate
 
 import (
+	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -103,5 +107,56 @@ func TestAnotherScopesObjectIsRefusedInTheTimeOfOneThatIsntThere(t *testing.T) {
 
 	if status, took := timed("/v1.56/containers/jane-php-1/json"); status != http.StatusOK || took >= slow {
 		t.Errorf("the scope's own container: %d in %v, held", status, took)
+	}
+}
+
+// A client of a listener with an address that names a scope whose file isn't valid is answered as
+// one naming no scope: nothing says the file is there, nor where. The log says why.
+func TestAScopeFileThatIsntValidIsAnUnknownScope(t *testing.T) {
+	d := startDocker(t)
+
+	var log logs
+	server := gateLogging(t, d, "sites", slog.New(slog.NewTextHandler(&log, nil)))
+	g := server.Config.Handler.(*Gate)
+
+	if err := os.WriteFile(filepath.Join(g.listener.Scopes, "broken.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := g.registry.Reload(); err != nil {
+		t.Fatal(err)
+	}
+
+	status, answer := send(t, server, "GET", "/v1.56/version", "", map[string]string{"X-YorvoGate-Scope": "broken", "X-YorvoGate-Token": token})
+	if status != http.StatusUnauthorized || message(t, answer) != "yorvogate: no such scope, or not its token" || strings.Contains(answer, g.listener.Scopes) {
+		t.Errorf("%d %s", status, answer)
+	}
+
+	if !strings.Contains(log.String(), "scope_error=") || !strings.Contains(log.String(), "broken.json") {
+		t.Errorf("the log doesn't say why: %s", log.String())
+	}
+
+	// A scope that isn't there: nothing more to say.
+	log.Reset()
+	if status, _ := send(t, server, "GET", "/v1.56/version", "", map[string]string{"X-YorvoGate-Scope": "nobody", "X-YorvoGate-Token": token}); status != http.StatusUnauthorized || strings.Contains(log.String(), "scope_error") {
+		t.Errorf("%d %s", status, log.String())
+	}
+}
+
+// What couldn't be decided on is said in the log, not to a client of a listener with an address.
+func TestWhatCouldntBeDecidedOnIsntSaidToAClient(t *testing.T) {
+	d := startDocker(t)
+
+	var log logs
+	server := gateLogging(t, d, "sites", slog.New(slog.NewTextHandler(&log, nil)))
+	_ = os.Remove(d.socket)
+
+	status, answer := send(t, server, "GET", "/v1.56/containers/jane-php-1/json", "", asJane)
+	if status != http.StatusInternalServerError || message(t, answer) != "yorvogate: the request couldn't be decided on" {
+		t.Errorf("%d %s", status, answer)
+	}
+
+	if !strings.Contains(log.String(), "asking Docker") {
+		t.Errorf("the log doesn't say why: %s", log.String())
 	}
 }

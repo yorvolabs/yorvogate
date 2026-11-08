@@ -169,8 +169,45 @@ func TestScopeFilesAreChecked(t *testing.T) {
 		dir := t.TempDir()
 		write(t, dir, "jane", content)
 
-		if _, err := testStore(t, dir, false).Authenticate("jane", token); err == nil || errors.Is(err, ErrUnknown) {
+		// Refused as an unknown scope is, saying why only in what it wraps (for the log)
+		if _, err := testStore(t, dir, false).Authenticate("jane", token); !errors.Is(err, ErrUnknown) || err.Error() == ErrUnknown.Error() {
 			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// Every token is compared with a digest, once, whether its scope is there, valid, tokenless or not:
+// which it is takes no other time to tell.
+func TestEveryTokenIsComparedOnce(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "jane", jane())
+	write(t, dir, "broken", "{")
+	write(t, dir, "free", `{"owner": {"label": "com.docker.compose.project", "value": "free"}, "prefixes": ["free-"]}`)
+
+	calls := 0
+	compare := compareTokens
+	compareTokens = func(x, y []byte) int {
+		calls++
+		if len(x) != len(y) {
+			t.Errorf("compared %d bytes with %d", len(x), len(y))
+		}
+
+		return compare(x, y)
+	}
+	t.Cleanup(func() { compareTokens = compare })
+
+	store := testStore(t, dir, false)
+	tokenless := testStore(t, dir, true)
+
+	for _, c := range []struct {
+		store       reloading
+		name, token string
+	}{{store, "jane", token}, {store, "jane", "wrong"}, {store, "nobody", token}, {store, "broken", token}, {store, "free", token}, {tokenless, "free", token}} {
+		calls = 0
+		_, _ = c.store.Authenticate(c.name, c.token)
+
+		if calls != 1 {
+			t.Errorf("%s: compared %d times", c.name, calls)
 		}
 	}
 }

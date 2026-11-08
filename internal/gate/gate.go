@@ -73,10 +73,11 @@ func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.
 	return g
 }
 
-// refusal is a request not forwarded: its HTTP status and why.
+// refusal is a request not forwarded: its HTTP status and why, and what's only logged.
 type refusal struct {
 	status int
 	reason string
+	logged []any
 }
 
 func (r *refusal) Error() string { return r.reason }
@@ -103,10 +104,10 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var refused *refusal
 		if !errors.As(err, &refused) {
-			refused = refuse(http.StatusInternalServerError, "the request couldn't be decided on: %v", err)
+			refused = g.undecided(err)
 		}
 
-		entry.Warn("refused", "status", refused.status, "reason", refused.reason)
+		entry.Warn("refused", append([]any{"status", refused.status, "reason", refused.reason}, refused.logged...)...)
 		answer(w, refused.status, refused.reason)
 
 		return
@@ -120,6 +121,17 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	g.upstream.Forward(w, forward)
+}
+
+// undecided is the refusal of a request that couldn't be decided on. A client of a listener with an
+// address may not have proved a scope yet: it isn't told why, which could say what the gate has (a
+// scope file's path); the log is.
+func (g *Gate) undecided(err error) *refusal {
+	if g.listener.Mode == config.Scoped && !g.listener.SocketBound() {
+		return &refusal{status: http.StatusInternalServerError, reason: "the request couldn't be decided on", logged: []any{"error", err.Error()}}
+	}
+
+	return refuse(http.StatusInternalServerError, "the request couldn't be decided on: %v", err)
 }
 
 // decided returns the request to forward (with what YorvoGate checked as its body) and, on a scoped
@@ -254,7 +266,14 @@ func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 	if !g.listener.SocketBound() {
 		s, err := g.scopes.Authenticate(r.Header.Get(ScopeHeader), r.Header.Get(TokenHeader))
 		if errors.Is(err, scope.ErrUnknown) {
-			return nil, refuse(http.StatusUnauthorized, "no such scope, or not its token")
+			refused := refuse(http.StatusUnauthorized, "no such scope, or not its token")
+			// More than ErrUnknown is a scope file that isn't valid: why, for the log (the reload
+			// said it too)
+			if err != scope.ErrUnknown {
+				refused.logged = []any{"scope_error", err.Error()}
+			}
+
+			return nil, refused
 		}
 
 		return s, err

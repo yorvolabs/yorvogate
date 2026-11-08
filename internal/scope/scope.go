@@ -91,6 +91,9 @@ var (
 // ErrUnknown is a scope with no file, or a token that doesn't match it.
 var ErrUnknown = errors.New("no such scope, or not its token")
 
+// compareTokens compares a token's digest with a scope's, in constant time (a test counts its calls).
+var compareTokens = subtle.ConstantTimeCompare
+
 // Store is one scoped listener's scopes: its folder, as the registry's snapshot has it. It reads
 // no file: Registry.Reload does.
 type Store struct {
@@ -98,8 +101,9 @@ type Store struct {
 	folder   int
 }
 
-// Authenticate returns the scope a request names, if its token is the scope's. Both a missing scope
-// and a wrong token give ErrUnknown, in the same time, so a client can't tell which scopes exist.
+// Authenticate returns the scope a request names, if its token is the scope's. A missing scope, one
+// whose file isn't valid and a wrong token all give ErrUnknown, in the same time, so a client can't
+// tell which scopes exist. A file that isn't valid is said why in what's wrapped (for the log only).
 func (s *Store) Authenticate(name, token string) (*Scope, error) {
 	if !validName.MatchString(name) || token == "" {
 		return nil, ErrUnknown
@@ -116,13 +120,13 @@ func (s *Store) Authenticate(name, token string) (*Scope, error) {
 	}
 
 	want, _ := hex.DecodeString(digest)
-	matches := subtle.ConstantTimeCompare(want, got[:]) == 1
+	matches := compareTokens(want, got[:]) == 1
 
 	switch {
 	case err != nil && errors.Is(err, os.ErrNotExist):
 		return nil, ErrUnknown
 	case err != nil:
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", ErrUnknown, err)
 	case !matches || scope.TokenSHA256 == "":
 		return nil, ErrUnknown
 	}
