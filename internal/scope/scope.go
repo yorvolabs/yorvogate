@@ -114,7 +114,22 @@ func (s *Store) Authenticate(name, token string) (*Scope, error) {
 	got := sha256.Sum256([]byte(token))
 	digest := noToken
 
-	scope, err := s.Get(name)
+	var (
+		scope   *Scope
+		err     error
+		unknown = errUnreadUnknown
+	)
+
+	if view := s.view(); view == nil {
+		err = errUnread
+	} else {
+		scope, err = view.get(name)
+		unknown = view.unknown[name] // nil when it's there or missing
+		if unknown == nil {
+			unknown = ErrUnknown
+		}
+	}
+
 	if err == nil && scope.TokenSHA256 != "" {
 		digest = scope.TokenSHA256
 	}
@@ -123,10 +138,8 @@ func (s *Store) Authenticate(name, token string) (*Scope, error) {
 	matches := compareTokens(want, got[:]) == 1
 
 	switch {
-	case err != nil && errors.Is(err, os.ErrNotExist):
-		return nil, ErrUnknown
 	case err != nil:
-		return nil, fmt.Errorf("%w: %w", ErrUnknown, err)
+		return nil, unknown
 	case !matches || scope.TokenSHA256 == "":
 		return nil, ErrUnknown
 	}
@@ -151,22 +164,46 @@ func (s *Store) Get(name string) (*Scope, error) {
 		return nil, fmt.Errorf("%q isn't a scope's name", name)
 	}
 
-	snap := s.registry.snapshot.Load()
-	if snap == nil {
-		return nil, errors.New("the scope files haven't been read yet")
+	view := s.view()
+	if view == nil {
+		return nil, errUnread
 	}
 
-	view := snap.folders[s.folder]
+	return view.get(name)
+}
 
-	if err, ok := view.errors[name]; ok {
+var (
+	// errMissing is a scope that isn't there; errUnread, a lookup before the first reload. Each is
+	// made once, as a file's error is made at its reload: a lookup that misses allocates nothing,
+	// so it takes as long as one that finds.
+	errMissing = fmt.Errorf("no such scope: %w", os.ErrNotExist)
+	errUnread  = errors.New("the scope files haven't been read yet")
+	// errUnreadUnknown is errUnread as Authenticate gives it
+	errUnreadUnknown = fmt.Errorf("%w: %w", ErrUnknown, errUnread)
+)
+
+// view is the listener's folder as the last reload found it, or nil before the first.
+func (s *Store) view() *folderView {
+	snap := s.registry.snapshot.Load()
+	if snap == nil {
+		return nil
+	}
+
+	return &snap.folders[s.folder]
+}
+
+// get returns the scope a name is, or why it isn't one. Every error was made when the files were
+// read.
+func (v *folderView) get(name string) (*Scope, error) {
+	if err, ok := v.errors[name]; ok {
 		return nil, err
 	}
 
-	if scope, ok := view.views[name]; ok {
+	if scope, ok := v.views[name]; ok {
 		return scope, nil
 	}
 
-	return nil, fmt.Errorf("scope %s: %w", name, os.ErrNotExist)
+	return nil, errMissing
 }
 
 // Unversioned names the valid scopes whose files have no version: read as version 1 until 0.4, which

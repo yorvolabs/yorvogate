@@ -96,6 +96,8 @@ type snapshot struct {
 type folderView struct {
 	views  map[string]*Scope
 	errors map[string]error
+	// Each error as Authenticate gives it: ErrUnknown, wrapping it
+	unknown map[string]error
 	// The SHA-256 of each scope file, as read
 	digests map[string]string
 	// The valid scopes whose files have no version
@@ -490,7 +492,7 @@ func resolve(folders []Folder, loaded []map[string]entry, held map[string]claims
 	}
 
 	for i, files := range loaded {
-		view := folderView{views: map[string]*Scope{}, errors: map[string]error{}, digests: map[string]string{}}
+		view := folderView{views: map[string]*Scope{}, errors: map[string]error{}, unknown: map[string]error{}, digests: map[string]string{}}
 
 		for name, e := range files {
 			view.digests[name] = e.digest
@@ -509,6 +511,10 @@ func resolve(folders []Folder, loaded []map[string]entry, held map[string]claims
 					view.unversioned = append(view.unversioned, name)
 				}
 			}
+		}
+
+		for name, err := range view.errors {
+			view.unknown[name] = fmt.Errorf("%w: %w", ErrUnknown, err)
 		}
 
 		sort.Strings(view.unversioned)
