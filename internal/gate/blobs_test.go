@@ -153,6 +153,7 @@ func TestAnArchiveHoldsWhatItRefersTo(t *testing.T) {
 		"a manifest listed as an index":                  {append(append([]entry{}, img.blobs...), withIndex(ref(ociIndex, img.manifest, name))), ""},
 		"a blob from elsewhere":                          {append(append([]entry{}, img.blobs...), withIndex(map[string]any{"mediaType": ociManifest, "digest": "sha256:" + sha(img.manifest), "size": len(img.manifest), "urls": []string{"https://example.com/x"}})), "from elsewhere"},
 		"another digest algorithm":                       {append(append([]entry{}, img.blobs...), withIndex(map[string]any{"mediaType": ociManifest, "digest": "sha512:" + strings.Repeat("a", 128), "size": 1})), "only sha256"},
+		"a blob, then a link by its name":                {[]entry{img.blobs[0], img.blobs[1], img.blobs[2], {name: "./" + img.blobs[2].name, link: true}, withIndex(ref(ociManifest, img.manifest, name))}, "twice"},
 		"a blob that's a link":                           {[]entry{img.blobs[0], img.blobs[1], {name: img.blobs[2].name, link: true}, withIndex(ref(ociManifest, img.manifest, name))}, "lacks sha256:" + sha(img.manifest)},
 		"indexes nested too deep":                        {append(append(append([]entry{}, img.blobs...), deepBlobs...), withIndex(ref(ociIndex, deep, name))), "deeper than"},
 		"manifest.json, a layer it lacks":                {[]entry{img.blobs[1], {name: "manifest.json", content: `[{"Config":"` + img.blobs[1].name + `","RepoTags":["quire-sites/jane/app:1"],"Layers":["` + img.blobs[0].name + `"]}]`}}, "lacks " + img.blobs[0].name},

@@ -134,6 +134,7 @@ func archiveNames(r io.Reader) ([]string, *contents, error) {
 
 	reader := tar.NewReader(archive)
 	held := newContents()
+	paths := map[string]bool{}
 	var names []string
 
 	for {
@@ -148,6 +149,14 @@ func archiveNames(r io.Reader) ([]string, *contents, error) {
 
 		name := path.Clean(strings.TrimPrefix(header.Name, "./"))
 		named := name == "manifest.json" || name == "index.json" || name == "repositories"
+
+		// Every path once, whatever it is: where the last entry of a name wins, a second one would
+		// put other content under a name than what was hashed.
+		if paths[name] {
+			return nil, nil, fmt.Errorf("the archive has %s twice", name)
+		}
+
+		paths[name] = true
 
 		// One of each, a plain file: any other and Docker could read another than this check.
 		if named && (held.digests[name] != "" || header.Typeflag != tar.TypeReg) {
