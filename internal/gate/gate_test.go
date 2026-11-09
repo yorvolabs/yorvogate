@@ -49,6 +49,13 @@ type docker struct {
 	api string
 	// How long it takes to answer a lookup of an object that exists (none unless a test sets it)
 	slow time.Duration
+	// The classic image store, which gives no image Descriptor (the containerd store unless a test
+	// sets it)
+	classic bool
+	// A Descriptor whose digest isn't the image's ID (one a test doesn't trust)
+	otherDescriptor bool
+	// YorvoGate's own lookups, counted
+	lookups int
 }
 
 func (d *docker) apiVersion() string {
@@ -270,6 +277,11 @@ func startDocker(t testing.TB) *docker {
 
 // inspect answers YorvoGate's lookups, as Docker's inspect endpoints do.
 func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
+	d.mu.Lock()
+	d.lookups++
+	classic, otherDescriptor := d.classic, d.otherDescriptor
+	d.mu.Unlock()
+
 	if m := imageLookup.FindStringSubmatch(r.URL.Path); m != nil {
 		img := findImage(m[1])
 		if img == nil {
@@ -278,7 +290,17 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		_ = json.NewEncoder(w).Encode(map[string]any{"Id": img.id, "RepoTags": img.tags})
+		answer := map[string]any{"Id": img.id, "RepoTags": img.tags}
+		if !classic {
+			digest := img.id
+			if otherDescriptor {
+				digest = "sha256:" + strings.Repeat("f", 64)
+			}
+
+			answer["Descriptor"] = map[string]any{"mediaType": "application/vnd.oci.image.index.v1+json", "digest": digest, "size": 1609}
+		}
+
+		_ = json.NewEncoder(w).Encode(answer)
 
 		return
 	}
@@ -349,6 +371,13 @@ func (d *docker) last() seen {
 	}
 
 	return d.forwarded[len(d.forwarded)-1]
+}
+
+func (d *docker) lookupCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return d.lookups
 }
 
 func (d *docker) count() int {

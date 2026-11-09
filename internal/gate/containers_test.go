@@ -85,7 +85,8 @@ func TestAContainerAsComposeCreatesItIsAllowed(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if forwarded["Image"] != "quire-sites/jane/php-prod" || forwarded["HostConfig"].(map[string]any)["Memory"] != float64(536870912) {
+	// The image it runs is the one checked: by name and ID (Docker's containerd store)
+	if forwarded["Image"] != "quire-sites/jane/php-prod@sha256:"+strings.Repeat("2", 64) || forwarded["HostConfig"].(map[string]any)["Memory"] != float64(536870912) {
 		t.Errorf("forwarded %s", got.body)
 	}
 
@@ -440,12 +441,13 @@ func TestItReadsImagesButNotAnotherScopes(t *testing.T) {
 }
 
 // A container runs an image the scope may read, by whatever name: never one all of whose names are
-// another's, by its ID or by as few digits of it as Docker takes, nor a nameless leftover.
+// another's, by its ID or by as few digits of it as Docker takes, nor a nameless leftover. The name
+// looked up is the one asked, whole ("alpine:3.22#x" isn't alpine:3.22).
 func TestAContainerRunsOnlyAnImageItMayRead(t *testing.T) {
 	d := startDocker(t)
 	server := gate(t, d, "sites")
 
-	for _, image := range []string{"sha256:" + strings.Repeat("3", 64), strings.Repeat("3", 64), "3333", "sha256:333333", "sha256:" + strings.Repeat("4", 64), "4444", "quire-sites/jane/nothing", "alpine:9"} {
+	for _, image := range []string{"sha256:" + strings.Repeat("3", 64), strings.Repeat("3", 64), "3333", "sha256:333333", "sha256:" + strings.Repeat("4", 64), "4444", "quire-sites/jane/nothing", "alpine:9", "alpine:3.22#x", "alpine:3.22?x"} {
 		before := d.count()
 		if status, answer := send(t, server, "POST", "/v1.56/containers/create?name=jane-php-1", encode(set(compose(), "Image", image)), asJane); status != http.StatusNotFound || !strings.Contains(message(t, answer), "No such image") || d.count() != before {
 			t.Errorf("%s: %d %s", image, status, answer)
@@ -479,6 +481,112 @@ func TestItSeesItsOwnNetworksAndVolumes(t *testing.T) {
 	for _, path := range []string{"/v1.56/networks/blog_default", "/v1.56/networks/" + blogNet, "/v1.56/volumes/blog_data", "/v1.56/volumes/nothing"} {
 		if status, answer := send(t, server, "GET", path, "", asJane); status != http.StatusNotFound {
 			t.Errorf("%s: %d %s", path, status, answer)
+		}
+	}
+}
+
+// What's checked is what runs: create names the image by the ID Docker answered (with the name's
+// repository on the containerd store, which then resolves it only while that repository has it), and
+// inspect, history and the source of a tag go to the ID. A name moved after the check moves nothing.
+func TestImageOperationsGoToTheImageChecked(t *testing.T) {
+	jane := "sha256:" + strings.Repeat("2", 64)
+	alpine := "sha256:" + strings.Repeat("1", 64)
+
+	// A Descriptor that doesn't describe the ID says nothing of the store: the ID alone, as on classic
+	for _, store := range []string{"containerd", "classic", "another descriptor"} {
+		d := startDocker(t)
+		d.mu.Lock()
+		d.classic = store == "classic"
+		d.otherDescriptor = store == "another descriptor"
+		d.mu.Unlock()
+		server := gate(t, d, "sites")
+
+		creates := map[string]string{
+			"quire-sites/jane/php-prod":        "quire-sites/jane/php-prod@" + jane,
+			"quire-sites/jane/php-prod:latest": "quire-sites/jane/php-prod@" + jane,
+			// A digest the client gives is replaced by the ID, not added to
+			"quire-sites/jane/php-prod@" + jane: "quire-sites/jane/php-prod@" + jane,
+			"alpine:3.22":                       "alpine@" + alpine,
+			// By ID (or its digits): the ID alone, there's no name to keep
+			"2222": jane,
+			jane:   jane,
+		}
+
+		for asked, want := range creates {
+			if store != "containerd" {
+				want = "sha256:" + want[len(want)-64:]
+			}
+
+			if status, answer := send(t, server, "POST", "/v1.56/containers/create?name=jane-php-1", encode(set(compose(), "Image", asked)), asJane); status != http.StatusOK {
+				t.Fatalf("%s %s: %d %s", store, asked, status, answer)
+			}
+
+			var forwarded map[string]any
+			if err := json.Unmarshal([]byte(d.last().body), &forwarded); err != nil {
+				t.Fatal(err)
+			}
+
+			if forwarded["Image"] != want {
+				t.Errorf("%s: create %s ran %v, not %s", store, asked, forwarded["Image"], want)
+			}
+		}
+
+		for path, want := range map[string]string{
+			"/v1.56/images/quire-sites/jane/php-prod/json":                "/v1.56/images/" + jane + "/json",
+			"/v1.56/images/2222/history":                                  "/v1.56/images/" + jane + "/history",
+			"/v1.56/images/alpine:3.22/tag?repo=quire-sites/jane/x&tag=1": "/v1.56/images/" + alpine + "/tag",
+		} {
+			if status, answer := send(t, server, map[bool]string{true: "POST", false: "GET"}[strings.Contains(path, "/tag?")], path, "", asJane); status != http.StatusOK {
+				t.Fatalf("%s %s: %d %s", store, path, status, answer)
+			}
+
+			if got := d.last().path; got != want {
+				t.Errorf("%s: %s went to %s, not %s", store, path, got, want)
+			}
+		}
+
+		// Saves and deletes go by the name: a save by ID has no names, a delete by ID deletes the image
+		for path, want := range map[string]string{
+			"/v1.56/images/quire-sites/jane/php-prod/get": "/v1.56/images/quire-sites/jane/php-prod/get",
+			"/v1.56/images/quire-sites/jane/php-prod:old": "/v1.56/images/quire-sites/jane/php-prod:old",
+		} {
+			method := map[bool]string{true: "GET", false: "DELETE"}[strings.HasSuffix(path, "/get")]
+			if status, answer := send(t, server, method, path, "", asJane); status != http.StatusOK {
+				t.Fatalf("%s %s: %d %s", store, path, status, answer)
+			}
+
+			if got := d.last().path; got != want {
+				t.Errorf("%s: %s went to %s, not %s", store, path, got, want)
+			}
+		}
+	}
+}
+
+// pinned is built from what Docker answered only: its ID, and the repository of one of the image's
+// own names. A client's digest, tag or name the image doesn't have is never in it.
+func TestPinnedIsDockersOwn(t *testing.T) {
+	id := resolvedID("sha256:" + strings.Repeat("a", 64))
+	other := "sha256:" + strings.Repeat("b", 64)
+	img := &image{ID: id, Tags: []string{"registry.example:5000/team/app:2", "alpine:3.22"}, Containerd: true}
+
+	for ref, want := range map[string]string{
+		"registry.example:5000/team/app":            "registry.example:5000/team/app@" + string(id),
+		"registry.example:5000/team/app:1@" + other: "registry.example:5000/team/app@" + string(id),
+		"docker.io/library/alpine@" + other:         "alpine@" + string(id),
+		"index.docker.io/alpine:edge":               "alpine@" + string(id),
+		"aaaa":                                      string(id),
+		"sha256:" + strings.Repeat("a", 12):         string(id),
+		"busybox:1":                                 string(id),
+	} {
+		if got := pinned(ref, img); got != want {
+			t.Errorf("containerd %s: %s, not %s", ref, got, want)
+		}
+
+		classic := *img
+		classic.Containerd = false
+
+		if got := pinned(ref, &classic); got != string(id) {
+			t.Errorf("classic %s: %s, not the ID", ref, got)
 		}
 	}
 }

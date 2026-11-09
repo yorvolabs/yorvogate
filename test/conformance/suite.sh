@@ -305,6 +305,14 @@ shared=$(direct image inspect alpine:3.22 --format '{{.Id}}' | sed 's/^sha256://
 # shellcheck disable=SC2059
 status "a container of a shared image, by a short ID" 201 jane POST /v1.56/containers/create?name=ygc-jane-short-1 "$(printf "$create" '' | sed "s|alpine:3.22|$(printf '%.6s' "$shared")|")"
 direct rm -f ygc-jane-short-1 >/dev/null 2>&1
+# What a container runs is the image checked, named by what Docker answered: "name@ID" on the
+# containerd store, the ID on the classic one (the store as Docker's /info says it, not as YorvoGate
+# guesses it)
+if direct info --format '{{json .DriverStatus}}' | grep -q io.containerd.snapshotter; then pin="alpine@sha256:$shared"; else pin="sha256:$shared"; fi
+# shellcheck disable=SC2059
+status "a container of a shared image, by name" 201 jane POST /v1.56/containers/create?name=ygc-jane-pin-1 "$(printf "$create" '')"
+if [ "$(direct inspect --format '{{.Config.Image}}' ygc-jane-pin-1 2>&1)" = "$pin" ]; then ok "it runs the image checked ($pin)"; else ko "it runs the image checked" "$(direct inspect --format '{{.Config.Image}}' ygc-jane-pin-1 2>&1), not $pin"; fi
+direct rm -f ygc-jane-pin-1 >/dev/null 2>&1
 status "no version in the path" 400 jane GET /containers/json
 status "a version YorvoGate doesn't know" 400 jane GET /v1.99/containers/json
 status "an encoded slash" 400 jane GET /v1.56/containers%2Fjson

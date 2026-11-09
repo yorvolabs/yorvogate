@@ -495,3 +495,21 @@ func TestANestedScopesNamesAreItsOwn(t *testing.T) {
 		}
 	}
 }
+
+// distribution.inspect of a name in another scope's protected namespace is refused before Docker is
+// asked anything: not its own lookups, not the registry.
+func TestDistributionOfAnotherScopesNameAsksNothing(t *testing.T) {
+	d := startDocker(t)
+	server := gate(t, d, "sites")
+
+	for _, name := range []string{"quire-sites/blog/php-prod", "docker.io/quire-sites/blog/php-prod:latest", "quire-sites/blog/php-prod@sha256:" + strings.Repeat("3", 64)} {
+		lookups, forwarded := d.lookupCount(), d.count()
+		if status, answer := send(t, server, "GET", "/v1.56/distribution/"+name+"/json", "", asJane); status != http.StatusNotFound || !strings.Contains(message(t, answer), "No such image") {
+			t.Errorf("%s: %d %s", name, status, answer)
+		}
+
+		if d.lookupCount() != lookups || d.count() != forwarded {
+			t.Errorf("%s: Docker was asked", name)
+		}
+	}
+}

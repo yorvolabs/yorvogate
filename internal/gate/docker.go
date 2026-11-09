@@ -105,10 +105,12 @@ func (d *Docker) Volume(ctx context.Context, version, name string) (*object, err
 	return &object{ID: resolvedID(answer.Name), Name: answer.Name, Labels: answer.Labels, Driver: answer.Driver, Options: answer.Options}, nil
 }
 
-// image is what YorvoGate needs to know of an image: its ID and names.
+// image is what YorvoGate needs to know of an image: its ID, its names, and whether the containerd
+// store keeps it (there, the ID is the digest a name points to, so "name@ID" names it too).
 type image struct {
-	ID   string
-	Tags []string
+	ID         resolvedID
+	Tags       []string
+	Containerd bool
 }
 
 // Image looks an image up by name or ID; nil when there's none.
@@ -116,14 +118,23 @@ func (d *Docker) Image(ctx context.Context, version, ref string) (*image, error)
 	var answer struct {
 		ID       string `json:"Id"`
 		RepoTags []string
+		// Only the containerd store gives it (and only from API 1.48): the descriptor of what the ID
+		// names, whose digest is then the ID.
+		Descriptor *struct {
+			Digest string `json:"digest"`
+		}
 	}
 
-	found, err := d.get(ctx, version, "/images/"+ref+"/json", &answer)
+	found, err := d.get(ctx, version, "/images/"+url.PathEscape(ref)+"/json", &answer)
 	if !found || err != nil {
 		return nil, err
 	}
 
-	return &image{ID: answer.ID, Tags: answer.RepoTags}, nil
+	return &image{
+		ID:         resolvedID(answer.ID),
+		Tags:       answer.RepoTags,
+		Containerd: answer.Descriptor != nil && answer.Descriptor.Digest == answer.ID,
+	}, nil
 }
 
 // execInfo is what YorvoGate needs to know of an exec: its container, and what it runs.

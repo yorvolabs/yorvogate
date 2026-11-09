@@ -179,9 +179,13 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 
 	// What it runs is an image it may read, however it's named: Docker takes an ID by as few as 4 of
 	// its digits, so a name checked alone would let it run an image all of whose names are another's.
-	if err := s.readsImage(req.Config.Image); err != nil {
+	img, err := s.readsImage(req.Config.Image)
+	if err != nil {
 		return nil, err
 	}
+
+	// And it runs that image: a name moved after the check doesn't change what it runs.
+	req.Config.Image = pinned(req.Config.Image, img)
 
 	// A volume a mount creates is the scope's: it carries its owner label. (Docker sets a mount's
 	// labels only on a volume it creates; one that exists is left as it is.)
