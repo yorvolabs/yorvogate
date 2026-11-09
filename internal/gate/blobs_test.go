@@ -206,3 +206,35 @@ func TestAnArchivesJSONIsBounded(t *testing.T) {
 		t.Errorf("an oversize manifest: %v", err)
 	}
 }
+
+// An entry's name is relative, and goes nowhere up: "/manifest.json" is manifest.json to an
+// extractor that joins names onto its folder, whatever this check would make of it.
+func TestAnArchivesPathsAreRelative(t *testing.T) {
+	d := startDocker(t)
+	server := gate(t, d, "sites")
+	own := `[{"RepoTags":["quire-sites/jane/app:1"]}]`
+	before := d.count()
+
+	for what, entries := range map[string][]entry{
+		"manifest.json, then /manifest.json": {{name: "manifest.json", content: own}, {name: "/manifest.json", content: `[{"RepoTags":["postgres:18"]}]`}},
+		"//manifest.json":                    {{name: "//manifest.json", content: `[{"RepoTags":["postgres:18"]}]`}},
+		"an absolute blob":                   {{name: "/blobs/sha256/" + sha("x"), content: "x"}},
+		"a/../manifest.json":                 {{name: "a/../manifest.json", content: `[{"RepoTags":["postgres:18"]}]`}},
+		"../manifest.json":                   {{name: "../manifest.json", content: own}},
+		"a folder up":                        {{name: "blobs/../../x", content: "x"}},
+	} {
+		status, answer := send(t, server, "POST", "/v1.56/images/load", string(archive(t, entries...)), asJane)
+		if status != http.StatusBadRequest || !strings.Contains(message(t, answer), "isn't a plain relative path") {
+			t.Errorf("%s: %d %s", what, status, answer)
+		}
+	}
+
+	if d.count() != before {
+		t.Errorf("%d archives reached Docker", d.count()-before)
+	}
+
+	// "./" and a dot segment that stays inside are still fine
+	if _, _, err := archiveNames(bytes.NewReader(archive(t, entry{name: "./oci-layout", content: "{}"}, entry{name: "blobs/./sha256/" + sha("y"), content: "y"}))); err != nil {
+		t.Errorf("./ and ./ inside: %v", err)
+	}
+}

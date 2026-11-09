@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -145,6 +146,13 @@ func archiveNames(r io.Reader) ([]string, *contents, error) {
 
 		if err != nil {
 			return nil, nil, fmt.Errorf("not an image archive: %w", err)
+		}
+
+		// A name is relative and goes nowhere up: an extractor that joins "/manifest.json" or
+		// "a/../manifest.json" onto its folder gets the manifest.json this check would read as
+		// another file. Docker's own save writes neither.
+		if strings.HasPrefix(header.Name, "/") || slices.Contains(strings.Split(header.Name, "/"), "..") {
+			return nil, nil, fmt.Errorf("the archive's %q isn't a plain relative path", header.Name)
 		}
 
 		name := path.Clean(strings.TrimPrefix(header.Name, "./"))
