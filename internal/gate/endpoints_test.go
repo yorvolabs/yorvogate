@@ -293,7 +293,7 @@ func TestAHeaderGivenTwiceOrTooLongIsRefused(t *testing.T) {
 	}
 
 	// Two spellings, read in this order, the first empty: given twice all the same
-	if _, _, err := forwarded(http.Header{"Accept": {""}, "accept": {"application/json"}}, "system.version"); err == nil {
+	if _, _, err := forwarded(http.Header{"Accept": {""}, "accept": {"application/json"}}, "system.version", false); err == nil {
 		t.Error("an empty header, then the same under another spelling: forwarded")
 	}
 }

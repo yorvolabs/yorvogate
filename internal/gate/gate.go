@@ -174,7 +174,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			return nil, nil, err
 		}
 
-		headers, dropped, err := forwarded(r.Header, req.Endpoint.Name)
+		headers, dropped, err := forwarded(r.Header, req.Endpoint.Name, upgrading(r))
 		if err != nil {
 			return nil, nil, err
 		}
