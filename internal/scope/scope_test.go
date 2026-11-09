@@ -261,14 +261,14 @@ func TestOnlyPlainFilesOnlyItsOwnerWrites(t *testing.T) {
 
 func TestWhatAScopeMayUse(t *testing.T) {
 	dir := t.TempDir()
-	write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"images": ["quire-sites/jane/"], "builders": ["buildx_buildkit_jane0", "jane-tools"], "networks": {"quire-link-jane": {"aliases": ["jane.example.quire.internal"], "addresses": ["10.213.0.4"]}}, "prefixes"`, 1))
+	write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"images": ["quire-sites/jane/"], "builders": ["buildx_buildkit_jane0", "tools-jane"], "networks": {"quire-link-jane": {"aliases": ["jane.example.quire.internal"], "addresses": ["10.213.0.4"]}}, "prefixes"`, 1))
 
 	s, err := testStore(t, dir, false).Authenticate("jane", token)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !s.Builds("buildx_buildkit_jane0") || !s.Builds("jane-tools") || s.Builds("buildx_buildkit_jane") || s.Builds("jane-tools-2") || s.Builds("buildx_buildkit_blog0") {
+	if !s.Builds("buildx_buildkit_jane0") || !s.Builds("tools-jane") || s.Builds("buildx_buildkit_jane") || s.Builds("tools-jane-2") || s.Builds("buildx_buildkit_blog0") {
 		t.Error("uses only the containers its scope names")
 	}
 

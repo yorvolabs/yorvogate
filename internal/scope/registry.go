@@ -441,6 +441,10 @@ func resolve(folders []Folder, loaded []map[string]entry, held map[string]claims
 			}
 		}
 
+		if overlaps(names, proposed, valid, held, refused) {
+			more = true
+		}
+
 		if !more {
 			break
 		}
@@ -513,6 +517,70 @@ func resolve(folders []Folder, loaded []map[string]entry, held map[string]claims
 	}
 
 	return snap, next
+}
+
+// overlaps refuses a scope whose builder's name a scope's prefix covers (its own, or another's): a
+// builder is named exactly, a container of a scope's by its prefixes, and one name would be both. As
+// with a claim two scopes want, the one that held its claim before keeps it and the other is refused;
+// if both or neither held theirs, both are. A scope reserved, or refused already, only keeps others
+// out. It tells whether it refused any.
+func overlaps(names []string, proposed map[string]claims, valid map[string]claims, held map[string]claims, refused map[string]error) bool {
+	byPrefix := map[string][]string{}
+
+	for _, name := range names {
+		if c, ok := proposed[name]; ok {
+			for _, p := range c.Prefixes {
+				byPrefix[p] = append(byPrefix[p], name)
+			}
+		}
+	}
+
+	more := false
+
+	refuse := func(name string, err error) {
+		if _, ok := valid[name]; ok && refused[name] == nil {
+			refused[name] = err
+			more = true
+		}
+	}
+
+	for _, name := range names {
+		c, ok := proposed[name]
+		if !ok {
+			continue
+		}
+
+		for _, b := range c.Builders {
+			// A prefix covers a name it starts and that goes beyond it (Names)
+			for n := 1; n < len(b); n++ {
+				p := b[:n]
+
+				for _, other := range byPrefix[p] {
+					if name == other {
+						refuse(name, fmt.Errorf("builders: %q is under its own prefix %q: a builder's name can't be one of its containers' names", b, p))
+
+						continue
+					}
+
+					err := fmt.Errorf("builders: scope %s's builder %q is under scope %s's prefix %q: a builder's name can't be a scope's container's name", name, b, other, p)
+
+					builderHeld, prefixHeld := held[name].has(claim{"builders", b}), held[other].has(claim{"prefixes", p})
+
+					switch {
+					case builderHeld && !prefixHeld:
+						refuse(other, err)
+					case prefixHeld && !builderHeld:
+						refuse(name, err)
+					default:
+						refuse(name, err)
+						refuse(other, err)
+					}
+				}
+			}
+		}
+	}
+
+	return more
 }
 
 // collision says why a scope is refused: a claim another scope has, or that several want.

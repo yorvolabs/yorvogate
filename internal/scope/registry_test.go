@@ -694,3 +694,92 @@ func TestAnOversizeFileIsRefused(t *testing.T) {
 
 	get(t, r, "one", "jane")
 }
+
+// withBuilders is a scope file with builders.
+func withBuilders(owner, prefix string, builders ...string) string {
+	list := `"` + strings.Join(builders, `", "`) + `"`
+
+	return strings.Replace(scopeFile(owner, prefix, "quire-sites/"+owner+"/"), `"prefixes"`, `"builders": [`+list+`], "prefixes"`, 1)
+}
+
+// A builder is named exactly, a scope's containers by their prefixes: a builder's name a prefix
+// covers is refused, its own or another's. The file that brings the overlap is refused, and the
+// scope that held its claim before keeps it.
+func TestABuilderIsNoScopesName(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t, dir, false)
+
+	// Under its own prefix
+	write(t, dir, "jane", withBuilders("jane", "jane", "jane-buildkit"))
+
+	if _, err := store.Get("jane"); err == nil || !strings.Contains(err.Error(), `"jane-buildkit" is under its own prefix "jane-"`) {
+		t.Errorf("its own prefix: %v", err)
+	}
+
+	// A name equal to a prefix isn't one it covers
+	write(t, dir, "jane", withBuilders("jane", "jane", "buildkit-jane", "jane", "jane-"))
+
+	if _, err := store.Get("jane"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A new scope whose prefix covers jane's builder: the new one is refused, jane keeps its builder
+	write(t, dir, "buildkit", scopeFile("buildkit", "buildkit", "quire-sites/buildkit/"))
+
+	_, err := store.Get("buildkit")
+	if err == nil || !strings.Contains(err.Error(), `scope jane's builder "buildkit-jane" is under scope buildkit's prefix "buildkit-"`) {
+		t.Errorf("a new prefix over a builder: %v", err)
+	}
+
+	if jane, err := store.Get("jane"); err != nil || !jane.Builds("buildkit-jane") {
+		t.Errorf("jane, its builder held: %v", err)
+	}
+
+	// The other way: a builder under a prefix another scope held already
+	_ = os.Remove(filepath.Join(dir, "buildkit.json"))
+	write(t, dir, "blog", scopeFile("blog", "blog", "quire-sites/blog/"))
+
+	if _, err := store.Get("blog"); err != nil {
+		t.Fatal(err)
+	}
+
+	write(t, dir, "jane", withBuilders("jane", "jane", "buildkit-jane", "blog-buildkit"))
+
+	if _, err := store.Get("jane"); err == nil || !strings.Contains(err.Error(), `scope jane's builder "blog-buildkit" is under scope blog's prefix "blog-"`) {
+		t.Errorf("a new builder under a prefix: %v", err)
+	}
+
+	if _, err := store.Get("blog"); err != nil {
+		t.Errorf("blog, its prefix held: %v", err)
+	}
+}
+
+// Two new scopes whose builder and prefix overlap are both refused, and a reserved scope's held
+// prefix keeps a builder out as an accepted one's does.
+func TestABuilderOverlapNoOneHeld(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "jane", withBuilders("jane", "jane", "blog-buildkit"))
+	write(t, dir, "blog", scopeFile("blog", "blog", "quire-sites/blog/"))
+	store := testStore(t, dir, false)
+
+	for _, name := range []string{"jane", "blog"} {
+		if _, err := store.Get(name); err == nil || !strings.Contains(err.Error(), `scope jane's builder "blog-buildkit" is under scope blog's prefix "blog-"`) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+
+	// blog alone: accepted; then half-written (reserved, its claims held), and jane comes back
+	write(t, dir, "jane", withBuilders("jane", "jane", "buildkit-jane"))
+
+	if _, err := store.Get("blog"); err != nil {
+		t.Fatal(err)
+	}
+
+	full := scopeFile("blog", "blog", "quire-sites/blog/")
+	write(t, dir, "blog", full[:len(full)/2])
+	write(t, dir, "jane", withBuilders("jane", "jane", "blog-buildkit"))
+
+	if _, err := store.Get("jane"); err == nil || !strings.Contains(err.Error(), `prefix "blog-"`) {
+		t.Errorf("under a reserved scope's prefix: %v", err)
+	}
+}

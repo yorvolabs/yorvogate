@@ -171,7 +171,7 @@ A scope file that isn't valid (or that conflicts) is refused alone: its requests
 One case is left to the orchestrator: if tenant `jane` has a Compose service named `blog-php` before a scope `jane-blog` exists, its container `jane-blog-php-1` is jane's. Once `jane-blog` arrives, `jane-blog`'s Compose project can't take that name. Nothing crosses between the scopes, since ownership is by label, but it's a denial of service. An orchestrator that lets tenants pick nested names should refuse dashes in service names.
 - `networks` (optional): shared networks it may join besides its own, each with the `aliases` it may take and the `addresses` it may ask for there (none if left out).
 - `subnets` (optional): where its networks' addresses must be, in CIDR form: each network it creates names its subnet, inside one of these (otherwise Docker picks from its own pools).
-- `builders` (optional): its BuildKit builders, by exact name (no wildcard), each one scope's only. See [builders](#builders). 0.1's `containers` key is refused: a container a scope "used" was fully its own, privileged or not.
+- `builders` (optional): its BuildKit builders, by exact name (no wildcard), each one scope's only, and outside every scope's prefixes (`buildkit-jane`, not `jane-buildkit`): a name a prefix covers is a container's of that scope, and the file is refused. See [builders](#builders). 0.1's `containers` key is refused: a container a scope "used" was fully its own, privileged or not.
 
 ## The state file
 
