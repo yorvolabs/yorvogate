@@ -1,6 +1,8 @@
 package scope
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"maps"
@@ -11,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 // Folder is one scoped listener's folder of scope files.
@@ -68,10 +69,11 @@ type Registry struct {
 }
 
 type entry struct {
-	modified time.Time
-	size     int64
-	// The SHA-256 of what was read
+	// The SHA-256 of what was read ("" when nothing could be), and the mode it was read with: what a
+	// scope file says and whether it may say it. Nothing of when it was written: a file rewritten
+	// within one tick of the clock, or copied with its times kept, has the old time.
 	digest string
+	mode   os.FileMode
 	scope  *Scope
 	err    error
 }
@@ -222,7 +224,8 @@ func (r *Registry) Missing() []string {
 	return slices.Clone(r.missing)
 }
 
-// scanFolder reads a folder's scope files that changed since they were last read.
+// scanFolder reads a folder's scope files, every one, every scan: a file is parsed again when what
+// it says (its SHA-256) or its mode changed since it was last read.
 func scanFolder(f Folder, loaded map[string]entry) (bool, error) {
 	files, err := os.ReadDir(f.Dir)
 	if err != nil {
@@ -240,33 +243,40 @@ func scanFolder(f Folder, loaded map[string]entry) (bool, error) {
 
 		path := filepath.Join(f.Dir, file.Name())
 
-		// Only to tell whether it changed since the last read; what's checked is what read opens.
-		info, err := os.Lstat(path)
+		content, info, err := read(path)
 		if errors.Is(err, os.ErrNotExist) {
+			// Removed since the folder was read
 			continue
-		} else if err != nil {
-			return false, err
 		}
 
 		present[name] = true
 
+		digest, mode := "", os.FileMode(0)
+		if err == nil {
+			sum := sha256.Sum256(content)
+			digest, mode = hex.EncodeToString(sum[:]), info.Mode()
+		}
+
 		old, known := loaded[name]
-		if known && old.modified.Equal(info.ModTime()) && old.size == info.Size() {
+		if known && digest != "" && old.digest == digest && old.mode == mode {
 			continue
 		}
 
-		scope, digest, opened, err := read(path, f.Tokenless)
+		// A file that still can't be read, for the same reason, is no change either
+		if known && err != nil && old.digest == "" && old.err != nil && old.err.Error() == err.Error() {
+			continue
+		}
+
+		var scope *Scope
+		if err == nil {
+			scope, err = parse(path, content, info, f.Tokenless)
+		}
+
 		if scope != nil {
 			scope.Name = name
 		}
 
-		// What was read is remembered as it was read: if the file changed since the look above, the
-		// next scan reads it again.
-		if opened != nil {
-			info = opened
-		}
-
-		loaded[name] = entry{modified: info.ModTime(), size: info.Size(), digest: digest, scope: scope, err: err}
+		loaded[name] = entry{digest: digest, mode: mode, scope: scope, err: err}
 		changed = true
 	}
 

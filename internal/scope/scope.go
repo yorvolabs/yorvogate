@@ -205,42 +205,34 @@ func (s *Store) Scopes() ([]string, map[string]error, error) {
 	return names, invalid, nil
 }
 
-// read reads a scope file, and the SHA-256 (hex) of what it read ("" for what isn't a plain file).
-// The file is opened once, and what's checked (a plain file, its mode, when it changed) is what's
-// read: the descriptor's, not the path's, which can be swapped between a check and the read. It
-// returns the file's information as the descriptor has it (nil if it couldn't be opened).
-func read(path string, tokenless bool) (*Scope, string, os.FileInfo, error) {
+// read reads a scope file's content. The file is opened once, and what's checked (a plain file, its
+// mode) is what's read: the descriptor's, not the path's, which can be swapped between a check and
+// the read. It returns the file's information as the descriptor has it (nil if it couldn't be
+// opened).
+func read(path string) ([]byte, os.FileInfo, error) {
 	notPlain := fmt.Errorf("scope file %s: must be a plain file, writable by its owner only", path)
 
 	// Never through a link (it could point anywhere), and never waiting on a pipe put in its place
 	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, syscall.ELOOP) {
-		return nil, "", nil, notPlain
+		return nil, nil, notPlain
 	} else if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 	defer file.Close()
 
 	info, err := file.Stat()
 	if err != nil {
-		return nil, "", nil, err
+		return nil, nil, err
 	}
 
 	if !info.Mode().IsRegular() {
-		return nil, "", info, notPlain
+		return nil, info, notPlain
 	}
 
 	content, err := io.ReadAll(file)
-	if err != nil {
-		return nil, "", info, err
-	}
 
-	sum := sha256.Sum256(content)
-	digest := hex.EncodeToString(sum[:])
-
-	scope, err := parse(path, content, info, tokenless)
-
-	return scope, digest, info, err
+	return content, info, err
 }
 
 func parse(path string, content []byte, info os.FileInfo, tokenless bool) (*Scope, error) {

@@ -573,3 +573,106 @@ func TestStatusIsThePublishedSnapshots(t *testing.T) {
 		t.Error("requests don't coalesce")
 	}
 }
+
+// A scope file is read again whenever what it says changed, however it was written: rewritten at the
+// same size within one tick of the clock, or copied with its times kept (cp -p, rsync -t, tar), a
+// file has its old modification time. A new token takes effect at the next scan, and so does a mode
+// that makes the file one others could change (ARC-0049).
+func TestEveryChangeIsSeenWhateverItsTime(t *testing.T) {
+	r, one, _ := twoListeners(t, "")
+	path := write(t, one, "jane", scopeFile("jane", "jane", "quire-sites/jane/"))
+	reload(t, r)
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	old := get(t, r, "one", "jane").TokenSHA256
+
+	// Another token: the same size, and the old file's times
+	rotated := strings.Replace(scopeFile("jane", "jane", "quire-sites/jane/"), old, digest("another-token-of-the-same-length"), 1)
+	if len(rotated) != int(info.Size()) {
+		t.Fatalf("the rewrite isn't the same size: %d, %d", len(rotated), info.Size())
+	}
+
+	write(t, one, "jane", rotated)
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	reload(t, r)
+
+	if got := get(t, r, "one", "jane").TokenSHA256; got != digest("another-token-of-the-same-length") {
+		t.Errorf("the new token isn't read: %s", got)
+	}
+
+	// Writable by others, the content and times as they were
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+
+	reload(t, r)
+
+	if _, err := r.Store("one").Get("jane"); err == nil || !strings.Contains(err.Error(), "writable by its owner only") {
+		t.Errorf("a file others may change is still read: %v", err)
+	}
+
+	// And nothing that didn't change is a change: the snapshot isn't published again
+	gen := r.snapshot.Load().generation
+	reload(t, r)
+
+	if r.snapshot.Load().generation != gen {
+		t.Error("a scan that found no change published a new snapshot")
+	}
+}
+
+// A scope file that can't be read stays refused without being news at every scan; another reason
+// it can't be read is.
+func TestAnUnreadableFileIsNewsOnce(t *testing.T) {
+	r, one, _ := twoListeners(t, "")
+	target := write(t, t.TempDir(), "elsewhere", scopeFile("jane", "jane", "quire-sites/jane/"))
+	path := filepath.Join(one, "jane.json")
+
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+
+	reload(t, r)
+
+	gen := r.snapshot.Load().generation
+	reload(t, r)
+
+	if r.snapshot.Load().generation != gen {
+		t.Error("a link, unchanged, published a new snapshot")
+	}
+
+	// Now a file no one may read: another reason
+	_ = os.Remove(path)
+	write(t, one, "jane", scopeFile("jane", "jane", "quire-sites/jane/"))
+
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	reload(t, r)
+
+	if _, err := r.Store("one").Get("jane"); err == nil || !strings.Contains(err.Error(), "permission denied") {
+		t.Skipf("can't make a file unreadable here (root?): %v", err)
+	}
+
+	if r.snapshot.Load().generation == gen {
+		t.Error("another reason wasn't news")
+	}
+
+	gen = r.snapshot.Load().generation
+	reload(t, r)
+
+	if r.snapshot.Load().generation != gen {
+		t.Error("an unreadable file, unchanged, published a new snapshot")
+	}
+}
