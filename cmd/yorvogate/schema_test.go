@@ -197,3 +197,16 @@ func TestTheSchemasHaveEveryKey(t *testing.T) {
 		}
 	}
 }
+
+// The schema's alias pattern is YorvoGate's: Compose's "_" accepted, uppercase and a trailing dot not.
+func TestTheSchemaReadsAliasesAsYorvoGateDoes(t *testing.T) {
+	ss := compile(t, scopeSchema)
+	jane := `{"version": 1, "token_sha256": "` + strings.Repeat("a", 64) + `", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"], "networks": {"link": {"aliases": [ALIAS]}}}`
+
+	for alias, valid := range map[string]bool{"demo_x-php-1": true, "_x.y_": true, "jane.quire.internal": true, "Demo_x-php-1": false, "web.": false, "-x": false, "a..b": false, "0123456789ab": false, "x.abcdef012345.y": false, "0123456789abc": true} {
+		quoted, _ := json.Marshal(alias)
+		if (ss.Validate(asJSON(t, strings.Replace(jane, "ALIAS", string(quoted), 1))) == nil) != valid {
+			t.Errorf("%q: the schema says %v", alias, !valid)
+		}
+	}
+}

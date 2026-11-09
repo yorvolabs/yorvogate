@@ -590,3 +590,42 @@ func TestPinnedIsDockersOwn(t *testing.T) {
 		}
 	}
 }
+
+// An alias a container takes on a shared network is read as Docker's DNS keeps it: its case is no
+// other name, a trailing dot is (Docker keeps it), and a byte outside ASCII isn't read at all. The
+// same at create and at connect.
+func TestAnAliasIsReadAsDockersDNSKeepsIt(t *testing.T) {
+	d := startDocker(t)
+	server := gate(t, d, "sites")
+
+	for alias, allowed := range map[string]bool{
+		"jane.example.quire.internal":         true,
+		"JANE.Example.Quire.Internal":         true,
+		"jane.example.quire.internal.":        false,
+		"jane.example.quire.internaſ":         false, // not ASCII (U+017F, the long s)
+		"jane.example.quire.internaK":         false,
+		"BLOG.example.quire.internal":         false,
+		"blog.example.quire.internal":         false,
+		"jane.example.quire.internal.example": false,
+		"0123456789AB":                        false, // a container's short ID's form
+	} {
+		quoted, _ := json.Marshal(alias)
+
+		create, _ := json.Marshal(set(compose(), "NetworkingConfig.EndpointsConfig.quire-link-jane", map[string]any{"Aliases": []any{alias}}))
+		connect := `{"Container":"jane-php-1","EndpointConfig":{"Aliases":[` + string(quoted) + `]}}`
+
+		for what, r := range map[string][2]string{
+			"create":  {"/v1.56/containers/create?name=jane-php-9", string(create)},
+			"connect": {"/v1.56/networks/quire-link-jane/connect", connect},
+		} {
+			status, answer := send(t, server, "POST", r[0], r[1], asJane)
+			if allowed != (status < 400) {
+				t.Errorf("%q, %s: %d %s", alias, what, status, answer)
+			}
+
+			if !allowed && status != http.StatusForbidden {
+				t.Errorf("%q, %s: %d, not 403", alias, what, status)
+			}
+		}
+	}
+}

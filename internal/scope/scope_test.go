@@ -3,6 +3,7 @@ package scope
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"os"
@@ -590,5 +591,50 @@ func TestEveryRefusalAllocatesAlike(t *testing.T) {
 
 	if _, err := store.Get("nobody"); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("missing, as Get gives it: %v", err)
+	}
+}
+
+// An alias is a name as Docker's DNS keeps it: lowercase, with Compose's "_" (a project demo_x
+// gives demo_x-php-1).
+func TestAnAliasAsDockerKeepsIt(t *testing.T) {
+	label := strings.Repeat("a", 63)
+
+	for alias, valid := range map[string]bool{
+		"demo_x-php-1": true, "demo_x_web-1": true, "_x": true, "x_": true, "a_b.c_d": true, "web": true,
+		label + "." + label + "." + label + "." + strings.Repeat("_", 61): true,
+		"Demo_X-php-1": false, "web.": false, "a..b": false, ".a": false, "-x": false, "x-": false, "a b": false,
+		"": false, label + "a": false, label + "." + label + "." + label + "." + strings.Repeat("_", 62): false,
+		"wéb": false, "webK": false,
+		// A container's short ID is one of its DNS names
+		"0123456789ab": false, "abcdef012345.quire.internal": false, "0123456789abc": true, "0123456789ag": true, "x.0123456789a": true,
+	} {
+		dir := t.TempDir()
+		write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"networks": {"link": {"aliases": [`+quoted(alias)+`]}}, "prefixes"`, 1))
+
+		if _, err := testStore(t, dir, false).Authenticate("jane", token); (err == nil) != valid {
+			t.Errorf("%q: %v", alias, err)
+		}
+	}
+}
+
+func quoted(s string) string {
+	b, _ := json.Marshal(s)
+
+	return string(b)
+}
+
+// What a request names is read as Docker's DNS keeps it: ASCII, lowercased; a trailing dot is
+// another name to Docker (it keeps it), and a byte outside ASCII isn't lowercased by a DNS rule.
+func TestNormaliseAlias(t *testing.T) {
+	for in, want := range map[string]string{"web\x7f": "web\x7f", "web": "web", "WEB": "web", "Demo_X-Php-1": "demo_x-php-1", "Jane.Quire.Internal": "jane.quire.internal"} {
+		if got, ok := NormaliseAlias(in); !ok || got != want {
+			t.Errorf("%q: %q %v", in, got, ok)
+		}
+	}
+
+	for _, in := range []string{"", "web.", "jane.quire.internal.", "K", "wéb", "0123456789AB", "x.ABCDEF012345", "web\x80", "web\x7f\x80"} {
+		if got, ok := NormaliseAlias(in); ok {
+			t.Errorf("%q: %q", in, got)
+		}
 	}
 }
