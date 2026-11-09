@@ -140,25 +140,45 @@ func (s *scoped) listImages() error {
 
 // inspectImage and imageHistory: another scope's image holds its code, and its configuration its
 // environment.
+// inspectImage, imageHistory: of an image the scope may read, the one checked (by its ID).
 func (s *scoped) inspectImage() error {
 	s.answer = s.imageNames
 
-	return s.readsImage(s.req.Params["name"])
+	return s.pinImage()
 }
 
 func (s *scoped) imageHistory() error {
 	s.answer = s.history
 
-	return s.readsImage(s.req.Params["name"])
+	return s.pinImage()
 }
 
+func (s *scoped) pinImage() error {
+	img, err := s.readsImage(s.req.Params["name"])
+	if err != nil {
+		return err
+	}
+
+	s.with("name", img.ID)
+
+	return nil
+}
+
+// saveImage, saveMany: by the names asked, not the ID, which would leave the archive without them
+// (Docker names what it saves by what it was asked). A name may move between the check and the
+// save. A scope can't move one through image.tag (it tags only from what it may read, and only into
+// its own namespaces). Whether image.load or a pull can give a name to content the scope doesn't
+// hold is open until the archive completeness check and 0.3-d's registry allowlist ship: see the
+// roadmap (0.3-o, 0.3-w).
 func (s *scoped) saveImage() error {
-	return s.readsImage(s.req.Params["name"])
+	_, err := s.readsImage(s.req.Params["name"])
+
+	return err
 }
 
 func (s *scoped) saveMany() error {
 	for _, n := range s.query["names"] {
-		if err := s.readsImage(n); err != nil {
+		if _, err := s.readsImage(n); err != nil {
 			return err
 		}
 	}
@@ -166,10 +186,14 @@ func (s *scoped) saveMany() error {
 	return nil
 }
 
+// deleteImage: by name, not ID. By name, Docker removes that name; by ID, the image.
 func (s *scoped) deleteImage() error {
 	return s.ownsImageName(s.req.Params["name"], "image.delete")
 }
 
+// distribution: Docker answers it from the registry, never from the images it has, and the answer
+// has no names to filter. A name in another scope's protected namespace is refused before any request.
+// Which registries Docker may reach is 0.3-d's.
 func (s *scoped) distribution() error {
 	if err := s.image(s.req.Params["name"]); err != nil {
 		return refuse(http.StatusNotFound, "No such image: %s", s.req.Params["name"])
@@ -408,5 +432,7 @@ func (s *scoped) single(name string) string {
 // with names the object of the path by what was checked.
 func (s *scoped) with(param string, id resolvedID) {
 	s.req.Params[param] = string(id)
-	s.path = "/v" + s.version + strings.NewReplacer("{"+param+"}", url.PathEscape(string(id))).Replace(s.req.Endpoint.Pattern)
+	escaped := url.PathEscape(string(id))
+	// "{name*}" (an image's name, which may span segments) is replaced as "{id}" is
+	s.path = "/v" + s.version + strings.NewReplacer("{"+param+"}", escaped, "{"+param+"*}", escaped).Replace(s.req.Endpoint.Pattern)
 }

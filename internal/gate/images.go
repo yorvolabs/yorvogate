@@ -33,34 +33,65 @@ func (s *scoped) image(image string) error {
 	return nil
 }
 
-// readsImage checks an image the scope reads (inspects, saves, tags from): Docker is asked which
+// readsImage checks an image the scope reads (inspects, saves, tags from, runs): Docker is asked which
 // image the name or ID is. The name it's read by may not be in another scope's protected namespace,
 // and the image needs at least one name the scope may see: an image all of whose names are another
 // scope's is that scope's (its layers hold its code, its configuration its environment), however it's
 // referred to; one tagged both "alpine" and into a scope's namespace is still alpine for everyone. An
-// image with no name at all (a build's leftover) may be anyone's: it isn't read.
-func (s *scoped) readsImage(ref string) error {
+// image with no name at all (a build's leftover) may be anyone's: it isn't read. What's checked is
+// returned: the caller names the image by it, so a name moved after the check changes nothing.
+func (s *scoped) readsImage(ref string) (*image, error) {
 	missing := refuse(http.StatusNotFound, "No such image: %s", ref)
 
 	if s.image(ref) != nil {
-		return missing
+		return nil, missing
 	}
 
 	img, err := s.docker.Image(s.ctx, s.version, ref)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if img == nil {
-		return missing
+		return nil, missing
 	}
 
 	// By name, ID or digest ("anything@sha256:…"): an image with no name the scope may see isn't read.
 	if len(s.visible(img.Tags)) == 0 {
-		return missing
+		return nil, missing
 	}
 
-	return nil
+	return img, nil
+}
+
+// pinned is how a container runs the image checked for it: by its ID, and on the containerd store by
+// "name@ID" for the name it was asked by, which Docker resolves only while that name's repository
+// still has the image (and which shows as the container's image). Everything in it is Docker's: the
+// ID it answered, and the repository of one of the image's own names, never the client's text. An
+// image asked by its ID, or by a name it doesn't have, is run by the ID alone.
+func pinned(ref string, img *image) string {
+	if !img.Containerd {
+		return string(img.ID)
+	}
+
+	repo := repository(ref)
+	for _, tag := range img.Tags {
+		if r := repository(tag); imageName(r) == imageName(repo) {
+			return r + "@" + string(img.ID)
+		}
+	}
+
+	return string(img.ID)
+}
+
+// repository is a reference without its digest or tag: "host:5000/a/b:1@sha256:…" is "host:5000/a/b".
+func repository(ref string) string {
+	ref, _, _ = strings.Cut(ref, "@")
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		ref = ref[:i]
+	}
+
+	return ref
 }
 
 // visible are the names of an image the scope may see: not in another scope's protected namespace.
@@ -116,11 +147,14 @@ func (s *scoped) pull() error {
 	return nil
 }
 
-// tag checks a tag: from an image it may read, into a name of its own.
+// tag checks a tag: from an image it may read (the one checked, by its ID), into a name of its own.
 func (s *scoped) tag() error {
-	if err := s.readsImage(s.req.Params["name"]); err != nil {
+	img, err := s.readsImage(s.req.Params["name"])
+	if err != nil {
 		return err
 	}
+
+	s.with("name", img.ID)
 
 	target := s.query.Get("repo")
 	if tag := s.query.Get("tag"); tag != "" {
