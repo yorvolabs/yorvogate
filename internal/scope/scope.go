@@ -230,10 +230,17 @@ func read(path string) ([]byte, os.FileInfo, error) {
 		return nil, info, notPlain
 	}
 
-	content, err := io.ReadAll(file)
+	// A scope file is a few hundred bytes; one larger than any scope needs isn't one.
+	content, err := io.ReadAll(io.LimitReader(file, maxFile+1))
+	if err == nil && len(content) > maxFile {
+		return nil, info, fmt.Errorf("scope file %s: larger than %d bytes", path, maxFile)
+	}
 
 	return content, info, err
 }
+
+// maxFile is the largest scope file read: far more than any scope needs.
+const maxFile = 1 << 20
 
 func parse(path string, content []byte, info os.FileInfo, tokenless bool) (*Scope, error) {
 	// Only a file that no one but its owner can change

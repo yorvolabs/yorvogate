@@ -676,3 +676,21 @@ func TestAnUnreadableFileIsNewsOnce(t *testing.T) {
 		t.Error("an unreadable file, unchanged, published a new snapshot")
 	}
 }
+
+// A scope file larger than any scope needs is refused, not read whole at every scan.
+func TestAnOversizeFileIsRefused(t *testing.T) {
+	r, one, _ := twoListeners(t, "")
+	content := scopeFile("jane", "jane", "quire-sites/jane/")
+	write(t, one, "jane", content[:len(content)-1]+strings.Repeat(" ", maxFile)+"}")
+	reload(t, r)
+
+	if _, err := r.Store("one").Get("jane"); err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Errorf("an oversize file: %v", err)
+	}
+
+	// One at the limit is read
+	write(t, one, "jane", content[:len(content)-1]+strings.Repeat(" ", maxFile-len(content))+"}")
+	reload(t, r)
+
+	get(t, r, "one", "jane")
+}
