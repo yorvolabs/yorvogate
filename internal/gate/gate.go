@@ -174,7 +174,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			return nil, nil, err
 		}
 
-		headers, dropped, err := forwarded(r.Header, req.Endpoint.Name)
+		headers, dropped, err := forwarded(r.Header, req.Endpoint.Name, upgrading(r))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -265,15 +265,10 @@ type boundKey struct{}
 func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 	if !g.listener.SocketBound() {
 		s, err := g.scopes.Authenticate(r.Header.Get(ScopeHeader), r.Header.Get(TokenHeader))
+		// A scope file that isn't valid is refused as a scope that isn't there, and in the same
+		// work: why is in the reload's log, not each request's.
 		if errors.Is(err, scope.ErrUnknown) {
-			refused := refuse(http.StatusUnauthorized, "no such scope, or not its token")
-			// More than ErrUnknown is a scope file that isn't valid: why, for the log (the reload
-			// said it too)
-			if err != scope.ErrUnknown {
-				refused.logged = []any{"scope_error", err.Error()}
-			}
-
-			return nil, refused
+			return nil, refuse(http.StatusUnauthorized, "no such scope, or not its token")
 		}
 
 		return s, err

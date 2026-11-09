@@ -70,14 +70,18 @@ func (s *scoped) builder(c *object) error {
 		return nil
 	}
 
-	if problems := builderProblems(c.inspection, s.builderProfiles); len(problems) > 0 {
+	volume := func(name string) (*object, error) { return s.docker.Volume(s.ctx, s.version, name) }
+
+	if problems := builderProblems(c.inspection, s.builderProfiles, volume); len(problems) > 0 {
 		return refuse(http.StatusForbidden, "builder %s isn't configured as a builder must be: %s", c.Name, strings.Join(problems, "; "))
 	}
 
 	return nil
 }
 
-func builderProblems(c *container.InspectResponse, profiles []string) []string {
+// builderProblems lists what's wrong with a builder's configuration. volume reads a volume it
+// mounts, as Docker has it now.
+func builderProblems(c *container.InspectResponse, profiles []string, volume func(string) (*object, error)) []string {
 	if c == nil || c.HostConfig == nil || c.Config == nil {
 		return []string{"its configuration couldn't be read"}
 	}
@@ -102,7 +106,7 @@ func builderProblems(c *container.InspectResponse, profiles []string) []string {
 
 	// "-v name:/path" is a named volume, which Docker keeps among the binds; "-v /x:/path" a host path.
 	for _, b := range h.Binds {
-		if source, _, _ := strings.Cut(b, ":"); strings.ContainsAny(source, "/\\") || source == "" || strings.HasPrefix(source, ".") || strings.HasPrefix(source, "~") {
+		if source, _, _ := strings.Cut(b, ":"); hostPath(source) {
 			add("it binds the host path %q", source)
 		}
 	}
@@ -116,6 +120,18 @@ func builderProblems(c *container.InspectResponse, profiles []string) []string {
 	for _, m := range c.Mounts {
 		if m.Type != mount.TypeVolume && m.Type != mount.TypeTmpfs {
 			add("it has a %s mount at %s (only volumes and tmpfs)", m.Type, m.Destination)
+		}
+
+		// A volume's labels say nothing of where it is: one with driver options binds a host path
+		// as a bind would. Each is read (an anonymous one too); one that can't be is refused.
+		if m.Type == mount.TypeVolume {
+			v, err := volume(m.Name)
+			switch {
+			case err != nil || v == nil:
+				add("its volume at %s couldn't be read", m.Destination)
+			case !plainLocal(v.Driver, v.Options):
+				add("its volume %q at %s has driver options that could bind a host path (only a plain local volume)", m.Name, m.Destination)
+			}
 		}
 	}
 

@@ -295,7 +295,7 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 		add("OomScoreAdj below 0 isn't allowed")
 	}
 
-	if h.VolumeDriver != "" && h.VolumeDriver != "local" {
+	if !plainLocal(h.VolumeDriver, nil) {
 		add("the volume driver %q isn't allowed", h.VolumeDriver)
 	}
 
@@ -360,7 +360,7 @@ func (s *scoped) mount(m mount.Mount, add func(string, ...any)) {
 		}
 
 		if o := m.VolumeOptions; o != nil {
-			if o.DriverConfig != nil && (o.DriverConfig.Name != "" && o.DriverConfig.Name != "local" || len(o.DriverConfig.Options) > 0) {
+			if o.DriverConfig != nil && !plainLocal(o.DriverConfig.Name, o.DriverConfig.Options) {
 				add("mount of %q: volume driver options aren't allowed", m.Source)
 			}
 
@@ -384,7 +384,7 @@ func (s *scoped) mount(m mount.Mount, add func(string, ...any)) {
 // volumeSource checks a named volume a container mounts: a name of the scope's, never a host path,
 // and if it exists, its own.
 func (s *scoped) volumeSource(source string) error {
-	if source == "" || strings.ContainsAny(source, "/\\") || strings.HasPrefix(source, ".") || strings.HasPrefix(source, "~") {
+	if hostPath(source) {
 		return errors.New("only named volumes of its own, never a host path")
 	}
 
@@ -404,7 +404,7 @@ func (s *scoped) volumeSource(source string) error {
 	// Its labels can say it's the scope's while its driver binds a host path (a local volume with
 	// o=bind,device=/,type=none, or any non-local driver). Checked at use, not only at create,
 	// because the scope may not have created it: an orchestrator provisions labelled volumes.
-	if v != nil && (v.Driver != "" && v.Driver != "local" || len(v.Options) > 0) {
+	if v != nil && !plainLocal(v.Driver, v.Options) {
 		return fmt.Errorf("the volume %q has driver options that could bind a host path; only a plain local volume may be mounted", source)
 	}
 

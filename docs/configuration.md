@@ -171,7 +171,7 @@ A scope file that isn't valid (or that conflicts) is refused alone: its requests
 One case is left to the orchestrator: if tenant `jane` has a Compose service named `blog-php` before a scope `jane-blog` exists, its container `jane-blog-php-1` is jane's. Once `jane-blog` arrives, `jane-blog`'s Compose project can't take that name. Nothing crosses between the scopes, since ownership is by label, but it's a denial of service. An orchestrator that lets tenants pick nested names should refuse dashes in service names.
 - `networks` (optional): shared networks it may join besides its own, each with the `aliases` it may take and the `addresses` it may ask for there (none if left out).
 - `subnets` (optional): where its networks' addresses must be, in CIDR form: each network it creates names its subnet, inside one of these (otherwise Docker picks from its own pools).
-- `builders` (optional): its BuildKit builders, by exact name (no wildcard), each one scope's only. See [builders](#builders). 0.1's `containers` key is refused: a container a scope "used" was fully its own, privileged or not.
+- `builders` (optional): its BuildKit builders, by exact name (no wildcard), each one scope's only, and outside every scope's prefixes (`buildkit-jane`, not `jane-buildkit`): a name a prefix covers is a container's of that scope, and the file is refused. See [builders](#builders). 0.1's `containers` key is refused: a container a scope "used" was fully its own, privileged or not.
 
 ## The state file
 
@@ -188,7 +188,7 @@ A scope builds images through a BuildKit builder the orchestrator runs for it: a
 - It may inspect the builder, create an exec of exactly `buildctl dial-stdio` (no user, environment, working directory or TTY), and start that exec. That's all buildx's `remote` driver sends. Everything else is refused: other commands, exec resize and inspect, archive, attach, logs, start, stop, delete, and joining its namespaces or volumes (`PidMode`, `IpcMode`, `NetworkMode: container:…`, `VolumesFrom`). A builder is never one of the scope's own containers, whatever its labels.
 - YorvoGate inspects the builder on each use, and accepts it only if it's configured as below. Otherwise every use is refused, naming what failed:
   - not privileged; no added capabilities; no devices, device requests or device cgroup rules;
-  - no binds or host paths (volumes and tmpfs only); no host namespaces (PID, IPC, UTS, user, cgroup, network `host`), and none of another container's; no published ports; no `Sysctls`;
+  - no binds or host paths (volumes and tmpfs only), and each volume a plain `local` one, without driver options (one with `type=none,o=bind,device=…` is a host path); no host namespaces (PID, IPC, UTS, user, cgroup, network `host`), and none of another container's; no published ports; no `Sysctls`;
   - it runs as a user other than root (`moby/buildkit:<version>-rootless` runs as `1000:1000`);
   - its security options only `seccomp=unconfined`, `systempaths=unconfined`, `no-new-privileges`, and `apparmor=<a profile in the listener's builder_apparmor_profiles>`. YorvoGate sees only a profile's name, so the operator vouches for each name listed. `apparmor=unconfined` is accepted only if listed.
 - These options widen the kernel's attack surface for an unprivileged, capability-less process: the accepted risk of builds on a shared kernel.

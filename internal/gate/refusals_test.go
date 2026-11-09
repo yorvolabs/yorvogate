@@ -132,14 +132,9 @@ func TestAScopeFileThatIsntValidIsAnUnknownScope(t *testing.T) {
 		t.Errorf("%d %s", status, answer)
 	}
 
-	if !strings.Contains(log.String(), "scope_error=") || !strings.Contains(log.String(), "broken.json") {
-		t.Errorf("the log doesn't say why: %s", log.String())
-	}
-
-	// A scope that isn't there: nothing more to say.
-	log.Reset()
-	if status, _ := send(t, server, "GET", "/v1.56/version", "", map[string]string{"X-YorvoGate-Scope": "nobody", "X-YorvoGate-Token": token}); status != http.StatusUnauthorized || strings.Contains(log.String(), "scope_error") {
-		t.Errorf("%d %s", status, log.String())
+	// Its refusal is logged as a missing scope's, with nothing more: why is the reload's to say
+	if !strings.Contains(log.String(), "no such scope, or not its token") || strings.Contains(log.String(), "scope_error") || strings.Contains(log.String(), "broken.json") {
+		t.Errorf("the refusal's log: %s", log.String())
 	}
 }
 

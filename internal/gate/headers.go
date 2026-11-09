@@ -31,9 +31,9 @@ var forwardedHeaders = map[string]header{
 	"Baggage":     {max: 8192},
 	// A pull's credentials; never logged
 	"X-Registry-Auth": {max: 64 << 10, endpoints: []string{"image.create", "distribution.inspect"}},
-	// The HTTP upgrade of a stream both ways
-	"Upgrade":    {max: 64, endpoints: upgrades},
-	"Connection": {max: 256, endpoints: upgrades},
+	// The HTTP upgrade of a stream both ways, forwarded only when the request upgrades. Connection
+	// is YorvoGate's own (see forwarded).
+	"Upgrade": {max: 64, endpoints: upgrades},
 }
 
 // The endpoints that switch protocols (exec.start when it attaches)
@@ -41,7 +41,11 @@ var upgrades = []string{"container.attach", "container.attach-websocket", "exec.
 
 // forwarded returns the headers Docker gets for a scope's request to an endpoint, and the names of
 // those it doesn't (YorvoGate's own aside); or why the request is refused.
-func forwarded(given http.Header, endpoint string) (http.Header, []string, error) {
+//
+// Connection is never the client's: every header it names is dropped on the way to Docker, so a
+// client's could take off the Content-Type YorvoGate sets. It's "Upgrade" when the request upgrades
+// (which Docker and the proxy need to switch protocols), and absent otherwise.
+func forwarded(given http.Header, endpoint string, upgrading bool) (http.Header, []string, error) {
 	out := http.Header{}
 
 	var dropped []string
@@ -49,6 +53,9 @@ func forwarded(given http.Header, endpoint string) (http.Header, []string, error
 	for _, name := range slices.Sorted(maps.Keys(given)) {
 		values := given[name]
 		canonical := http.CanonicalHeaderKey(name)
+		if canonical == "Connection" {
+			continue
+		}
 
 		h, listed := forwardedHeaders[canonical]
 		if !listed || (h.endpoints != nil && !slices.Contains(h.endpoints, endpoint)) {
@@ -68,6 +75,12 @@ func forwarded(given http.Header, endpoint string) (http.Header, []string, error
 		}
 
 		out[canonical] = []string{values[0]}
+	}
+
+	if upgrading && out.Get("Upgrade") != "" {
+		out.Set("Connection", "Upgrade")
+	} else {
+		out.Del("Upgrade")
 	}
 
 	return out, dropped, nil

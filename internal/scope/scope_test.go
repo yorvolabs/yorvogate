@@ -261,14 +261,14 @@ func TestOnlyPlainFilesOnlyItsOwnerWrites(t *testing.T) {
 
 func TestWhatAScopeMayUse(t *testing.T) {
 	dir := t.TempDir()
-	write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"images": ["quire-sites/jane/"], "builders": ["buildx_buildkit_jane0", "jane-tools"], "networks": {"quire-link-jane": {"aliases": ["jane.example.quire.internal"], "addresses": ["10.213.0.4"]}}, "prefixes"`, 1))
+	write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"images": ["quire-sites/jane/"], "builders": ["buildx_buildkit_jane0", "tools-jane"], "networks": {"quire-link-jane": {"aliases": ["jane.example.quire.internal"], "addresses": ["10.213.0.4"]}}, "prefixes"`, 1))
 
 	s, err := testStore(t, dir, false).Authenticate("jane", token)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if !s.Builds("buildx_buildkit_jane0") || !s.Builds("jane-tools") || s.Builds("buildx_buildkit_jane") || s.Builds("jane-tools-2") || s.Builds("buildx_buildkit_blog0") {
+	if !s.Builds("buildx_buildkit_jane0") || !s.Builds("tools-jane") || s.Builds("buildx_buildkit_jane") || s.Builds("tools-jane-2") || s.Builds("buildx_buildkit_blog0") {
 		t.Error("uses only the containers its scope names")
 	}
 
@@ -547,5 +547,48 @@ func TestScopeFormatVersions(t *testing.T) {
 
 	if got := store.Unversioned(); len(got) != 1 || got[0] != "old" {
 		t.Errorf("unversioned: %v", got)
+	}
+}
+
+// A missing scope, a wrong token and a file that isn't valid are refused with the same work: the
+// same allocations, each error made at the reload. Timing measures this; this keeps it.
+func TestEveryRefusalAllocatesAlike(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "jane", jane())
+	write(t, dir, "broken", "{")
+
+	reloaded := testStore(t, dir, false)
+	if _, err := reloaded.Get("jane"); err != nil {
+		t.Fatal(err)
+	}
+
+	store := reloaded.Store // as it is now: a reload is the scan's, not each request's
+
+	wrong := strings.Repeat("x", len(token))
+	counts := map[string]float64{}
+
+	for name, ask := range map[string][2]string{
+		"missing":     {"nobody", token},
+		"wrong token": {"jane", wrong},
+		"not valid":   {"broken", token},
+	} {
+		if _, err := store.Authenticate(ask[0], ask[1]); !errors.Is(err, ErrUnknown) {
+			t.Fatalf("%s: %v", name, err)
+		}
+
+		counts[name] = testing.AllocsPerRun(1000, func() { _, _ = store.Authenticate(ask[0], ask[1]) })
+	}
+
+	if counts["missing"] != counts["wrong token"] || counts["not valid"] != counts["wrong token"] {
+		t.Errorf("allocations: %v", counts)
+	}
+
+	// Why the file isn't valid is still there, for whoever logs it
+	if _, err := store.Authenticate("broken", token); err == ErrUnknown || !strings.Contains(err.Error(), "broken.json") {
+		t.Errorf("not valid: %v", err)
+	}
+
+	if _, err := store.Get("nobody"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("missing, as Get gives it: %v", err)
 	}
 }

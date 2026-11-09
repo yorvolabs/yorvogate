@@ -4,6 +4,8 @@ import (
 	"io"
 	"net"
 	"net/http/httptest"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,6 +65,49 @@ func TestLoadLimiter(t *testing.T) {
 	case <-second:
 	case <-time.After(time.Second):
 		t.Fatal("the second load didn't run after the first released")
+	}
+
+	// Each scope's entry goes with its last load
+	if n := l.loading(); n != 0 {
+		t.Errorf("%d scopes left after every load released", n)
+	}
+}
+
+// A load waiting keeps its scope's entry: a third load, coming after the first released while the
+// second waits or runs, still goes one at a time. Run with -race.
+func TestLoadLimiterEvictsOnlyWhenIdle(t *testing.T) {
+	l := newLoadLimiter()
+
+	var running atomic.Int32
+
+	var overlapped atomic.Bool
+
+	var wg sync.WaitGroup
+	for range 50 {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			release := l.acquire("jane")
+			if running.Add(1) > 1 {
+				overlapped.Store(true)
+			}
+
+			time.Sleep(time.Millisecond)
+			running.Add(-1)
+			release()
+		}()
+	}
+
+	wg.Wait()
+
+	if overlapped.Load() {
+		t.Error("two of one scope's loads ran at once")
+	}
+
+	if n := l.loading(); n != 0 {
+		t.Errorf("%d scopes left after every load released", n)
 	}
 }
 

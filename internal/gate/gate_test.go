@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -54,8 +55,9 @@ type docker struct {
 	classic bool
 	// A Descriptor whose digest isn't the image's ID (one a test doesn't trust)
 	otherDescriptor bool
-	// YorvoGate's own lookups, counted
+	// YorvoGate's own lookups, counted, and their paths as sent
 	lookups int
+	asked   []string
 }
 
 func (d *docker) apiVersion() string {
@@ -112,7 +114,7 @@ var (
 	networks   = []fakeObject{{janeNet, "jane_default", jane}, {blogNet, "blog_default", blog}, {linkNet, "quire-link-jane", nil}}
 	// jane_stolen has jane's prefix but blog's label: a name doesn't make a volume jane's.
 	// jane_hostbind has jane's label but a local driver that binds the host root: owned, yet unsafe to mount.
-	volumes = []fakeObject{{"jane_data", "jane_data", jane}, {"blog_data", "blog_data", blog}, {"jane_stolen", "jane_stolen", blog}, {"jane_hostbind", "jane_hostbind", jane}}
+	volumes = []fakeObject{{"jane_data", "jane_data", jane}, {"blog_data", "blog_data", blog}, {"jane_stolen", "jane_stolen", blog}, {"jane_hostbind", "jane_hostbind", jane}, {"buildx_buildkit_jane0_state", "buildx_buildkit_jane0_state", nil}}
 	execs   = map[string]string{"exec-jane": janePHP, "exec-blog": blogPHP, "exec-dial": janeBuilder, "exec-dial-as-docker-says": janeBuilder, "exec-shell": janeBuilder, "exec-dial-root": janeBuilder}
 	// What each exec runs (the others, a shell)
 	execCommands = map[string]map[string]any{
@@ -279,6 +281,7 @@ func startDocker(t testing.TB) *docker {
 func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 	d.mu.Lock()
 	d.lookups++
+	d.asked = append(d.asked, r.URL.EscapedPath())
 	classic, otherDescriptor := d.classic, d.otherDescriptor
 	d.mu.Unlock()
 
@@ -330,10 +333,9 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 		}
 	case "volumes":
 		if o := find(volumes, m[2]); o != nil {
-			vol := map[string]any{"Name": o.name, "Labels": o.labels}
-			if o.name == "jane_hostbind" {
-				vol["Driver"] = "local"
-				vol["Options"] = map[string]string{"type": "none", "o": "bind", "device": "/"}
+			vol := map[string]any{"Name": o.name, "Labels": o.labels, "Driver": "local"}
+			if c, ok := volumeDrivers[o.name]; ok {
+				vol["Driver"], vol["Options"] = c.driver, c.options
 			}
 			answer = vol
 		}
@@ -371,6 +373,14 @@ func (d *docker) last() seen {
 	}
 
 	return d.forwarded[len(d.forwarded)-1]
+}
+
+// askedFor tells whether YorvoGate looked up a path (escaped, as sent).
+func (d *docker) askedFor(path string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return slices.Contains(d.asked, path)
 }
 
 func (d *docker) lookupCount() int {

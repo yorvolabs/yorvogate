@@ -123,8 +123,8 @@ func (s *scoped) createVolume(body []byte) ([]byte, error) {
 
 	s.ownLabels(req.Labels, add)
 
-	if req.Driver != "" && req.Driver != "local" {
-		add("the driver %q isn't allowed (only local)", req.Driver)
+	if !plainLocal(req.Driver, req.DriverOpts) {
+		add("the driver %q isn't allowed (only local, without options)", req.Driver)
 	}
 
 	if len(problems) > 0 {
