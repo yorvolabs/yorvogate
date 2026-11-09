@@ -258,17 +258,23 @@ func (w *walk) manifest(content []byte, from string) error {
 // archive, and a file named by its digest has that digest.
 func (c *contents) legacy(content []byte) error {
 	var images []struct {
-		Config       string
-		Layers       []string
-		LayerSources map[string]json.RawMessage
+		Config string
+		Layers []string
+		// Docker 25 and later list each layer's descriptor here (its blob is in the archive); one
+		// with urls is a layer from elsewhere
+		LayerSources map[string]blobRef
 	}
 	if err := json.Unmarshal(content, &images); err != nil {
 		return fmt.Errorf("manifest.json: %w", err)
 	}
 
+	w := &walk{c: c, seen: map[string]bool{}}
+
 	for _, image := range images {
-		if len(image.LayerSources) > 0 {
-			return fmt.Errorf("manifest.json refers to layers from elsewhere (LayerSources): an archive must hold what it loads")
+		for _, d := range image.LayerSources {
+			if _, err := w.blob(d, "manifest.json's LayerSources"); err != nil {
+				return err
+			}
 		}
 
 		if image.Config == "" {

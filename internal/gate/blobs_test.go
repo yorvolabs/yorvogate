@@ -72,13 +72,16 @@ func ociArchive(t testing.TB, names ...string) []byte {
 
 		var m struct {
 			Config struct{ Digest string }
-			Layers []struct{ Digest string }
+			Layers []map[string]any
 		}
 		_ = json.Unmarshal([]byte(img.manifest), &m)
+		layer := m.Layers[0]["digest"].(string)
+		// As Docker 29 writes it: each layer's descriptor in LayerSources, by its diff ID
 		legacy = append(legacy, map[string]any{
-			"Config":   "blobs/sha256/" + strings.TrimPrefix(m.Config.Digest, "sha256:"),
-			"RepoTags": []string{name},
-			"Layers":   []string{"blobs/sha256/" + strings.TrimPrefix(m.Layers[0].Digest, "sha256:")},
+			"Config":       "blobs/sha256/" + strings.TrimPrefix(m.Config.Digest, "sha256:"),
+			"RepoTags":     []string{name},
+			"Layers":       []string{"blobs/sha256/" + strings.TrimPrefix(layer, "sha256:")},
+			"LayerSources": map[string]any{layer: m.Layers[0]},
 		})
 	}
 
@@ -159,7 +162,8 @@ func TestAnArchiveHoldsWhatItRefersTo(t *testing.T) {
 		"manifest.json, a layer it lacks":                {[]entry{img.blobs[1], {name: "manifest.json", content: `[{"Config":"` + img.blobs[1].name + `","RepoTags":["quire-sites/jane/app:1"],"Layers":["` + img.blobs[0].name + `"]}]`}}, "lacks " + img.blobs[0].name},
 		"manifest.json, no config":                       {[]entry{{name: "manifest.json", content: `[{"RepoTags":["quire-sites/jane/app:1"]}]`}}, "no config"},
 		"manifest.json, a config under another's digest": {[]entry{{name: sha("x") + ".json", content: "{}"}, {name: "manifest.json", content: `[{"Config":"` + sha("x") + `.json","RepoTags":["quire-sites/jane/app:1"]}]`}}, "isn't what its name says"},
-		"manifest.json, layers from elsewhere":           {append(append([]entry{}, img.blobs...), entry{name: "manifest.json", content: `[{"Config":"` + img.blobs[1].name + `","RepoTags":["quire-sites/jane/app:1"],"Layers":[],"LayerSources":{"sha256:aa":{}}}]`}), "from elsewhere"},
+		"manifest.json, a layer from elsewhere":          {append(append([]entry{}, img.blobs...), entry{name: "manifest.json", content: `[{"Config":"` + img.blobs[1].name + `","RepoTags":["quire-sites/jane/app:1"],"Layers":[],"LayerSources":{"sha256:` + sha("x") + `":{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:` + sha("x") + `","size":1,"urls":["https://example.com/x"]}}}]`}), "from elsewhere"},
+		"manifest.json, a layer source it lacks":         {append(append([]entry{}, img.blobs...), entry{name: "manifest.json", content: `[{"Config":"` + img.blobs[1].name + `","RepoTags":["quire-sites/jane/app:1"],"Layers":[],"LayerSources":{"sha256:` + sha("x") + `":{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:` + sha("x") + `","size":1}}}]`}), "lacks sha256:" + sha("x")},
 	} {
 		status, answer := send(t, server, "POST", "/v1.56/images/load", string(archive(t, c.entries...)), asJane)
 		if status != http.StatusBadRequest || !strings.Contains(message(t, answer), "image.load: ") || !strings.Contains(message(t, answer), c.words) {
