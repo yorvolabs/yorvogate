@@ -177,6 +177,12 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 		return nil, refuse(http.StatusForbidden, "container.create %s: %s", name, strings.Join(problems, "; "))
 	}
 
+	// What it runs is an image it may read, however it's named: Docker takes an ID by as few as 4 of
+	// its digits, so a name checked alone would let it run an image all of whose names are another's.
+	if err := s.readsImage(req.Config.Image); err != nil {
+		return nil, err
+	}
+
 	// A volume a mount creates is the scope's: it carries its owner label. (Docker sets a mount's
 	// labels only on a volume it creates; one that exists is left as it is.)
 	for i := range req.HostConfig.Mounts {

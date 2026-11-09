@@ -6,6 +6,7 @@ package scope
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -19,6 +20,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 )
 
 // Scope is one client's identity and what it owns.
@@ -89,6 +91,9 @@ var (
 // ErrUnknown is a scope with no file, or a token that doesn't match it.
 var ErrUnknown = errors.New("no such scope, or not its token")
 
+// compareTokens compares a token's digest with a scope's, in constant time (a test counts its calls).
+var compareTokens = subtle.ConstantTimeCompare
+
 // Store is one scoped listener's scopes: its folder, as the registry's snapshot has it. It reads
 // no file: Registry.Reload does.
 type Store struct {
@@ -96,35 +101,49 @@ type Store struct {
 	folder   int
 }
 
-// Authenticate returns the scope a request names, if its token is the scope's. Both a missing scope
-// and a wrong token give ErrUnknown, so a client can't tell which scopes exist.
+// Authenticate returns the scope a request names, if its token is the scope's. A missing scope, one
+// whose file isn't valid and a wrong token all give ErrUnknown, in the same time, so a client can't
+// tell which scopes exist. A file that isn't valid is said why in what's wrapped (for the log only).
 func (s *Store) Authenticate(name, token string) (*Scope, error) {
 	if !validName.MatchString(name) || token == "" {
 		return nil, ErrUnknown
 	}
 
-	scope, err := s.Get(name)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, ErrUnknown
-		}
-
-		return nil, err
-	}
-
-	if scope.TokenSHA256 == "" {
-		return nil, ErrUnknown
-	}
-
-	want, _ := hex.DecodeString(scope.TokenSHA256)
+	// The token is hashed and compared whether or not the scope has one: a scope that isn't there
+	// takes as long to refuse as a wrong token.
 	got := sha256.Sum256([]byte(token))
+	digest := noToken
 
-	if subtle.ConstantTimeCompare(want, got[:]) != 1 {
+	scope, err := s.Get(name)
+	if err == nil && scope.TokenSHA256 != "" {
+		digest = scope.TokenSHA256
+	}
+
+	want, _ := hex.DecodeString(digest)
+	matches := compareTokens(want, got[:]) == 1
+
+	switch {
+	case err != nil && errors.Is(err, os.ErrNotExist):
+		return nil, ErrUnknown
+	case err != nil:
+		return nil, fmt.Errorf("%w: %w", ErrUnknown, err)
+	case !matches || scope.TokenSHA256 == "":
 		return nil, ErrUnknown
 	}
 
 	return scope, nil
 }
+
+// noToken is the digest a token is compared with when its scope has none: random, so no token
+// matches it.
+var noToken = func() string {
+	var sum [sha256.Size]byte
+	if _, err := rand.Read(sum[:]); err != nil {
+		panic(err)
+	}
+
+	return hex.EncodeToString(sum[:])
+}()
 
 // Get returns a scope as the last reload found it.
 func (s *Store) Get(name string) (*Scope, error) {
@@ -187,15 +206,33 @@ func (s *Store) Scopes() ([]string, map[string]error, error) {
 }
 
 // read reads a scope file, and the SHA-256 (hex) of what it read ("" for what isn't a plain file).
-func read(path string, info os.FileInfo, tokenless bool) (*Scope, string, error) {
-	// Only a plain file: a link could point anywhere.
-	if !info.Mode().IsRegular() {
-		return nil, "", fmt.Errorf("scope file %s: must be a plain file, writable by its owner only", path)
+// The file is opened once, and what's checked (a plain file, its mode, when it changed) is what's
+// read: the descriptor's, not the path's, which can be swapped between a check and the read. It
+// returns the file's information as the descriptor has it (nil if it couldn't be opened).
+func read(path string, tokenless bool) (*Scope, string, os.FileInfo, error) {
+	notPlain := fmt.Errorf("scope file %s: must be a plain file, writable by its owner only", path)
+
+	// Never through a link (it could point anywhere), and never waiting on a pipe put in its place
+	file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, "", nil, notPlain
+	} else if err != nil {
+		return nil, "", nil, err
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
+	if err != nil {
+		return nil, "", nil, err
 	}
 
-	content, err := os.ReadFile(path)
+	if !info.Mode().IsRegular() {
+		return nil, "", info, notPlain
+	}
+
+	content, err := io.ReadAll(file)
 	if err != nil {
-		return nil, "", err
+		return nil, "", info, err
 	}
 
 	sum := sha256.Sum256(content)
@@ -203,7 +240,7 @@ func read(path string, info os.FileInfo, tokenless bool) (*Scope, string, error)
 
 	scope, err := parse(path, content, info, tokenless)
 
-	return scope, digest, err
+	return scope, digest, info, err
 }
 
 func parse(path string, content []byte, info os.FileInfo, tokenless bool) (*Scope, error) {

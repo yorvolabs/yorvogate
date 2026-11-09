@@ -18,6 +18,8 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 - **Breaking: a scope's query parameters and headers are allow-lists.** Each endpoint forwards the query parameters Docker reads for it that YorvoGate lists, and refuses any other (403, naming it), so one a newer Docker adds stays closed until it's listed. Docker gets only the headers it reads that YorvoGate lists (`User-Agent`, `Accept`, `Accept-Encoding`, the OpenTelemetry context, a pull's `X-Registry-Auth`, an attach's `Upgrade`); any other isn't forwarded, and is named in the log. A listed header given twice is refused. See [query parameters and headers](docs/configuration.md#query-parameters-and-headers).
 
+- **A scope file that isn't valid is answered as a scope that doesn't exist** (401, "no such scope, or not its token") to a client of a listener with an address, not with a 500 that named the file and why; the gate's log says why (`scope_error`), as `yorvogate check` and scope status do. On such a listener, a request that couldn't be decided on is answered without the error, which only the log has.
+
 - **Every answer advertises an API version the gate serves.** A newer Docker's `Api-Version` header and `/version` API version are given as the gate's `api.max`, and an older Docker minimum as `api.min`, on every listener; an older Docker keeps its own version, never one it can't serve, so the Docker CLI, Compose and buildx negotiate a version YorvoGate accepts. Before, upgrading Docker past YorvoGate's API version made every negotiating client ask for the newer version and be refused.
 
 ### Added
@@ -35,6 +37,9 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 - **A scope file caught half-written gave its names to its neighbour (Medium).** Now it keeps them, as above.
 - **A scope could delete an image's content from other scopes' images (Medium).** On the containerd image store, deleting an image with `platforms` (and `force`) deletes that platform's content from every image that has it. YorvoGate checked only that the name deleted was the scope's, so a scope could tag a shared image (`postgres:18`) into its own namespace and delete its content for every scope through that name. `platforms` is now refused on an image delete. Releases up to 0.2.2 are affected, and the fix ships only in 0.3: upgrade from 0.2.x.
 - **An OCI archive's image named only by a bare `org.opencontainers.image.ref.name` was loaded unchecked (Medium).** On the containerd image store, Docker names such an image by the bare value as it is (`postgres`, `latest`); YorvoGate read a `ref.name` only when it looked like a full reference, so the name escaped the scope's namespaces. No client could resolve such a name, so it couldn't replace an image anything ran. Now every name is read as containerd reads it, and checked.
+- **Which of another scope's names exist could be told by timing (Medium).** Another scope's container, network or volume was refused as one that doesn't exist, but later: Docker inspects an object that exists, and answers at once for one that doesn't. Timed over thousands of requests, a scope could confirm a name it guessed (4.5 ms slower on a container, measured). Now a refused decision is held until it has taken as long as the slowest of the endpoint's recent decisions that found an object (at most 250 ms), which bounds the difference without closing it: see the [threat model](docs/threat-model.md#out-of-scope).
+- **A scope could run a container of another scope's image (High where `protected_images` is set).** A container's image was checked by name only, so an image all of whose names are in another scope's protected namespace could be run by its ID, or by as few as 4 of its digits, which Docker takes: the container held that image's code, and whatever its layers have. Now a container's image is checked as an inspect is: one with a name the scope may see. Releases up to 0.2.2 are affected, and the fix ships only in 0.3: upgrade from 0.2.x.
+- **A token for a scope that doesn't exist was refused sooner (Low).** It's now hashed and compared, as a wrong token is. A scope file is opened once, and what's checked (a plain file, its mode) is what's read, not a path that could be swapped between the two.
 
 ## [0.2.2] - 2026-11-03
 
@@ -116,7 +121,7 @@ The first release.
   - Networks and volumes: its own, without driver options; shared networks it may join, with only its aliases and addresses; a shared network's inspection without other scopes' containers.
   - Images: names written only in its own namespaces (tag, load, delete); none of another scope's read; image archives' names checked before Docker loads them.
 - **Every decision logged** as JSON; every refusal a Docker-style error that says why.
-- **Releases:** an image for x86_64 and arm64 (static, on distroless, as a user without privileges), signed with Sigstore, with its SBOM and build provenance; reproducible binaries with signed checksums.
+- **Releases:** an image for x86_64 and arm64 (static, on distroless, as a user without privileges), with its SBOM and build provenance; reproducible binaries with signed checksums. The image of this release isn't signed: image signatures start with 0.2.0.
 
 [Unreleased]: https://github.com/yorvolabs/yorvogate/compare/v0.2.2...HEAD
 [0.2.2]: https://github.com/yorvolabs/yorvogate/compare/v0.2.1...v0.2.2

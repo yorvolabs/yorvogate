@@ -42,7 +42,9 @@ type Gate struct {
 	streams streams
 	// The headers a scope sent that weren't forwarded, each warned of once
 	dropped sync.Map
-	log     *slog.Logger
+	// How long its recent decisions took, each endpoint's: a refusal is held as long (refusals.go)
+	decisions decisionTimes
+	log       *slog.Logger
 }
 
 // Registry holds the scopes of every scoped listener of a configuration: they share one Docker, so
@@ -71,10 +73,11 @@ func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.
 	return g
 }
 
-// refusal is a request not forwarded: its HTTP status and why.
+// refusal is a request not forwarded: its HTTP status and why, and what's only logged.
 type refusal struct {
 	status int
 	reason string
+	logged []any
 }
 
 func (r *refusal) Error() string { return r.reason }
@@ -101,10 +104,10 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var refused *refusal
 		if !errors.As(err, &refused) {
-			refused = refuse(http.StatusInternalServerError, "the request couldn't be decided on: %v", err)
+			refused = g.undecided(err)
 		}
 
-		entry.Warn("refused", "status", refused.status, "reason", refused.reason)
+		entry.Warn("refused", append([]any{"status", refused.status, "reason", refused.reason}, refused.logged...)...)
 		answer(w, refused.status, refused.reason)
 
 		return
@@ -118,6 +121,17 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	g.upstream.Forward(w, forward)
+}
+
+// undecided is the refusal of a request that couldn't be decided on. A client of a listener with an
+// address may not have proved a scope yet: it isn't told why, which could say what the gate has (a
+// scope file's path); the log is.
+func (g *Gate) undecided(err error) *refusal {
+	if g.listener.Mode == config.Scoped && !g.listener.SocketBound() {
+		return &refusal{status: http.StatusInternalServerError, reason: "the request couldn't be decided on", logged: []any{"error", err.Error()}}
+	}
+
+	return refuse(http.StatusInternalServerError, "the request couldn't be decided on: %v", err)
 }
 
 // decided returns the request to forward (with what YorvoGate checked as its body) and, on a scoped
@@ -170,8 +184,9 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			return nil, nil, err
 		}
 
+		ctx, found := lookingUp(r.Context())
 		decision := &scoped{
-			ctx: r.Context(), req: req, scope: s, policy: g.listener.Containers, docker: g.docker,
+			ctx: ctx, req: req, scope: s, policy: g.listener.Containers, docker: g.docker,
 			builderProfiles: g.listener.BuilderAppArmorProfiles, anyBuilder: g.listener.AllowPrivilegedBuilders,
 			path: r.URL.EscapedPath(), query: r.URL.Query(), upgrading: upgrading(r),
 			stream: r.Body, hasBody: r.ContentLength != 0, loadLimit: g.config.LoadLimit, loads: g.loads,
@@ -180,8 +195,19 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			decision.version = req.Version.String()
 		}
 
+		started := time.Now()
 		checked, err := decision.decide(body)
+
+		took := time.Since(started)
+		if took > longestHold && found.Load() {
+			// A refusal here is held less than this took: how long it took could tell what exists.
+			entry.Debug("a decision took longer than a refusal is held", "endpoint", req.Endpoint.Name, "took", took)
+		}
+
+		held := g.decisions.record(req.Endpoint.Name, took, found.Load())
 		if err != nil {
+			hold(r.Context(), started, held)
+
 			return nil, decision, err
 		}
 
@@ -240,7 +266,14 @@ func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 	if !g.listener.SocketBound() {
 		s, err := g.scopes.Authenticate(r.Header.Get(ScopeHeader), r.Header.Get(TokenHeader))
 		if errors.Is(err, scope.ErrUnknown) {
-			return nil, refuse(http.StatusUnauthorized, "no such scope, or not its token")
+			refused := refuse(http.StatusUnauthorized, "no such scope, or not its token")
+			// More than ErrUnknown is a scope file that isn't valid: why, for the log (the reload
+			// said it too)
+			if err != scope.ErrUnknown {
+				refused.logged = []any{"scope_error", err.Error()}
+			}
+
+			return nil, refused
 		}
 
 		return s, err

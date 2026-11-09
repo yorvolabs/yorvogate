@@ -82,7 +82,7 @@ A container's configuration is read field by field with Docker's own types: each
 | Endpoints | Allowed |
 |---|---|
 | `_ping`, `version`, `info` | Yes |
-| Containers: create | With the rules above; its name starts with a prefix of its scope, it carries the owner label |
+| Containers: create | With the rules above; its name starts with a prefix of its scope, it carries the owner label; its image is one it may read, as for an inspect, by name or ID |
 | Containers: inspect, logs, stats, start, stop, kill, wait, attach, archive, delete, rename… | Its own only (by the owner label); a rename keeps a name of its own. Its builders: inspect only |
 | Exec: create, start | In its own containers, never privileged. In its builders, only `buildctl dial-stdio` (no resize, no inspect) |
 | Containers: update | New limits, checked as at create |
@@ -101,7 +101,7 @@ A container's configuration is read field by field with Docker's own types: each
 | Images: search | Yes |
 | Everything else | No: push, prune, commit, import, build, events, auth, plugins, swarm, BuildKit sessions |
 
-Another scope's objects are answered as Docker answers objects that don't exist. A request names its object by the full ID YorvoGate checked, so what Docker acts on is what was checked.
+Another scope's objects are answered as Docker answers objects that don't exist, and in about the same time: a refusal is held until it has taken as long as the slowest of the endpoint's last 256 decisions that found an object (at most 250 ms), so how long Docker takes to look up a name tells little of whether it's another's (the [threat model](threat-model.md#out-of-scope) says how little). A request allowed isn't held. A request names its object by the full ID YorvoGate checked, so what Docker acts on is what was checked.
 
 ### Query parameters and headers
 

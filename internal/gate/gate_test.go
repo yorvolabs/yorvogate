@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/yorvolabs/yorvogate/internal/config"
 )
@@ -46,6 +47,8 @@ type docker struct {
 	builder map[string]any
 	// The API version Docker has ("1.56" unless a test changes it)
 	api string
+	// How long it takes to answer a lookup of an object that exists (none unless a test sets it)
+	slow time.Duration
 }
 
 func (d *docker) apiVersion() string {
@@ -120,6 +123,7 @@ var (
 	}
 
 	inspection   = regexp.MustCompile(`^/v[0-9.]+/(containers|networks|volumes|exec)/([^/]+)(/json)?$`)
+	shortID      = regexp.MustCompile(`^(sha256:)?[0-9a-f]{4,64}$`)
 	imageLookup  = regexp.MustCompile(`^/v[0-9.]+/images/(.+)/json$`)
 	imageHistory = regexp.MustCompile(`^/v[0-9.]+/images/(.+)/history$`)
 )
@@ -147,7 +151,8 @@ func findImage(ref string) *fakeImage {
 			return img
 		}
 
-		if img.id == ref || strings.TrimPrefix(img.id, "sha256:")[:12] == strings.TrimPrefix(ref, "sha256:") {
+		// By its ID, or (as Docker takes one) as few as 4 of its digits
+		if img.id == ref || shortID.MatchString(ref) && strings.HasPrefix(strings.TrimPrefix(img.id, "sha256:"), strings.TrimPrefix(ref, "sha256:")) {
 			return img
 		}
 
@@ -326,6 +331,11 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
+
+	d.mu.Lock()
+	slow := d.slow
+	d.mu.Unlock()
+	time.Sleep(slow)
 
 	_ = json.NewEncoder(w).Encode(answer)
 }

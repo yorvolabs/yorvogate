@@ -200,6 +200,13 @@ func (l *logs) String() string {
 	return l.buf.String()
 }
 
+func (l *logs) Reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.buf.Reset()
+}
+
 func TestDockerGetsOnlyTheHeadersListed(t *testing.T) {
 	d := startDocker(t)
 	var log logs

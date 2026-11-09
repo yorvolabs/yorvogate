@@ -61,7 +61,7 @@ cleanup() {
 		direct network ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker network rm >/dev/null 2>&1
 		direct volume ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker volume rm >/dev/null 2>&1
 	done
-	direct rmi ygc-jane/app:1 ygc-blog/app:1 ygc-jane/hello:1 hello-world:linux >/dev/null 2>&1
+	direct rmi ygc-jane/app:1 ygc-blog/app:1 ygc-blog/only:1 ygc-jane/hello:1 hello-world:linux >/dev/null 2>&1
 	direct rm -f ygc-builder-privileged ygc-builder-rootless >/dev/null 2>&1
 	[ -n "${gate:-}" ] && kill "$gate" 2>/dev/null
 }
@@ -293,6 +293,18 @@ status "/proc unmasked" 403 jane POST /v1.56/containers/create?name=ygc-jane-evi
 status "a field Docker doesn't have yet" 400 jane POST /v1.56/containers/create?name=ygc-jane-evil-1 "$(printf "$create" ',"SomeFutureField":true')"
 # shellcheck disable=SC2059
 status "a name given twice" 400 jane POST "/v1.56/containers/create?name=ygc-jane-evil-1&name=ygc-blog-evil-1" "$(printf "$create" '')"
+# An image all of whose names are blog's, run by its ID: by a few of its digits (Docker takes 4), or whole
+printf 'FROM alpine:3.22\nLABEL ygc=blog-only\n' | direct build -q -t ygc-blog/only:1 - >/dev/null
+only=$(direct image inspect ygc-blog/only:1 --format '{{.Id}}' | sed 's/^sha256://')
+short=$(printf '%.6s' "$only")
+# shellcheck disable=SC2059
+status "a container of blog's image, by a short ID" 404 jane POST /v1.56/containers/create?name=ygc-jane-evil-1 "$(printf "$create" '' | sed "s|alpine:3.22|$short|")"
+# shellcheck disable=SC2059
+status "a container of blog's image, by its ID" 404 jane POST /v1.56/containers/create?name=ygc-jane-evil-1 "$(printf "$create" '' | sed "s|alpine:3.22|sha256:$only|")"
+shared=$(direct image inspect alpine:3.22 --format '{{.Id}}' | sed 's/^sha256://')
+# shellcheck disable=SC2059
+status "a container of a shared image, by a short ID" 201 jane POST /v1.56/containers/create?name=ygc-jane-short-1 "$(printf "$create" '' | sed "s|alpine:3.22|$(printf '%.6s' "$shared")|")"
+direct rm -f ygc-jane-short-1 >/dev/null 2>&1
 status "no version in the path" 400 jane GET /containers/json
 status "a version YorvoGate doesn't know" 400 jane GET /v1.99/containers/json
 status "an encoded slash" 400 jane GET /v1.56/containers%2Fjson
