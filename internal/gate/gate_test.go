@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -54,8 +55,9 @@ type docker struct {
 	classic bool
 	// A Descriptor whose digest isn't the image's ID (one a test doesn't trust)
 	otherDescriptor bool
-	// YorvoGate's own lookups, counted
+	// YorvoGate's own lookups, counted, and their paths as sent
 	lookups int
+	asked   []string
 }
 
 func (d *docker) apiVersion() string {
@@ -279,6 +281,7 @@ func startDocker(t testing.TB) *docker {
 func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 	d.mu.Lock()
 	d.lookups++
+	d.asked = append(d.asked, r.URL.EscapedPath())
 	classic, otherDescriptor := d.classic, d.otherDescriptor
 	d.mu.Unlock()
 
@@ -370,6 +373,14 @@ func (d *docker) last() seen {
 	}
 
 	return d.forwarded[len(d.forwarded)-1]
+}
+
+// askedFor tells whether YorvoGate looked up a path (escaped, as sent).
+func (d *docker) askedFor(path string) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return slices.Contains(d.asked, path)
 }
 
 func (d *docker) lookupCount() int {

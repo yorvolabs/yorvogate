@@ -508,3 +508,29 @@ func TestDistributionOfAnotherScopesNameAsksNothing(t *testing.T) {
 		}
 	}
 }
+
+// Each name a save of many asks for is looked up as it is, escaped: a "#" or "?" in it is part of
+// the name, not of the lookup's path, and the name is refused as one Docker doesn't have.
+func TestEachNameOfASaveIsLookedUpAsItIs(t *testing.T) {
+	d := startDocker(t)
+	server := gate(t, d, "sites")
+
+	for _, c := range []struct{ query, asked string }{
+		{"names=alpine%3A3.22%23x", "/v1.56/images/alpine:3.22%23x/json"},
+		{"names=alpine%3A3.22%3Fx", "/v1.56/images/alpine:3.22%3Fx/json"},
+		{"names=quire-sites%2Fjane%2Fphp-prod&names=alpine%3A3.22%23x", "/v1.56/images/alpine:3.22%23x/json"},
+	} {
+		before := d.count()
+		if status, answer := send(t, server, "GET", "/v1.56/images/get?"+c.query, "", asJane); status != http.StatusNotFound || !strings.Contains(message(t, answer), "No such image") {
+			t.Errorf("%s: %d %s", c.query, status, answer)
+		}
+
+		if !d.askedFor(c.asked) {
+			t.Errorf("%s: Docker wasn't asked for %s", c.query, c.asked)
+		}
+
+		if d.count() != before {
+			t.Errorf("%s: the save reached Docker", c.query)
+		}
+	}
+}
