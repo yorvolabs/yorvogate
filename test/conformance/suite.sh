@@ -189,12 +189,45 @@ works "jane: tag into its namespace" as jane docker tag alpine:3.22 ygc-jane/app
 works "blog: tag into its namespace" as blog docker tag alpine:3.22 ygc-blog/app:1
 works "jane: inspect its image" as jane docker image inspect ygc-jane/app:1
 
-say "== Image archives, named as Docker names them"
-# docker save's own archive of jane's image, then the same archive renamed: in index.json only by a
-# bare ref.name (containerd names the image by it as it is), and in manifest.json as blog's (the
-# classic store reads that one).
-direct save -o "$dir/own.tar" ygc-jane/app:1
+say "== Image archives, named as Docker names them, holding what they refer to"
+if direct info --format '{{json .DriverStatus}}' | grep -q io.containerd.snapshotter; then containerd=1; else containerd=; fi
+arch=$(direct version -f '{{.Server.Arch}}')
+# docker save's archive of an image jane built: it holds every blob it refers to
+printf 'FROM alpine:3.22\nLABEL ygc=jane-built\n' | direct build -q -t ygc-jane/built:1 - >/dev/null
+direct save -o "$dir/own.tar" ygc-jane/built:1
 works "jane: load its own archive" as jane docker load -q -i "$dir/own.tar"
+# A pulled multi-platform image's archive: on the containerd store its index names platforms it
+# doesn't hold (refused: a manifest it lacks); on the classic store it holds the one it has
+direct save -o "$dir/pulled.tar" ygc-jane/app:1
+if [ -n "$containerd" ]; then
+	refused "jane: a pulled image's archive naming platforms it lacks" "the archive lacks sha256:" as jane docker load -q -i "$dir/pulled.tar"
+else
+	works "jane: a pulled image's archive" as jane docker load -q -i "$dir/pulled.tar"
+fi
+# With --platform: recorded, either way (which one loads is what the docs say)
+if direct save --platform "linux/$arch" -o "$dir/platform.tar" ygc-jane/app:1 2>/dev/null; then
+	if output=$(as jane docker load -q -i "$dir/platform.tar" 2>&1); then say "  note a pulled image saved with --platform loads"; else say "  note a pulled image saved with --platform is refused: $output"; fi
+fi
+# buildx --load with an attestation (the containerd store keeps attestations; the classic one doesn't)
+if [ -n "$containerd" ]; then
+	printf 'FROM alpine:3.22\nLABEL ygc=jane-attested\n' | direct buildx build -q --provenance=mode=min --load -t ygc-jane/attested:1 - >/dev/null
+	direct save -o "$dir/attested.tar" ygc-jane/attested:1
+	rm -rf "$dir/attested" && mkdir -p "$dir/attested" && tar -xf "$dir/attested.tar" -C "$dir/attested"
+	if grep -rqsE 'attestation-manifest|vnd\.docker\.attestation\.manifest' "$dir/attested/index.json" "$dir/attested/blobs"; then ok "buildx's archive holds an attestation"; else ko "buildx's archive holds an attestation" "$(cat "$dir/attested/index.json")"; fi
+	works "jane: load a buildx archive with its attestation" as jane docker load -q -i "$dir/attested.tar"
+fi
+# The archive with one layer's bytes replaced, its name kept; then with that layer gone
+rm -rf "$dir/archive" && mkdir -p "$dir/archive" && tar -xf "$dir/own.tar" -C "$dir/archive"
+# The largest blob is a layer (blob names are hex digests)
+layer=$(find "$dir/archive/blobs/sha256" -type f -exec wc -c {} + | grep -v ' total$' | sort -rn | head -1 | sed 's|.*/||')
+cp "$dir/archive/index.json" "$dir/archive/blobs/sha256/$layer"
+tar -cf "$dir/junk.tar" -C "$dir/archive" .
+refused "jane: an archive whose blob isn't what its digest says" "isn't what its digest says" as jane docker load -q -i "$dir/junk.tar"
+rm "$dir/archive/blobs/sha256/$layer"
+tar -cf "$dir/missing.tar" -C "$dir/archive" .
+refused "jane: an archive that lacks a blob it refers to" "the archive lacks" as jane docker load -q -i "$dir/missing.tar"
+# The same archive renamed: in index.json only by a bare ref.name (containerd names the image by it as
+# it is), and in manifest.json as blog's (the classic store reads that one).
 rm -rf "$dir/archive" && mkdir -p "$dir/archive" && tar -xf "$dir/own.tar" -C "$dir/archive"
 if grep -q '"org.opencontainers.image.ref.name"' "$dir/archive/index.json"; then
 	sed -e 's/"io.containerd.image.name":"[^"]*",//' -e 's/"org.opencontainers.image.ref.name":"[^"]*"/"org.opencontainers.image.ref.name":"ygc-bare"/' \

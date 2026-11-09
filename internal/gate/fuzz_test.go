@@ -145,7 +145,7 @@ func FuzzArchiveNames(f *testing.F) {
 	f.Add([]byte("BZh91AY&SY"))
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		names, err := archiveNames(bytes.NewReader(data))
+		names, _, err := archiveNames(bytes.NewReader(data))
 		if err == nil {
 			for _, n := range names {
 				if n == "" {

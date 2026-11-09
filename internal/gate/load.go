@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -78,7 +79,7 @@ func (s *scoped) load() error {
 		return err
 	}
 
-	names, err := archiveNames(file)
+	names, held, err := archiveNames(file)
 	if err != nil {
 		return refuse(http.StatusBadRequest, "image.load: %v", err)
 	}
@@ -87,6 +88,12 @@ func (s *scoped) load() error {
 		if err := s.ownsImageName(name, "image.load"); err != nil {
 			return err
 		}
+	}
+
+	// And it holds everything it refers to, each blob with its digest: else its names could be given
+	// to content Docker already has, which may be another scope's.
+	if err := held.complete(); err != nil {
+		return refuse(http.StatusBadRequest, "image.load: %v", err)
 	}
 
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
@@ -103,7 +110,10 @@ func (s *scoped) load() error {
 // classic store's legacy format, until Docker 28), an OCI archive's index.json (the containerd
 // store). Every name any of them would give is checked, so the store Docker has doesn't matter. Docker loads plain, gzip and bzip2 archives (and xz and zstd, which are refused
 // here: YorvoGate can't read them).
-func archiveNames(r io.Reader) ([]string, error) {
+//
+// It also reads every plain file, hashing it (contents), so the caller can check the archive holds
+// everything it refers to.
+func archiveNames(r io.Reader) ([]string, *contents, error) {
 	buffered := bufio.NewReader(r)
 	magic, _ := buffered.Peek(6)
 
@@ -113,54 +123,82 @@ func archiveNames(r io.Reader) ([]string, error) {
 	case bytes.HasPrefix(magic, []byte{0x1f, 0x8b}):
 		gz, err := gzip.NewReader(buffered)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		archive = gz
 	case bytes.HasPrefix(magic, []byte("BZh")):
 		archive = bzip2.NewReader(buffered)
 	case bytes.HasPrefix(magic, []byte{0xfd, '7', 'z', 'X', 'Z', 0x00}), bytes.HasPrefix(magic, []byte{0x28, 0xb5, 0x2f, 0xfd}):
-		return nil, errors.New("xz and zstd archives aren't allowed (send it plain, or gzip)")
+		return nil, nil, errors.New("xz and zstd archives aren't allowed (send it plain, or gzip)")
 	}
 
 	reader := tar.NewReader(archive)
-	seen := map[string]bool{}
+	held := newContents()
+	paths := map[string]bool{}
 	var names []string
 
 	for {
 		header, err := reader.Next()
 		if errors.Is(err, io.EOF) {
-			return names, nil
+			break
 		}
 
 		if err != nil {
-			return nil, fmt.Errorf("not an image archive: %w", err)
+			return nil, nil, fmt.Errorf("not an image archive: %w", err)
+		}
+
+		// A name is relative and goes nowhere up: an extractor that joins "/manifest.json" or
+		// "a/../manifest.json" onto its folder gets the manifest.json this check would read as
+		// another file. Docker's own save writes neither.
+		if strings.HasPrefix(header.Name, "/") || slices.Contains(strings.Split(header.Name, "/"), "..") {
+			return nil, nil, fmt.Errorf("the archive's %q isn't a plain relative path", header.Name)
 		}
 
 		name := path.Clean(strings.TrimPrefix(header.Name, "./"))
-		if name != "manifest.json" && name != "index.json" && name != "repositories" {
+		named := name == "manifest.json" || name == "index.json" || name == "repositories"
+
+		// Every path once, whatever it is: where the last entry of a name wins, a second one would
+		// put other content under a name than what was hashed.
+		if paths[name] {
+			return nil, nil, fmt.Errorf("the archive has %s twice", name)
+		}
+
+		paths[name] = true
+
+		// One of each, a plain file: any other and Docker could read another than this check.
+		if named && (held.digests[name] != "" || header.Typeflag != tar.TypeReg) {
+			return nil, nil, fmt.Errorf("the archive's %s isn't one plain file", name)
+		}
+
+		// Only plain files hold content; a link or a folder holds none (one an index refers to
+		// is then missing)
+		if header.Typeflag != tar.TypeReg {
 			continue
 		}
 
-		// One of each, a plain file: any other and Docker could read another than this check.
-		if seen[name] || header.Typeflag != tar.TypeReg {
-			return nil, fmt.Errorf("the archive's %s isn't one plain file", name)
+		if err := held.add(name, header.Size, reader); err != nil {
+			return nil, nil, err
 		}
 
-		seen[name] = true
+		if !named {
+			continue
+		}
 
-		content, err := io.ReadAll(io.LimitReader(reader, 16<<20))
-		if err != nil {
-			return nil, err
+		content, ok := held.json[name]
+		if !ok {
+			return nil, nil, fmt.Errorf("the archive's %s is larger than %d bytes, or not JSON", name, maxJSON)
 		}
 
 		found, err := namesIn(name, content)
 		if err != nil {
-			return nil, fmt.Errorf("the archive's %s: %w", name, err)
+			return nil, nil, fmt.Errorf("the archive's %s: %w", name, err)
 		}
 
 		names = append(names, found...)
 	}
+
+	return names, held, nil
 }
 
 func namesIn(file string, content []byte) ([]string, error) {

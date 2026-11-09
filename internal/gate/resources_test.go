@@ -230,11 +230,7 @@ func TestLoadingAnArchiveChecksItsNames(t *testing.T) {
 	d := startDocker(t)
 	server := gate(t, d, "sites")
 
-	own := archive(t,
-		entry{name: "blobs/sha256/aa", content: "layer"},
-		entry{name: "index.json", content: `{"manifests":[{"annotations":{"io.containerd.image.name":"docker.io/quire-sites/jane/php-prod:latest","org.opencontainers.image.ref.name":"latest"}}]}`},
-		entry{name: "manifest.json", content: `[{"RepoTags":["quire-sites/jane/php-prod:latest"]}]`},
-	)
+	own := ociArchive(t, "quire-sites/jane/php-prod:latest")
 
 	if status, answer := send(t, server, "POST", "/v1.56/images/load?quiet=1", string(own), asJane); status != 200 {
 		t.Fatalf("its own: %d %s", status, answer)
@@ -254,16 +250,15 @@ func TestLoadingAnArchiveChecksItsNames(t *testing.T) {
 
 	// The name an entry has is its io.containerd.image.name: its ref.name then names nothing, as in
 	// docker save's archives ("latest"), whatever it says.
-	named := archive(t, entry{name: "index.json", content: `{"manifests":[{"annotations":{"io.containerd.image.name":"quire-sites/jane/php-prod:2","org.opencontainers.image.ref.name":"postgres:18"}}]}`})
+	php := anImage("quire-sites/jane/php-prod:2")
+	named := archive(t, append(append([]entry{}, php.blobs...), entry{name: "index.json", content: asJSON(map[string]any{"manifests": []any{ref(ociManifest, php.manifest, map[string]string{"io.containerd.image.name": "quire-sites/jane/php-prod:2", "org.opencontainers.image.ref.name": "postgres:18"})}})})...)
 	if status, answer := send(t, server, "POST", "/v1.56/images/load", string(named), asJane); status != 200 {
 		t.Errorf("its own name, with a ref.name that names nothing: %d %s", status, answer)
 	}
 
 	// An index an index lists isn't named: only index.json's own entries are
-	nested := archive(t,
-		entry{name: "index.json", content: `{"manifests":[{"mediaType":"application/vnd.oci.image.index.v1+json","digest":"sha256:bb","annotations":{"io.containerd.image.name":"quire-sites/jane/multi:1"}}]}`},
-		entry{name: "blobs/sha256/bb", content: `{"manifests":[{"annotations":{"org.opencontainers.image.ref.name":"postgres"}}]}`},
-	)
+	inner := asJSON(map[string]any{"mediaType": ociIndex, "manifests": []any{ref(ociManifest, php.manifest, map[string]string{"org.opencontainers.image.ref.name": "postgres"})}})
+	nested := archive(t, append(append([]entry{}, php.blobs...), blob(inner), entry{name: "index.json", content: asJSON(map[string]any{"manifests": []any{ref(ociIndex, inner, map[string]string{"io.containerd.image.name": "quire-sites/jane/multi:1"})}})})...)
 	if status, answer := send(t, server, "POST", "/v1.56/images/load", string(nested), asJane); status != 200 {
 		t.Errorf("its own name, on an index that lists another: %d %s", status, answer)
 	}
