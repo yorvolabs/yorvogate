@@ -911,3 +911,24 @@ func TestAStateRecordsAliases(t *testing.T) {
 		}
 	}
 }
+
+// A state record that lists a claim twice holds it once: the claims read are a set.
+func TestAStateRecordsClaimsAreASet(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state.json")
+
+	if err := os.WriteFile(state, []byte(`{"version": 1, "scopes": {"jane": {"owner": {"label": "com.docker.compose.project", "value": "jane"},
+		"prefixes": ["jane-", "jane_", "jane-"], "images": ["quire-sites/jane/", "quire-sites/jane/"], "builders": ["bk-jane", "bk-jane"],
+		"aliases": ["edge/jane.quire.internal", "edge/jane.quire.internal"]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	held, err := readState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := held["jane"]
+	if !slices.Equal(got.Prefixes, []string{"jane-", "jane_"}) || len(got.Images) != 1 || len(got.Builders) != 1 || len(got.Aliases) != 1 {
+		t.Errorf("read: %+v", got)
+	}
+}

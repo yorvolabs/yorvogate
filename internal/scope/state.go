@@ -68,7 +68,8 @@ func readState(path string) (map[string]claims, error) {
 			continue
 		}
 
-		held[name] = c
+		// Each claim once, as a scope file's are (union): what's held is a set
+		held[name] = c.once()
 	}
 
 	if len(bad) > 0 {

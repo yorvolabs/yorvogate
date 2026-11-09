@@ -327,6 +327,25 @@ func (c claims) each(yield func(claim)) {
 	}
 }
 
+// once is c with each claim listed once, in its first place: a set, as union makes a scope file's.
+func (c claims) once() claims {
+	unique := func(xs []string) []string {
+		var out []string
+
+		for _, x := range xs {
+			if !slices.Contains(out, x) {
+				out = append(out, x)
+			}
+		}
+
+		return out
+	}
+
+	c.Prefixes, c.Images, c.Builders, c.Aliases = unique(c.Prefixes), unique(c.Images), unique(c.Builders), unique(c.Aliases)
+
+	return c
+}
+
 // aliasClaims are a scope's aliases on its shared networks, as claims' keys.
 func aliasClaims(s *Scope) []string {
 	var keys []string
