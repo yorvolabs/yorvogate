@@ -102,7 +102,7 @@ func dockerReads(t *testing.T, s seen) url.Values {
 func TestDockerReadsOnlyWhatWasChecked(t *testing.T) {
 	d := startDocker(t)
 	server := gate(t, d, "sites")
-	tar := string(archive(t, entry{name: "manifest.json", content: `[{"RepoTags":["quire-sites/jane/php-prod:latest"]}]`}))
+	tar := string(ociArchive(t, "quire-sites/jane/php-prod:latest"))
 
 	for _, c := range []struct {
 		name, method, path, contentType, body string
