@@ -24,27 +24,52 @@ import (
 // flight per scope leaves the others' loads (one each) running as before.
 type loadLimiter struct {
 	mu  sync.Mutex
-	sem map[string]chan struct{}
+	sem map[string]*loadSlot
+}
+
+// loadSlot is one scope's: its one load at a time, and how many hold it or wait for it. The scope's
+// entry goes when the last one releases, so the map holds only scopes loading now.
+type loadSlot struct {
+	ch      chan struct{}
+	holders int
 }
 
 func newLoadLimiter() *loadLimiter {
-	return &loadLimiter{sem: map[string]chan struct{}{}}
+	return &loadLimiter{sem: map[string]*loadSlot{}}
 }
 
 // acquire blocks until the scope has no other load in flight, and returns a function that releases
-// the slot.
+// the slot. A load is counted before it waits, so a waiting one keeps the entry.
 func (l *loadLimiter) acquire(scope string) func() {
 	l.mu.Lock()
-	ch, ok := l.sem[scope]
+	slot, ok := l.sem[scope]
 	if !ok {
-		ch = make(chan struct{}, 1)
-		l.sem[scope] = ch
+		slot = &loadSlot{ch: make(chan struct{}, 1)}
+		l.sem[scope] = slot
 	}
+	slot.holders++
 	l.mu.Unlock()
 
-	ch <- struct{}{}
+	slot.ch <- struct{}{}
 
-	return func() { <-ch }
+	return func() {
+		<-slot.ch
+
+		l.mu.Lock()
+		slot.holders--
+		if slot.holders == 0 {
+			delete(l.sem, scope)
+		}
+		l.mu.Unlock()
+	}
+}
+
+// loading is how many scopes have a load in flight or waiting.
+func (l *loadLimiter) loading() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return len(l.sem)
 }
 
 // load checks an image archive before Docker loads it: the names it gives its images must be in the
