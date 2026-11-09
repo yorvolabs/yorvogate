@@ -783,3 +783,131 @@ func TestABuilderOverlapNoOneHeld(t *testing.T) {
 		t.Errorf("under a reserved scope's prefix: %v", err)
 	}
 }
+
+// withAliases is a scope file with aliases on the shared network edge.
+func withAliases(owner, prefix string, aliases ...string) string {
+	list := `"` + strings.Join(aliases, `", "`) + `"`
+
+	return strings.Replace(scopeFile(owner, prefix, "quire-sites/"+owner+"/"), `"prefixes"`, `"networks": {"edge": {"aliases": [`+list+`]}}, "prefixes"`, 1)
+}
+
+// On a shared network, a bare alias (a Compose service's name) is every tenant's; a dotted one names
+// one site, and one under a scope's prefix is that scope's container's name.
+func TestAnAliasIsClaimedWhenItNamesOne(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t, dir, false)
+
+	// Its own prefix, a bare name and an FQDN; the same bare name in another scope
+	write(t, dir, "jane", withAliases("jane", "jane", "web", "jane-web-1", "jane.quire.internal"))
+	write(t, dir, "bob", withAliases("bob", "bob", "web", "bob-web-1", "bob.quire.internal"))
+
+	for _, name := range []string{"jane", "bob"} {
+		if _, err := store.Get(name); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+
+	// A neighbour's container name: refused, the neighbour keeps it
+	write(t, dir, "bob", withAliases("bob", "bob", "web", "bob-web-1", "jane-web-1"))
+
+	if _, err := store.Get("bob"); err == nil || !strings.Contains(err.Error(), `aliases: scope bob's alias "jane-web-1" on edge is under scope jane's prefix "jane-"`) {
+		t.Errorf("a neighbour's prefix: %v", err)
+	}
+
+	if _, err := store.Get("jane"); err != nil {
+		t.Errorf("jane: %v", err)
+	}
+
+	// Another's FQDN on the same network: refused, jane keeps it
+	write(t, dir, "bob", withAliases("bob", "bob", "web", "jane.quire.internal"))
+
+	if _, err := store.Get("bob"); err == nil || !strings.Contains(err.Error(), `aliases: "jane.quire.internal" on edge is scope jane's already`) {
+		t.Errorf("another's FQDN: %v", err)
+	}
+
+	// The same FQDN on another network isn't the same name there
+	write(t, dir, "bob", strings.Replace(scopeFile("bob", "bob", "quire-sites/bob/"), `"prefixes"`, `"networks": {"other": {"aliases": ["jane.quire.internal"]}}, "prefixes"`, 1))
+
+	if _, err := store.Get("bob"); err != nil {
+		t.Errorf("an FQDN on another network: %v", err)
+	}
+}
+
+// A nested scope's names are its own: jane may not take jane-blog's container's name as an alias,
+// although jane's prefix covers it too. A new scope whose prefix covers an alias held before is
+// refused, and the alias stays.
+func TestAnAliasIsTheLongestPrefixs(t *testing.T) {
+	dir := t.TempDir()
+	store := testStore(t, dir, false)
+	write(t, dir, "jane-blog", withAliases("jane-blog", "jane-blog", "web"))
+	write(t, dir, "jane", withAliases("jane", "jane", "jane-blog-web-1"))
+
+	if _, err := store.Get("jane"); err == nil || !strings.Contains(err.Error(), `under scope jane-blog's prefix "jane-blog-"`) {
+		t.Errorf("a nested scope's name: %v", err)
+	}
+
+	write(t, dir, "jane", withAliases("jane", "jane", "x-web-1"))
+
+	if _, err := store.Get("jane"); err != nil {
+		t.Fatal(err)
+	}
+
+	write(t, dir, "x", scopeFile("x", "x", "quire-sites/x/"))
+
+	if _, err := store.Get("x"); err == nil || !strings.Contains(err.Error(), `scope jane's alias "x-web-1" on edge is under scope x's prefix "x-"`) {
+		t.Errorf("a new prefix over a held alias: %v", err)
+	}
+
+	if _, err := store.Get("jane"); err != nil {
+		t.Errorf("jane: %v", err)
+	}
+}
+
+// Two new scopes with one FQDN on one network: both refused, as with any claim no one held.
+func TestOneFQDNTwoNewScopes(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "jane", withAliases("jane", "jane", "site.quire.internal"))
+	write(t, dir, "bob", withAliases("bob", "bob", "site.quire.internal"))
+	store := testStore(t, dir, false)
+
+	for _, name := range []string{"jane", "bob"} {
+		if _, err := store.Get(name); err == nil || !strings.Contains(err.Error(), `"site.quire.internal" on edge is also scope`) {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// A state record's aliases are read as a scope file's are: one that isn't valid drops the record,
+// and one held keeps another scope's FQDN out after a restart.
+func TestAStateRecordsAliases(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(t.TempDir(), "state.json")
+	write(t, dir, "bob", withAliases("bob", "bob", "jane.quire.internal"))
+	write(t, dir, "jane", "{")
+
+	record := func(alias string) string {
+		return `"jane": {"owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"], "aliases": ["edge/jane.quire.internal", "` + alias + `"]}`
+	}
+
+	for alias, kept := range map[string]bool{
+		"edge/jane.quire.internal": true, "edge/" + strings.Repeat("a.", 125) + "aaa": true,
+		"edge/Jane.quire.internal": false, "edge/0123456789ab": false, "jane.quire.internal": false, "e/dge/jane.quire.internal": false,
+		"edge/" + strings.Repeat("a.", 126) + "aa": false,
+	} {
+		if err := os.WriteFile(state, []byte(`{"version": 1, "scopes": {`+record(alias)+`}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		r := NewRegistry([]Folder{{Listener: "sites", Dir: dir}}, state).ReadOnly()
+		reload(t, r)
+
+		_, err := r.Store("sites").Get("bob")
+		if kept && (r.StateProblem() != nil || err == nil || !strings.Contains(err.Error(), `"jane.quire.internal" on edge is scope jane's already`)) {
+			t.Errorf("%q: held, yet bob: %v (state: %v)", alias, err, r.StateProblem())
+		}
+
+		if !kept && (r.StateProblem() == nil || err != nil) {
+			t.Errorf("%q: a record not valid, yet read (bob: %v)", alias, err)
+		}
+	}
+}

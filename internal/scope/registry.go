@@ -84,6 +84,9 @@ type claims struct {
 	Prefixes []string `json:"prefixes"`
 	Images   []string `json:"images,omitempty"`
 	Builders []string `json:"builders,omitempty"`
+	// Its aliases on shared networks, "<network>/<alias>" (normalised): each a claim when it's
+	// dotted (an FQDN, which names one site), and checked against every scope's prefixes
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 type snapshot struct {
@@ -294,9 +297,10 @@ func scanFolder(f Folder, loaded map[string]entry) (bool, error) {
 }
 
 // kinds are the kinds of claim, in the order a refusal looks at them.
-var kinds = []string{"builders", "owner", "prefixes", "images"}
+var kinds = []string{"builders", "owner", "prefixes", "images", "aliases"}
 
-// claim is one thing a scope claims: its kind ("owner", "prefixes", "images", "builders") and key.
+// claim is one thing a scope claims: its kind ("owner", "prefixes", "images", "builders",
+// "aliases") and key.
 type claim struct{ kind, key string }
 
 func (c claims) each(yield func(claim)) {
@@ -313,6 +317,29 @@ func (c claims) each(yield func(claim)) {
 	for _, b := range c.Builders {
 		yield(claim{"builders", b})
 	}
+
+	// A bare alias (a Compose service's name, "web") is every tenant's on a shared network: only a
+	// dotted one is claimed by name. One under a scope's prefix is that scope's (overlaps).
+	for _, a := range c.Aliases {
+		if _, alias, _ := strings.Cut(a, "/"); strings.Contains(alias, ".") {
+			yield(claim{"aliases", a})
+		}
+	}
+}
+
+// aliasClaims are a scope's aliases on its shared networks, as claims' keys.
+func aliasClaims(s *Scope) []string {
+	var keys []string
+
+	for _, network := range slices.Sorted(maps.Keys(s.Networks)) {
+		for _, a := range s.Networks[network].Aliases {
+			if alias, ok := NormaliseAlias(a); ok {
+				keys = append(keys, network+"/"+alias)
+			}
+		}
+	}
+
+	return keys
 }
 
 func (c claims) has(want claim) bool {
@@ -342,6 +369,7 @@ func (c claims) union(s *Scope) claims {
 	c.Prefixes = add(slices.Clone(c.Prefixes), s.Prefixes)
 	c.Images = add(slices.Clone(c.Images), s.Images)
 	c.Builders = add(slices.Clone(c.Builders), s.Builders)
+	c.Aliases = add(slices.Clone(c.Aliases), aliasClaims(s))
 
 	return c
 }
@@ -400,7 +428,12 @@ func resolve(folders []Folder, loaded []map[string]entry, held map[string]claims
 
 		for _, name := range names {
 			if c, ok := proposed[name]; ok {
-				c.each(func(x claim) { claimants[x] = append(claimants[x], name) })
+				// Once each: a state record may list a claim twice, which isn't two claimants
+				c.each(func(x claim) {
+					if who := claimants[x]; len(who) == 0 || who[len(who)-1] != name {
+						claimants[x] = append(who, name)
+					}
+				})
 			}
 		}
 
@@ -526,7 +559,9 @@ func resolve(folders []Folder, loaded []map[string]entry, held map[string]claims
 }
 
 // overlaps refuses a scope whose builder's name a scope's prefix covers (its own, or another's): a
-// builder is named exactly, a container of a scope's by its prefixes, and one name would be both. As
+// builder is named exactly, a container of a scope's by its prefixes, and one name would be both.
+// So too a scope whose alias on a shared network is under another scope's prefix: Docker's DNS would
+// answer that scope's container's name with this one's address. As
 // with a claim two scopes want, the one that held its claim before keeps it and the other is refused;
 // if both or neither held theirs, both are. A scope reserved, or refused already, only keeps others
 // out. It tells whether it refused any.
@@ -550,6 +585,20 @@ func overlaps(names []string, proposed map[string]claims, valid map[string]claim
 		}
 	}
 
+	// contest refuses, of a scope's name and another's prefix that covers it, the one that didn't
+	// hold its claim before; both if both or neither did.
+	contest := func(name, other string, nameHeld, prefixHeld bool, err error) {
+		switch {
+		case nameHeld && !prefixHeld:
+			refuse(other, err)
+		case prefixHeld && !nameHeld:
+			refuse(name, err)
+		default:
+			refuse(name, err)
+			refuse(other, err)
+		}
+	}
+
 	for _, name := range names {
 		c, ok := proposed[name]
 		if !ok {
@@ -570,18 +619,33 @@ func overlaps(names []string, proposed map[string]claims, valid map[string]claim
 
 					err := fmt.Errorf("builders: scope %s's builder %q is under scope %s's prefix %q: a builder's name can't be a scope's container's name", name, b, other, p)
 
-					builderHeld, prefixHeld := held[name].has(claim{"builders", b}), held[other].has(claim{"prefixes", p})
+					contest(name, other, held[name].has(claim{"builders", b}), held[other].has(claim{"prefixes", p}), err)
+				}
+			}
+		}
 
-					switch {
-					case builderHeld && !prefixHeld:
-						refuse(other, err)
-					case prefixHeld && !builderHeld:
-						refuse(name, err)
-					default:
-						refuse(name, err)
-						refuse(other, err)
+		// An alias under a scope's prefix is that scope's, as a container's name is: the longest
+		// prefix that covers it decides whose (Names). One under no prefix is shared, or claimed by
+		// name if it's dotted (each).
+		for _, key := range c.Aliases {
+			network, alias, _ := strings.Cut(key, "/")
+
+			for n := len(alias) - 1; n > 0; n-- {
+				p := alias[:n]
+
+				owners := byPrefix[p]
+				if len(owners) == 0 {
+					continue
+				}
+
+				if !slices.Contains(owners, name) {
+					for _, other := range owners {
+						err := fmt.Errorf("aliases: scope %s's alias %q on %s is under scope %s's prefix %q: it's that scope's name", name, alias, network, other, p)
+						contest(name, other, slices.Contains(held[name].Aliases, key), held[other].has(claim{"prefixes", p}), err)
 					}
 				}
+
+				break
 			}
 		}
 	}
@@ -592,8 +656,13 @@ func overlaps(names []string, proposed map[string]claims, valid map[string]claim
 // collision says why a scope is refused: a claim another scope has, or that several want.
 func collision(x claim, name string, who, incumbents []string) error {
 	key := fmt.Sprintf("%q", x.key)
-	if x.kind == "owner" {
+
+	switch x.kind {
+	case "owner":
 		key = x.key
+	case "aliases":
+		network, alias, _ := strings.Cut(x.key, "/")
+		key = fmt.Sprintf("%q on %s", alias, network)
 	}
 
 	if len(incumbents) == 1 {
@@ -612,7 +681,7 @@ func equalHeld(a, b map[string]claims) bool {
 
 	for name, x := range a {
 		y, ok := b[name]
-		if !ok || x.Owner != y.Owner || !slices.Equal(x.Prefixes, y.Prefixes) || !slices.Equal(x.Images, y.Images) || !slices.Equal(x.Builders, y.Builders) {
+		if !ok || x.Owner != y.Owner || !slices.Equal(x.Prefixes, y.Prefixes) || !slices.Equal(x.Images, y.Images) || !slices.Equal(x.Builders, y.Builders) || !slices.Equal(x.Aliases, y.Aliases) {
 			return false
 		}
 	}
