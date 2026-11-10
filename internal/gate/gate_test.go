@@ -148,7 +148,7 @@ var (
 	// jane_stolen has jane's prefix but blog's label: a name doesn't make a volume jane's.
 	// jane_hostbind has jane's label but a local driver that binds the host root: owned, yet unsafe to mount.
 	volumes = []fakeObject{{"jane_data", "jane_data", jane}, {"blog_data", "blog_data", blog}, {"jane_stolen", "jane_stolen", blog}, {"jane_hostbind", "jane_hostbind", jane}, {"buildx_buildkit_jane0_state", "buildx_buildkit_jane0_state", nil}}
-	execs   = map[string]string{"exec-jane": janePHP, "exec-blog": blogPHP, "exec-dial": janeBuilder, "exec-dial-as-docker-says": janeBuilder, "exec-shell": janeBuilder, "exec-dial-root": janeBuilder}
+	execs   = map[string]string{"exec-agent": janeAgent, "exec-jane": janePHP, "exec-blog": blogPHP, "exec-dial": janeBuilder, "exec-dial-as-docker-says": janeBuilder, "exec-shell": janeBuilder, "exec-dial-root": janeBuilder}
 	// What each exec runs (the others, a shell)
 	execCommands = map[string]map[string]any{
 		"exec-dial": {"entrypoint": "buildctl", "arguments": []string{"dial-stdio"}},

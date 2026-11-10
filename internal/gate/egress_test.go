@@ -218,3 +218,58 @@ func TestEgressLeaks(t *testing.T) {
 		t.Errorf("leaks: %v", leaks)
 	}
 }
+
+// An exec made before the scope was egress-free, in a container with a way out, isn't started; one in
+// a container on internal networks only is, and so is any for a scope that isn't egress-free. What
+// doesn't run code (its inspection) still works.
+func TestAnEgressFreeScopesExecStarts(t *testing.T) {
+	d := startDocker(t)
+	egress, sites := gate(t, d, "egress"), gate(t, d, "sites")
+	start := `{"Detach":true}`
+
+	forwarded := d.count()
+	if status, answer := send(t, egress, "POST", "/v1.56/exec/exec-jane/start", start, asJane); status != http.StatusForbidden || !strings.Contains(message(t, answer), "exec.start: the container jane-php-1 is on a network that isn't internal (jane_default; egress: none)") || d.count() != forwarded {
+		t.Errorf("a way out: %d %s", status, answer)
+	}
+
+	for _, c := range []struct {
+		server       string
+		method, path string
+	}{
+		{"egress", "POST", "/v1.56/exec/exec-agent/start"},
+		{"sites", "POST", "/v1.56/exec/exec-jane/start"},
+		{"egress", "GET", "/v1.56/exec/exec-jane/json"},
+	} {
+		server := egress
+		if c.server == "sites" {
+			server = sites
+		}
+
+		body := start
+		if c.method == "GET" {
+			body = ""
+		}
+
+		if status, answer := send(t, server, c.method, c.path, body, asJane); status/100 != 2 {
+			t.Errorf("%s %s %s: %d %s", c.server, c.method, c.path, status, answer)
+		}
+	}
+}
+
+// A running container that can't be inspected is named as one that couldn't be checked, not left out.
+func TestEgressLeaksNameWhatCouldntBeChecked(t *testing.T) {
+	d := startDocker(t)
+
+	// jane-agent-1's network namespace is another container that isn't there
+	containerNetworks[janeAgent] = []string{"container:gone"}
+	t.Cleanup(func() { containerNetworks[janeAgent] = []string{"jane_internal", "quire-egress"} })
+
+	leaks, err := EgressLeaks(context.Background(), NewDocker(d.socket), "1.56", "com.docker.compose.project", "jane")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := strings.Join(leaks, "; "); !strings.Contains(got, "jane-agent-1 (its networks couldn't be checked: the container gone whose network it joins isn't there)") || !strings.Contains(got, "jane-php-1 (jane_default)") {
+		t.Errorf("leaks: %s", got)
+	}
+}

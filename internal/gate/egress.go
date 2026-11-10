@@ -27,7 +27,7 @@ func (s *scoped) egressFree() bool {
 }
 
 // runsCode are the endpoints that run code in a container, or let it run again.
-var runsCode = []string{"container.start", "container.restart", "container.unpause", "container.attach", "container.attach-websocket", "exec.create"}
+var runsCode = []string{"container.start", "container.restart", "container.unpause", "container.attach", "container.attach-websocket", "exec.create", "exec.start"}
 
 // internal checks a network an egress-free scope's container joins, by name or ID.
 func (s *scoped) internal(network string, add func(string, ...any)) {
@@ -142,13 +142,22 @@ func EgressLeaks(ctx context.Context, d *Docker, version, label, value string) (
 
 	for _, r := range running {
 		c, err := d.Container(ctx, version, r.ID)
-		if err != nil || c == nil {
+
+		switch {
+		case err != nil:
+			leaks = append(leaks, fmt.Sprintf("%s (it couldn't be checked: %v)", r.ID, err))
+
+			continue
+		case c == nil:
+			// Gone since the list: it runs no more
 			continue
 		}
 
 		outside, err := external(ctx, d, version, c.inspection)
 		if err != nil {
-			return nil, err
+			leaks = append(leaks, fmt.Sprintf("%s (its networks couldn't be checked: %v)", c.Name, err))
+
+			continue
 		}
 
 		if len(outside) > 0 {
