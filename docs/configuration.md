@@ -73,6 +73,8 @@ What a scope's containers may ask of the host. Whatever isn't listed is refused,
 | `security_options` | none | Other security options allowed, exactly as written (`no-new-privileges` always is) |
 | `runtimes` | none | Runtimes allowed besides Docker's default |
 | `log_drivers` | none | Log drivers allowed besides `json-file`, `local` and `none` |
+| `log_options` | none | Options of the listed log drivers, each with the exact values allowed (`syslog-address: [udp://10.0.0.9:514]`); see [log options](#log-options) |
+| `max_log_buffer` | 4 MiB | The largest `max-buffer-size` a container's log may ask, in bytes |
 | `ulimits` | none | Ulimits that may be set, by name (e.g. `nofile`) |
 | `max_memory` | — | When set (bytes, at least 6 MiB): every container has a memory limit up to this |
 | `max_pids` | — | When set: every container has a process limit up to this |
@@ -101,7 +103,9 @@ Which registries the daemon may reach for a scope, and which platforms a scope m
 
 | Endpoints | Allowed |
 |---|---|
-| `_ping`, `version`, `info` | Yes |
+| `_ping` | Yes |
+| `version` | Docker's version, API versions and platform, and its Engine's; not the kernel's, build details, or containerd's, runc's and docker-init's versions |
+| `info` | An allow-list of Docker's answer: its version, OS type and architecture, image store (`Driver`, and `DriverStatus`'s `driver-type`, which buildx reads), cgroup and logging settings, default runtime, the security options' names (and profile when it's `builtin`, `default` or `unconfined`, never a path), the feature flags; swarm as `inactive`; the plugins and runtimes the scope may use; and the scope's own counts (its containers, the images it may see). Not the host's name, kernel, CPUs or memory, Docker's root, proxies, registry configuration, labels or warnings, other scopes' activity, or any field a newer Docker adds |
 | Containers: create | With the rules above; its name starts with a prefix of its scope, it carries the owner label; its image is one it may read, as for an inspect, by name or ID |
 | Containers: inspect, logs, stats, start, stop, kill, wait, attach, archive, delete, rename… | Its own only (by the owner label); a rename keeps a name of its own. Its builders: inspect only |
 | Exec: create, start | In its own containers, never privileged. In its builders, only `buildctl dial-stdio` (no resize, no inspect) |
@@ -195,6 +199,15 @@ One case is left to the orchestrator: if tenant `jane` has a Compose service nam
 - `egress` (optional): `none` keeps its containers and builders on internal networks only. See [egress](#egress). The listener's `containers.egress: none` does the same for every scope.
 - `subnets` (optional): where its networks' addresses must be, in CIDR form: each network it creates names its subnet, inside one of these (otherwise Docker picks from its own pools).
 - `builders` (optional): its BuildKit builders, by exact name (no wildcard), each one scope's only, and outside every scope's prefixes (`buildkit-jane`, not `jane-buildkit`): a name a prefix covers is a container's of that scope, and the file is refused. See [builders](#builders). 0.1's `containers` key is refused: a container a scope "used" was fully its own, privileged or not.
+
+## Log options
+
+A container's log options are checked for the driver its logs go to: the one it names, or Docker's default.
+
+- Every driver takes `mode`, `tag`, `labels`, `labels-regex`, `env` and `env-regex`, and `max-buffer-size` up to `max_log_buffer` (4 MiB unless set): with `mode: non-blocking`, that buffer is in Docker's own memory, outside every container's limits.
+- `json-file` and `local` take `max-size`, `max-file` and `compress` too, and no other. `none` takes none.
+- Any other driver a listener allows (`log_drivers`) takes its other options only with a value its `log_options` lists, exactly: `syslog-address: [udp://10.0.0.9:514]`, so a scope can't point Docker at an address of its choosing. What a container leaves out is Docker's (its `log-opts`), which are yours.
+- Logs take Docker's disk: `json-file` without `max-size` and `max-file` grows as a container writes, as its writable layer does.
 
 ## Egress
 

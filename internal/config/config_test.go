@@ -109,6 +109,10 @@ func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 		"an unknown listener key":        strings.Replace(valid, "mode: scoped", "mode: scoped\n    tls: true", 1),
 		"two documents":                  valid + "\n---\nupstream: unix:///x\n",
 		"an egress not none":             strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {egress: all}", 1),
+		"a log option without values":    strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {log_options: {syslog-address: []}}", 1),
+		"a log option's empty value":     strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {log_options: {syslog-address: [\"\"]}}", 1),
+		"a log option not a name":        strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {log_options: {\"Syslog Address\": [x]}}", 1),
+		"a negative log buffer":          strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {max_log_buffer: -1}", 1),
 		"upstream over TCP":              strings.Replace(valid, "unix:///var/run/docker.sock", "tcp://127.0.0.1:2375", 1),
 		"upstream not absolute":          strings.Replace(valid, "unix:///var/run/docker.sock", "unix://docker.sock", 1),
 		"an unknown mode":                strings.Replace(valid, "mode: scoped", "mode: open", 1),
@@ -177,5 +181,11 @@ func TestTheFormatVersion(t *testing.T) {
 	c, err = Parse([]byte(valid))
 	if err != nil || len(c.Deprecations()) != 1 || !strings.Contains(c.Deprecations()[0], "0.4 refuses it") {
 		t.Errorf("no version: %v %v", err, c.Deprecations())
+	}
+}
+
+func TestTheLogBuffer(t *testing.T) {
+	if (&Containers{}).LogBuffer() != 4<<20 || (&Containers{MaxLogBuffer: 1 << 20}).LogBuffer() != 1<<20 {
+		t.Error("the log buffer's limit")
 	}
 }

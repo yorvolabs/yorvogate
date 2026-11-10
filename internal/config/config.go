@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/yorvolabs/yorvogate/internal/route"
@@ -121,6 +122,13 @@ type Containers struct {
 	Runtimes []string `yaml:"runtimes"`
 	// LogDrivers allowed besides Docker's default (json-file, local, none by default).
 	LogDrivers []string `yaml:"log_drivers"`
+	// LogOptions are the options of the listed log drivers, besides the ones every driver takes, each
+	// with the exact values allowed ("syslog-address": ["udp://10.0.0.9:514"]).
+	LogOptions map[string][]string `yaml:"log_options"`
+	// MaxLogBuffer, in bytes, is the largest "max-buffer-size" a container's log may ask: with
+	// "mode=non-blocking", that buffer is in Docker's own memory, outside every container's limits.
+	// 4 MiB when it's 0.
+	MaxLogBuffer int64 `yaml:"max_log_buffer"`
 	// Ulimits that may be set, by name (e.g. nofile, nproc); none by default.
 	Ulimits []string `yaml:"ulimits"`
 	// MaxMemory, in bytes: when set, every container has a memory limit at most this.
@@ -366,6 +374,7 @@ var (
 	plainName  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 	imagePart  = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,254}/$`)
 	profile    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
+	logOption  = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 )
 
 func (c *Containers) check() error {
@@ -393,6 +402,16 @@ func (c *Containers) check() error {
 		return errors.New("max_memory (at least 6 MiB, Docker's minimum) and max_pids can't be negative")
 	}
 
+	for option, values := range c.LogOptions {
+		if !logOption.MatchString(option) || len(values) == 0 || slices.Contains(values, "") {
+			return fmt.Errorf("log_options: %q must be a log option's name, with the values allowed", option)
+		}
+	}
+
+	if c.MaxLogBuffer < 0 {
+		return errors.New("max_log_buffer can't be negative")
+	}
+
 	if c.Egress != "" && c.Egress != "none" {
 		return fmt.Errorf("egress: %q isn't one (only none, or leave it out)", c.Egress)
 	}
@@ -408,6 +427,18 @@ func (c *Containers) check() error {
 
 func (c *Containers) empty() bool {
 	return reflect.ValueOf(*c).IsZero()
+}
+
+// DefaultMaxLogBuffer is MaxLogBuffer when it's 0.
+const DefaultMaxLogBuffer = 4 << 20
+
+// LogBuffer is the largest "max-buffer-size" a container's log may ask.
+func (c *Containers) LogBuffer() int64 {
+	if c.MaxLogBuffer == 0 {
+		return DefaultMaxLogBuffer
+	}
+
+	return c.MaxLogBuffer
 }
 
 // Network splits the address into Go's network and address ("tcp", "10.0.0.2:2375").
