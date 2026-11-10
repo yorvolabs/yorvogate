@@ -58,7 +58,7 @@ func TestTheAdvertisedAPIVersionIsOneTheGateServes(t *testing.T) {
 			}
 
 			if v.ApiVersion != want || v.MinAPIVersion != "1.44" || v.Version != "30.0.0" || v.Os != "linux" ||
-				len(v.Components) != 1 || v.Components[0].Details["ApiVersion"] != want || v.Components[0].Details["MinAPIVersion"] != "1.44" || v.Components[0].Details["Os"] != "linux" {
+				len(v.Components) == 0 || v.Components[0].Name != "Engine" || v.Components[0].Details["ApiVersion"] != want || v.Components[0].Details["MinAPIVersion"] != "1.44" || v.Components[0].Details["Os"] != "linux" {
 				t.Errorf("Docker %s, %s /version: %+v", daemon, listener, v)
 			}
 		}

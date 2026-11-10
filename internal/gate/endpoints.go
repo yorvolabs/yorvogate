@@ -64,8 +64,8 @@ var attaching = []string{"detachKeys", "logs", "stream", "stdin", "stdout", "std
 
 var forScopes = map[string]descriptor{
 	"system.ping":    {rule: rule(allowed)},
-	"system.version": {rule: rule(allowed)},
-	"system.info":    {rule: rule(allowed)},
+	"system.version": {rule: rule((*scoped).versionOfItsOwn)},
+	"system.info":    {rule: rule((*scoped).infoOfItsOwn)},
 
 	"container.list":   {rule: rule((*scoped).ownOnly), query: with(freely("all", "limit", "size"), "filters")},
 	"container.prune":  {rule: rule((*scoped).ownOnly), query: with(freely(), "filters")},

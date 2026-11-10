@@ -185,6 +185,12 @@ works "blog: compose up" as blog docker compose -p ygc-blog -f "$blog" up -d
 # profile, the default runtime
 stated=$(direct inspect ygc-jane-app-1 --format '{{.HostConfig.CgroupnsMode}} {{.HostConfig.Runtime}} {{json .HostConfig.SecurityOpt}}')
 case "$stated" in "private runc "*'"seccomp=builtin"'*) ok "jane: its container's cgroup namespace, runtime and seccomp profile, as YorvoGate stated them" ;; *) ko "jane: its container's stated defaults" "$stated" ;; esac
+# Its docker info: its own containers, not the host's name, and no swarm (Compose reads it)
+info=$(as jane docker info --format '{{.Name}}|{{.Containers}}|{{.Swarm.LocalNodeState}}|{{.DockerRootDir}}' 2>&1)
+own=$(as jane docker ps -aq | wc -l | tr -d ' ')
+if [ "$info" = "|$own|inactive|" ]; then ok "jane: docker info, its own"; else ko "jane: docker info, its own" "$info (its containers: $own)"; fi
+if as jane docker version --format '{{.Server.KernelVersion}}' 2>&1 | grep -q .; then ko "jane: docker version, without the kernel's" "$(as jane docker version 2>&1)"; else ok "jane: docker version, without the kernel's"; fi
+refused "jane: a log option of another driver" "isn't one of the json-file driver's" as jane docker run --rm --name ygc-jane-log --label com.docker.compose.project=ygc-jane --network ygc-jane_default --cap-drop ALL --security-opt no-new-privileges --memory 64m --pids-limit 64 --log-driver json-file --log-opt syslog-address=udp://169.254.169.254:514 alpine:3.22 true
 works "jane: exec, writing to its volume" as jane docker compose -p ygc-jane -f "$jane" exec -T app sh -c 'echo kept > /data/x && cat /data/x'
 works "jane: exec -d" as jane docker compose -p ygc-jane -f "$jane" exec -d app true
 works "jane: logs" as jane docker compose -p ygc-jane -f "$jane" logs

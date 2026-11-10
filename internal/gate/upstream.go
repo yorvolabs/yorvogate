@@ -56,7 +56,16 @@ func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
 
 			change, ok := res.Request.Context().Value(answerKey{}).(func([]byte) ([]byte, error))
 			if versionPath.MatchString(res.Request.URL.Path) && res.Request.Method == http.MethodGet {
-				change, ok = func(body []byte) ([]byte, error) { return versionAnswer(body, lowest, highest) }, true
+				// Every listener's: the API versions both serve; then a scope's rule, if it has one
+				rule, ruled := change, ok
+				change, ok = func(body []byte) ([]byte, error) {
+					body, err := versionAnswer(body, lowest, highest)
+					if err != nil || !ruled {
+						return body, err
+					}
+
+					return rule(body)
+				}, true
 			}
 
 			if !ok || res.StatusCode != http.StatusOK {
