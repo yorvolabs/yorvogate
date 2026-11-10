@@ -188,6 +188,10 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 	// And it runs that image: a name moved after the check doesn't change what it runs.
 	req.Config.Image = pinned(req.Config.Image, img)
 
+	// What it leaves unset isn't left to Docker's configuration: a private cgroup namespace,
+	// Docker's built-in seccomp profile, and the default runtime YorvoGate last read and checked.
+	safeDefaults(req.HostConfig, s.daemon.runtime)
+
 	// A volume a mount creates is the scope's: it carries its owner label. (Docker sets a mount's
 	// labels only on a volume it creates; one that exists is left as it is.)
 	for i := range req.HostConfig.Mounts {
@@ -208,6 +212,28 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 	}
 
 	return json.Marshal(req)
+}
+
+// safeDefaults writes into a container's host configuration what Docker would otherwise take from its
+// own: "default-cgroupns-mode" may be host, "seccomp-profile" unconfined, and "default-runtime" is
+// reloaded live. A container's "seccomp=builtin" is Docker's built-in profile whatever the daemon's
+// (moby 29.9.2, daemon/seccomp_linux.go:46-47). The IPC mode is left as asked: Docker's default is a
+// private or shareable namespace, never the host's, and a container can't join one that's private.
+func safeDefaults(h *container.HostConfig, runtime string) {
+	if h.CgroupnsMode == "" {
+		h.CgroupnsMode = container.CgroupnsModePrivate
+	}
+
+	// Docker reads "seccomp=…" and, deprecated, "seccomp:…" (daemon_unix.go:225-241).
+	if !slices.ContainsFunc(h.SecurityOpt, func(o string) bool {
+		return strings.HasPrefix(o, "seccomp=") || strings.HasPrefix(o, "seccomp:")
+	}) {
+		h.SecurityOpt = append(h.SecurityOpt, "seccomp=builtin")
+	}
+
+	if h.Runtime == "" {
+		h.Runtime = runtime
+	}
 }
 
 // ownLabels checks the labels of an object a scope creates: they carry its owner label, and none of

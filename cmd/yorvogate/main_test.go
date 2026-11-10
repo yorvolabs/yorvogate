@@ -151,7 +151,16 @@ func TestServe(t *testing.T) {
 	}
 
 	go func() {
-		_ = http.Serve(docker, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("OK")) }))
+		_ = http.Serve(docker, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Docker's defaults, as YorvoGate reads them before it answers a scope
+			if strings.HasSuffix(r.URL.Path, "/info") {
+				_, _ = w.Write([]byte(`{"SecurityOptions": ["name=apparmor,profile=default", "name=seccomp,profile=builtin", "name=cgroupns"], "DefaultRuntime": "runc"}`))
+
+				return
+			}
+
+			_, _ = w.Write([]byte("OK"))
+		}))
 	}()
 	defer docker.Close()
 
@@ -225,7 +234,16 @@ func TestServeScopeSockets(t *testing.T) {
 	}
 
 	go func() {
-		_ = http.Serve(docker, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("OK")) }))
+		_ = http.Serve(docker, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Docker's defaults, as YorvoGate reads them before it answers a scope
+			if strings.HasSuffix(r.URL.Path, "/info") {
+				_, _ = w.Write([]byte(`{"SecurityOptions": ["name=apparmor,profile=default", "name=seccomp,profile=builtin", "name=cgroupns"], "DefaultRuntime": "runc"}`))
+
+				return
+			}
+
+			_, _ = w.Write([]byte("OK"))
+		}))
 	}()
 	defer docker.Close()
 
@@ -350,5 +368,65 @@ func TestCheckNamesRegistriesNotListed(t *testing.T) {
 
 	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 || strings.Contains(out.String(), "notice") {
 		t.Fatalf("every registry listed: %d %q %q", code, out.String(), errs.String())
+	}
+}
+
+// check --docker reads Docker's defaults through the upstream: notes for what's only worth knowing,
+// and an error, naming the opt-out, for what would widen what scopes may do.
+func TestCheckReadsDockersDefaults(t *testing.T) {
+	dir := t.TempDir()
+	scopes := filepath.Join(dir, "scopes")
+	_ = os.Mkdir(scopes, 0o700)
+	socket := filepath.Join(dir, "docker.sock")
+	info := `{"SecurityOptions": ["name=apparmor,profile=default", "name=seccomp,profile=unconfined", "name=cgroupns"], "DefaultRuntime": "runc"}`
+
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/info") {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		_, _ = w.Write([]byte(info))
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	write := func(extra string) {
+		_ = os.WriteFile(configFile, []byte("upstream: unix://"+socket+"\n"+extra+"listeners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+	}
+	write("")
+
+	var out, errs bytes.Buffer
+	if code := run([]string{"check", "--config", configFile, "--docker"}, &out, &errs); code != 0 || !strings.Contains(out.String(), "Docker's defaults: ok\n  notice: Docker's own seccomp profile is unconfined") {
+		t.Fatalf("safe, with a note: %d %q %q", code, out.String(), errs.String())
+	}
+
+	// Without --docker, check doesn't ask Docker.
+	out.Reset()
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 || strings.Contains(out.String(), "Docker's defaults") {
+		t.Fatalf("offline: %d %q", code, out.String())
+	}
+
+	info = `{"SecurityOptions": ["name=seccomp,profile=builtin", "name=cgroupns"], "DefaultRuntime": "runc"}`
+	out.Reset()
+	errs.Reset()
+
+	if code := run([]string{"check", "--config", configFile, "--docker"}, &out, &errs); code != 1 || !strings.Contains(out.String(), "Docker's defaults: unsafe") || !strings.Contains(errs.String(), "Docker has neither AppArmor nor SELinux (set daemon.without_lsm: true to accept that)") {
+		t.Fatalf("no LSM: %d %q %q", code, out.String(), errs.String())
+	}
+
+	write("daemon: {without_lsm: true}\n")
+	out.Reset()
+	errs.Reset()
+
+	if code := run([]string{"check", "--config", configFile, "--docker"}, &out, &errs); code != 0 || !strings.Contains(out.String(), "as daemon.without_lsm accepts") {
+		t.Fatalf("no LSM, accepted: %d %q %q", code, out.String(), errs.String())
 	}
 }

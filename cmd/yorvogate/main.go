@@ -36,7 +36,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: yorvogate serve|check|version [--config FILE]")
+		fmt.Fprintln(stderr, "usage: yorvogate serve|check|version [--config FILE] [--docker (check)]")
 
 		return 2
 	}
@@ -45,6 +45,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("yorvogate "+command, flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("config", "/etc/yorvogate/yorvogate.yaml", "the configuration file")
+	docker := flags.Bool("docker", false, "check: also read Docker's defaults, through the configuration's upstream")
 
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
@@ -56,7 +57,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 		return 0
 	case "check":
-		if err := check(*path, stdout); err != nil {
+		if err := check(*path, *docker, stdout); err != nil {
 			fmt.Fprintln(stderr, "yorvogate:", err)
 
 			return 1
@@ -122,7 +123,7 @@ func listenerWarnings(l config.Listener) []string {
 
 // check reads the configuration, and every scope file of its scoped listeners, as a gate starting
 // now would (it reads the state file, and never writes it). It names every scope file refused.
-func check(path string, stdout io.Writer) error {
+func check(path string, docker bool, stdout io.Writer) error {
 	c, err := config.Load(path)
 	if err != nil {
 		return err
@@ -192,6 +193,20 @@ func check(path string, stdout io.Writer) error {
 
 	for _, warn := range stateWarnings(c, registry, scoped) {
 		fmt.Fprintf(stdout, "warning: %s\n", warn)
+	}
+
+	if docker {
+		unsafe, notes := gate.NewDefaults(c).Check(context.Background())
+		if len(unsafe) == 0 {
+			fmt.Fprintln(stdout, "Docker's defaults: ok")
+		} else {
+			fmt.Fprintln(stdout, "Docker's defaults: unsafe, scoped listeners would refuse every request")
+			refused = append(refused, "Docker's defaults would widen what scopes may do: "+strings.Join(unsafe, "; "))
+		}
+
+		for _, n := range notes {
+			fmt.Fprintf(stdout, "  notice: %s\n", n)
+		}
 	}
 
 	if len(refused) == 1 {
@@ -298,6 +313,20 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	defer signal.Stop(hup)
 
 	upstream := gate.NewUpstream(c, log)
+
+	// Docker's defaults, read while scoped listeners serve: until they're read, and while they're
+	// unsafe, scoped requests are refused.
+	defaults := gate.NewDefaults(c)
+	if slices.ContainsFunc(c.Listeners, func(l config.Listener) bool { return l.Mode == config.Scoped }) {
+		// Read once before the first answer, so a scope isn't refused for a read not yet made
+		defaults.Read(ctx)
+
+		watching, unwatch := context.WithCancel(ctx)
+		defer unwatch()
+
+		go defaults.Watch(watching, log)
+	}
+
 	servers := make([]*http.Server, 0, len(c.Listeners))
 	bound := []*gate.Sockets{}
 	// Token listeners' gates: each ends the requests of a scope whose allowance goes
@@ -319,7 +348,7 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	defer stop()
 
 	for _, l := range c.Listeners {
-		g := gate.New(c, l, upstream, registry, log)
+		g := gate.New(c, l, upstream, registry, defaults, log)
 
 		if l.SocketBound() {
 			sockets, err := gate.NewSockets(g, log)

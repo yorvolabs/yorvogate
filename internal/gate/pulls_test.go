@@ -257,6 +257,7 @@ func TestAPullsPlatformWithoutDockers(t *testing.T) {
 func TestATrustedPullReachesDockerAsAsked(t *testing.T) {
 	d := startDocker(t)
 	server := gate(t, d, "images")
+	lookups := d.lookupCount()
 
 	status, answer := send(t, server, "POST", "/v1.56/images/create?fromImage=localhost:5000/x&tag=1&platform=linux/arm64", "", nil)
 	if status != http.StatusOK {
@@ -267,7 +268,7 @@ func TestATrustedPullReachesDockerAsAsked(t *testing.T) {
 		t.Errorf("Docker got %s ?%s", got.path, got.query)
 	}
 
-	if d.lookupCount() != 0 {
-		t.Errorf("Docker was asked %d times by the gate", d.lookupCount())
+	if d.lookupCount() != lookups {
+		t.Errorf("Docker was asked %d times by the gate", d.lookupCount()-lookups)
 	}
 }

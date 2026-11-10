@@ -75,8 +75,12 @@ func hostReach(r *container.CreateRequest) string {
 		return "the OOM killer or the real-time scheduler"
 	case h.Memory <= 0 || h.Memory > 1<<30, h.PidsLimit == nil || *h.PidsLimit <= 0 || *h.PidsLimit > 512:
 		return "no limits"
-	case h.Runtime != "" || (h.Isolation != "" && h.Isolation != "default"):
-		return "another runtime"
+	case h.Runtime != "runc" || (h.Isolation != "" && h.Isolation != "default"):
+		return "another runtime than Docker's default, as YorvoGate read it"
+	case h.CgroupnsMode != "private":
+		return "the daemon's cgroup namespace"
+	case !slices.Contains(h.SecurityOpt, "seccomp=builtin"):
+		return "the daemon's seccomp profile"
 	case !slices.ContainsFunc(h.CapDrop, func(c string) bool { return strings.EqualFold(c, "all") }):
 		return "default capabilities kept"
 	}
@@ -88,7 +92,7 @@ func hostReach(r *container.CreateRequest) string {
 	}
 
 	for _, o := range h.SecurityOpt {
-		if !slices.Contains([]string{"no-new-privileges", "no-new-privileges:true", "no-new-privileges=true"}, o) {
+		if !slices.Contains([]string{"no-new-privileges", "no-new-privileges:true", "no-new-privileges=true", "seccomp=builtin"}, o) {
 			return "security option " + o
 		}
 	}
