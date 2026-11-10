@@ -1,6 +1,6 @@
 # Configuration
 
-One YAML file (`--config`, by default `/etc/yorvogate/yorvogate.yaml`). It's read strictly: an unknown key, a second document or an invalid value stops YorvoGate with the reason, never a default in its place. `yorvogate check --config …` reads it and every scope file without starting.
+One YAML file (`--config`, by default `/etc/yorvogate/yorvogate.yaml`). It's read strictly: an unknown key, a second document or an invalid value stops YorvoGate with the reason, never a default in its place. `yorvogate check --config …` reads it and every scope file without starting; with `--docker`, it also reads [Docker's defaults](#dockers-defaults).
 
 ```yaml
 version: 1                              # the format (required from 0.4)
@@ -13,6 +13,7 @@ api:                                    # Docker API versions accepted (optional
 body_limit: 1048576                     # the largest body read whole, in bytes (4096 to 64 MiB)
 load_limit: 8589934592                  # the largest image archive a scope loads (1 MiB to 256 GiB)
 state_file: /var/lib/yorvogate/state.json  # scopes' last valid claims, kept across restarts (optional; see below)
+# daemon: {without_lsm: true}           # accept a Docker with neither AppArmor nor SELinux (see Docker's defaults)
 
 listeners:                              # at least one
   - name: orchestrator                  # lowercase letters, digits and dashes; in logs
@@ -200,6 +201,23 @@ One case is left to the orchestrator: if tenant `jane` has a Compose service nam
 - It only keeps names from other scopes. It's read only to refuse a scope a name, label or image another scope held, never to let a scope do anything its own file doesn't allow: an edited state file can deny a scope names, never give one any.
 - A record goes when its scope file does. While a scopes folder doesn't exist at the start, every record is kept.
 - A state file that's missing, or that YorvoGate can't trust (others can write it, or it isn't valid), holds nothing. `yorvogate check` and the logs say so, and `check` warns when there's no `state_file` at all.
+
+## Docker's defaults
+
+What a scope's container leaves unset, Docker fills in from its own configuration. So YorvoGate doesn't leave it to Docker:
+
+- **It writes the safe value into what it forwards.** A scope's container that doesn't say otherwise gets a private cgroup namespace (`CgroupnsMode: private`, whatever `default-cgroupns-mode` is), Docker's built-in seccomp profile (`seccomp=builtin`, whatever `seccomp-profile` is), and the default runtime YorvoGate last read and found safe. The IPC mode is left as asked: Docker's default is a private or shareable namespace, never the host's, and Compose's `ipc: service:x` needs the shareable one. A trusted listener's requests go to Docker as they came.
+- **It reads Docker's defaults** (`/info`) before it answers a scope, then every 60 seconds, and every 10 seconds while they're unsafe or couldn't be read. While they'd widen what a scope may do, every request on a scoped listener is refused (503), saying why:
+  - the kernel has no seccomp (Docker lists none), so even the built-in profile can't apply;
+  - Docker has neither AppArmor nor SELinux. Set `daemon: {without_lsm: true}` to accept that: Docker Desktop, rootless Docker, and a host without either need it, while Ubuntu has AppArmor;
+  - Docker's default runtime isn't `runc` and isn't in every scoped listener's `containers.runtimes`.
+- **It notes what changes nothing it checked**, in its log and in `yorvogate check --docker`: Docker's own seccomp profile unconfined or from a file (scopes' containers get the built-in one anyway), an AppArmor profile from a file, userns-remap, rootless Docker, `no-new-privileges` for every container, and a default cgroup namespace that's the host's (scopes' containers get a private one anyway).
+
+`yorvogate check --docker` reads Docker's defaults through `upstream`, prints what it found, and fails on what would make scoped listeners refuse. Without `--docker`, `check` doesn't connect to Docker.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `daemon.without_lsm` | `false` | Accept a Docker with neither AppArmor nor SELinux |
 
 ## Builders
 
