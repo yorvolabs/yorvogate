@@ -178,6 +178,10 @@ func check(path string, stdout io.Writer) error {
 			fmt.Fprintf(stdout, "  warning: %s\n", unversioned(old))
 		}
 
+		for _, notice := range unlistedRegistries(l, registry.Store(l.Name), names) {
+			fmt.Fprintf(stdout, "  notice: %s\n", notice)
+		}
+
 		for _, name := range slices.Sorted(maps.Keys(invalid)) {
 			if msg := invalid[name].Error(); !seen[msg] {
 				seen[msg] = true
@@ -197,6 +201,34 @@ func check(path string, stdout io.Writer) error {
 	}
 
 	return nil
+}
+
+// unlistedRegistries names each scope whose image namespaces are on a registry its listener's pulls
+// don't list: its pulls from there are refused. (A registry is listed only for the whole listener:
+// listing one trusts it with every scope's content.)
+func unlistedRegistries(l config.Listener, store *scope.Store, names []string) []string {
+	var notices []string
+
+	for _, name := range names {
+		s, err := store.Get(name)
+		if err != nil || s == nil {
+			continue
+		}
+
+		var unlisted []string
+
+		for _, namespace := range s.Images {
+			if r := gate.ReferenceRegistry(namespace); !l.Pulls.Allows(r) && !slices.Contains(unlisted, r) {
+				unlisted = append(unlisted, r)
+			}
+		}
+
+		if len(unlisted) > 0 {
+			notices = append(notices, fmt.Sprintf("scope %s's images are on %s, which pulls.registries doesn't list: its pulls from there are refused", name, strings.Join(unlisted, ", ")))
+		}
+	}
+
+	return notices
 }
 
 // unversioned says which scope files have no version (the first few of them).
