@@ -29,7 +29,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write   # the GitHub release
-      checks: read      # CI's checks of the tagged commit
+      actions: read     # CI's run on the tagged commit
       packages: write   # the image on ghcr.io
       id-token: write   # Sigstore's keyless signing: this workflow's identity
     env:
@@ -51,19 +51,21 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: CI passed on it
-        # A tag alone makes no release: the commit must have passed CI's checks. They may still be
-        # running when the tag is pushed: waited for, half an hour at most.
+        # A tag alone makes no release: CI's run on the commit, as it was pushed to main, must have
+        # passed, every job of it (whatever a matrix names them). The newest such run counts. It may
+        # not have started or finished when the tag is pushed: waited for, half an hour at most.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for check in 'Format, vet, staticcheck, tests, govulncheck' 'Fuzzing' 'Conformance (a real Docker, real Compose)' 'Shell scripts' 'Image'; do
-            for _ in $(seq 60); do
-              conclusion=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" --jq ".check_runs | map(select(.name == \"$check\")) | sort_by(.started_at) | last | if . == null then \"missing\" else (.conclusion // \"running\") end")
-              [ "$conclusion" = running ] || [ "$conclusion" = missing ] || break
-              sleep 30
-            done
-            [ "$conclusion" = success ] || { echo "::error::CI's \"$check\" on $GITHUB_SHA: $conclusion. No release without it."; exit 1; }
+          for _ in $(seq 60); do
+            run=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yaml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=100" \
+              --jq '.workflow_runs | map(select(.head_sha == env.GITHUB_SHA and .event == "push" and .head_branch == "main")) | sort_by(.created_at) | last | if . == null then "missing - -" else "\(.status) \(.conclusion // "-") \(.html_url)" end')
+            read -r status conclusion url <<< "$run"
+            [ "$status" = completed ] && break
+            sleep 30
           done
+          [ "$status $conclusion" = "completed success" ] || { echo "::error::CI's run on $GITHUB_SHA: $status, $conclusion ($url). No release without it."; exit 1; }
+          echo "CI passed: $url"
 
       - name: Set up QEMU (arm64)
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0

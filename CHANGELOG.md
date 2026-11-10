@@ -71,6 +71,7 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ### Fixed
 
+- **A release can start again.** The release workflow waited for a CI job by a name the conformance matrix no longer makes, so every tag failed after half an hour. It now requires CI's whole run on the tagged commit, pushed to main, to have passed, whatever its jobs are named.
 - **The configuration docs' rootless builder starts on a hardened daemon.** It passes `--security-opt no-new-privileges=false`: a daemon with `"no-new-privileges": true` gives it to every container otherwise, and rootless BuildKit can't map its users under it. The docs listed the builder's option as `no-new-privileges`; it's `no-new-privileges=false`, the only form a builder may have.
 
 ## [0.2.2] - 2026-11-03
