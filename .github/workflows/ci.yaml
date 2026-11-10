@@ -59,7 +59,7 @@ jobs:
         run: docker compose -f compose.dev.yaml run --rm go make fuzz FUZZTIME=${{ github.event_name == 'schedule' && '10m' || '30s' }}
 
   conformance:
-    name: Conformance (a real Docker, real Compose; ${{ matrix.store }} image store)
+    name: Conformance (a real Docker, real Compose; ${{ matrix.store }} image store, ${{ matrix.daemon }} daemon)
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
@@ -67,6 +67,14 @@ jobs:
       matrix:
         # Docker's two image stores name what image.load loads by different files of the archive
         store: [containerd, classic]
+        daemon: [default]
+        # And a CIS-hardened daemon, as on the hosts YorvoGate is for: every container under
+        # no-new-privileges (which rootless BuildKit must opt out of), no inter-container traffic on
+        # the default bridge, no userland proxy, live restore. userns-remap is left out: it changes
+        # who owns volumes' files, and isn't what the gate's hosts run.
+        include:
+          - store: containerd
+            daemon: hardened
     env:
       # The Docker Engine the suite runs against; its CLI, Compose (5.6.1) and buildx (0.38.1) come
       # with the pinned docker:29.9.2-cli image run.sh uses.
@@ -96,6 +104,9 @@ jobs:
           sudo apt-get install -y -q --allow-downgrades "docker-ce=$version" "docker-ce-cli=$version" containerd.io
           # The image store, set either way (the default depends on how Docker was installed)
           sudo python3 -c 'import json, os, sys; p = "/etc/docker/daemon.json"; c = json.load(open(p)) if os.path.exists(p) else {}; c.setdefault("features", {})["containerd-snapshotter"] = sys.argv[1] == "containerd"; json.dump(c, open(p, "w"))' "${{ matrix.store }}"
+          if [ "${{ matrix.daemon }}" = hardened ]; then
+            sudo python3 -c 'import json; p = "/etc/docker/daemon.json"; c = json.load(open(p)); c.update({"no-new-privileges": True, "icc": False, "userland-proxy": False, "live-restore": True, "log-level": "info"}); json.dump(c, open(p, "w"))'
+          fi
           # An upgrade starts Docker in its own scripts, and its unit allows 3 starts a minute
           sudo systemctl reset-failed docker.service docker.socket || true
           sudo systemctl restart docker || { sudo journalctl -u docker.service --no-pager -n 50; exit 1; }
@@ -107,6 +118,15 @@ jobs:
           [ "$(docker version --format '{{.Server.Version}} {{.Server.APIVersion}}')" = "$DOCKER_VERSION $DOCKER_API" ]
       - name: Build
         run: docker compose -f compose.dev.yaml run --rm go make build
+      # A leg that fell back to Docker's defaults would pass without testing what it's for
+      - name: The daemon is hardened, as Docker and YorvoGate read it
+        if: matrix.daemon == 'hardened'
+        run: |
+          set -o pipefail
+          docker info --format '{{json .SecurityOptions}}' | grep -q 'name=no-new-privileges'
+          printf 'version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - name: admin\n    address: tcp://127.0.0.1:2399\n    mode: trusted\n    allow: {system: read}\n' > "$RUNNER_TEMP/hardened.yaml"
+          bin/yorvogate check --docker --config "$RUNNER_TEMP/hardened.yaml" | tee "$RUNNER_TEMP/check.txt"
+          grep -q 'Docker runs every container with no-new-privileges' "$RUNNER_TEMP/check.txt"
       # Ubuntu restricts unprivileged user namespaces with AppArmor: rootless BuildKit starts only
       # under the profile YorvoGate ships for it (docs/configuration.md, Builders).
       - name: The AppArmor profile for rootless BuildKit

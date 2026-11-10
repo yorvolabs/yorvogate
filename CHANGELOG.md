@@ -46,6 +46,7 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 - **`state_file`**: where YorvoGate keeps each scope's last valid claims across restarts. It only ever refuses names to scopes, never grants any.
 - **[How YorvoGate compares](docs/comparison.md)** with other Docker API proxies and AuthZ plugins: the work it builds on (sockguard, swarmgate, wollomatic's bind filtering, OPA), what it does differently, and what it doesn't do.
 - **A rootless build from the configuration docs alone, in the conformance suite** (`test/conformance/docs.sh`): the listener, scope file, builder and buildx commands are taken from `docs/configuration.md` and run as written.
+- **Conformance on a CIS-hardened daemon in CI**: the suites run against a Docker with `no-new-privileges` for every container, `icc` and `userland-proxy` off and `live-restore` on, besides Docker's defaults. The leg checks first that Docker and `yorvogate check --docker` say `no-new-privileges`.
 - **The AppArmor profile for rootless BuildKit builders is a release file**, `yorvogate-buildkit-rootless`, in `SHA256SUMS` like the binaries: install the copy of the version you run. The configuration docs show its content.
 
 ### Security
@@ -67,6 +68,10 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 - **A client's `Connection` header could take headers off the request Docker got (Low).** On an attach or an exec start, `Connection` was forwarded as given, and every header it names is dropped on the way to Docker, so `Connection: Upgrade, Content-Type` took off the `Content-Type` YorvoGate sets for the body it checked. Now YorvoGate writes `Connection` itself.
 - **A builder's volumes weren't checked (Low).** A builder that binds a host path is refused, but one that mounts a volume whose driver options bind one (`type=none,o=bind,device=/`) wasn't. Now each volume a builder mounts is read at each use and must be a plain local one; one that can't be read is refused. It takes an orchestrator creating such a builder.
 - **A scope could take another's name on a shared network (Low).** Two scope files could list one alias on one shared network, and Docker's DNS answered it with both scopes' containers: a site's name could be taken over, in part, by a tenant beside it. Only whoever writes the scope files could set it up. Now a dotted alias, and one under a scope's prefix, is one scope's only, as above.
+
+### Fixed
+
+- **The configuration docs' rootless builder starts on a hardened daemon.** It passes `--security-opt no-new-privileges=false`: a daemon with `"no-new-privileges": true` gives it to every container otherwise, and rootless BuildKit can't map its users under it. The docs listed the builder's option as `no-new-privileges`; it's `no-new-privileges=false`, the only form a builder may have.
 
 ## [0.2.2] - 2026-11-03
 

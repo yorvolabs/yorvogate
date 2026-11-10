@@ -149,6 +149,8 @@ func TestWhatReachesTheHostOrAnotherScopeIsRefused(t *testing.T) {
 		{"no seccomp", `the security option "seccomp=unconfined" isn't allowed`, set(compose(), "HostConfig.SecurityOpt", []any{"no-new-privileges", "seccomp=unconfined"})},
 		{"no AppArmor", `the security option "apparmor=unconfined" isn't allowed`, set(compose(), "HostConfig.SecurityOpt", []any{"no-new-privileges", "apparmor=unconfined"})},
 		{"gaining privileges", "it must run with no-new-privileges", set(compose(), "HostConfig.SecurityOpt", nil)},
+		{"taking back a hardened daemon's no-new-privileges", `the security option "no-new-privileges=false" isn't allowed`, set(compose(), "HostConfig.SecurityOpt", []any{"no-new-privileges", "no-new-privileges=false"})},
+		{"taking it back, spelled otherwise", `the security option "no-new-privileges:false" isn't allowed`, set(compose(), "HostConfig.SecurityOpt", []any{"no-new-privileges", "no-new-privileges:false"})},
 		{"/proc unmasked", "HostConfig.MaskedPaths isn't allowed", set(compose(), "HostConfig.MaskedPaths", []any{})},
 		{"/proc writable", "HostConfig.ReadonlyPaths isn't allowed", set(compose(), "HostConfig.ReadonlyPaths", []any{})},
 		{"a device", "HostConfig.Devices isn't allowed", set(compose(), "HostConfig.Devices", []any{map[string]any{"PathOnHost": "/dev/sda", "PathInContainer": "/dev/sda", "CgroupPermissions": "rwm"}})},

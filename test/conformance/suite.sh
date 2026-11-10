@@ -62,7 +62,7 @@ cleanup() {
 		direct volume ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker volume rm >/dev/null 2>&1
 	done
 	direct rmi ygc-jane/app:1 ygc-blog/app:1 ygc-blog/only:1 ygc-jane/hello:1 hello-world:linux >/dev/null 2>&1
-	direct rm -f ygc-builder-privileged ygc-builder-rootless >/dev/null 2>&1
+	direct rm -f ygc-builder-privileged ygc-builder-rootless ygc-builder-nnp >/dev/null 2>&1
 	[ -n "${gate:-}" ] && kill "$gate" 2>/dev/null
 }
 trap cleanup EXIT
@@ -77,7 +77,7 @@ for scope in jane blog; do
 	mkdir -p "$dir/$scope"
 	printf '{"HttpHeaders":{"X-YorvoGate-Scope":"%s","X-YorvoGate-Token":"%s"}}\n' "$scope" "$token" > "$dir/$scope/config.json"
 	builders='[]'
-	[ "$scope" = jane ] && builders='["ygc-builder-privileged","ygc-builder-rootless"]'
+	[ "$scope" = jane ] && builders='["ygc-builder-privileged","ygc-builder-rootless","ygc-builder-nnp"]'
 	printf '{"token_sha256":"%s","owner":{"label":"com.docker.compose.project","value":"ygc-%s"},"prefixes":["ygc-%s-","ygc-%s_"],"images":["ygc-%s/"],"builders":%s}\n' \
 		"$(printf '%s' "$token" | sha256sum | cut -d' ' -f1)" "$scope" "$scope" "$scope" "$scope" "$builders" > "$dir/scopes/$scope.json"
 	chmod 600 "$dir/scopes/$scope.json"
@@ -137,9 +137,12 @@ sleep 1
 direct image inspect alpine:3.22 >/dev/null 2>&1 || direct pull -q alpine:3.22 >/dev/null
 
 # jane's builders, as an orchestrator would run them: buildx's docker-container driver's (privileged),
-# and one configured as a builder must be (rootless, unprivileged; alpine stands in for BuildKit)
+# one configured as a builder must be (rootless, unprivileged, out of a hardened daemon's
+# no-new-privileges; alpine stands in for BuildKit), and one under no-new-privileges, which rootless
+# BuildKit can't run under
 direct run -d --name ygc-builder-privileged --privileged alpine:3.22 sleep 600 >/dev/null
-direct run -d --name ygc-builder-rootless --user 1000:1000 --security-opt seccomp=unconfined alpine:3.22 sleep 600 >/dev/null
+direct run -d --name ygc-builder-rootless --user 1000:1000 --security-opt seccomp=unconfined --security-opt no-new-privileges=false alpine:3.22 sleep 600 >/dev/null
+direct run -d --name ygc-builder-nnp --user 1000:1000 --security-opt seccomp=unconfined --security-opt no-new-privileges alpine:3.22 sleep 600 >/dev/null
 
 # A tenant's project: hardened, its own network and volume
 project() {
@@ -312,6 +315,7 @@ refused "the host's PIDs" "namespaces" as jane docker compose -p ygc-jane -f "$(
 refused "the host's IPC" "namespaces" as jane docker compose -p ygc-jane -f "$(hostile ipc '    ipc: host')" up -d
 refused "a capability" "SYS_ADMIN" as jane docker compose -p ygc-jane -f "$(hostile cap '    cap_add: [SYS_ADMIN]')" up -d
 refused "no seccomp" "seccomp=unconfined" as jane docker compose -p ygc-jane -f "$(hostile seccomp '    security_opt: [no-new-privileges:true, seccomp=unconfined]' '' sec)" up -d
+refused "taking back a hardened daemon's no-new-privileges" "no-new-privileges:false" as jane docker compose -p ygc-jane -f "$(hostile nnp '    security_opt: [no-new-privileges:false]' '' sec)" up -d
 refused "kernel parameters" "Sysctls" as jane docker compose -p ygc-jane -f "$(hostile sysctl '    sysctls: [net.ipv4.ip_forward=1]')" up -d
 refused "a published port" "published ports" as jane docker compose -p ygc-jane -f "$(hostile port '    ports: ["127.0.0.1:18081:80"]' '' net)" up -d
 refused "blog's image" "protected namespace" as jane docker compose -p ygc-jane -f "$(hostile image '' ygc-blog/app:1)" up -d
@@ -322,6 +326,7 @@ say "== A builder is reached only by buildctl dial-stdio"
 # The assessment's C-2: an ordinary exec in the privileged builder was root on the host.
 refused "an exec in a privileged builder" "it's privileged" as jane docker exec ygc-builder-privileged id
 refused "dial-stdio in a privileged builder" "it's privileged" as jane docker exec -i ygc-builder-privileged buildctl dial-stdio
+refused "dial-stdio in a builder under no-new-privileges" 'option "no-new-privileges" isn' as jane docker exec -i ygc-builder-nnp buildctl dial-stdio
 refused "a shell in a rootless builder" "only buildctl dial-stdio" as jane docker exec ygc-builder-rootless id
 refused "dial-stdio as root" "User" as jane docker exec -u 0 ygc-builder-rootless buildctl dial-stdio
 refused "stopping a builder" "isn't allowed on builder" as jane docker stop ygc-builder-rootless
