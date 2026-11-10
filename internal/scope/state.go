@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 // stateVersion is the state file's format.
@@ -67,7 +68,8 @@ func readState(path string) (map[string]claims, error) {
 			continue
 		}
 
-		held[name] = c
+		// Each claim once, as a scope file's are (union): what's held is a set
+		held[name] = c.once()
 	}
 
 	if len(bad) > 0 {
@@ -98,6 +100,13 @@ func (c claims) valid() bool {
 
 	for _, b := range c.Builders {
 		if !validObject.MatchString(b) {
+			return false
+		}
+	}
+
+	for _, a := range c.Aliases {
+		network, alias, ok := strings.Cut(a, "/")
+		if !ok || !validObject.MatchString(network) || !validAlias.MatchString(alias) || len(alias) > 253 || idLike(alias) {
 			return false
 		}
 	}

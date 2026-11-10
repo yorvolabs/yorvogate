@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"unicode/utf8"
 )
 
 // Scope is one client's identity and what it owns.
@@ -67,6 +68,44 @@ type Network struct {
 	Addresses []string `json:"addresses,omitempty"`
 }
 
+// NormaliseAlias is an alias as Docker's DNS keeps it: lowercased (Docker keys each name by its
+// lowercase form, and lowercases a query). It isn't one (false) with a byte outside ASCII, where
+// lowercasing is Unicode's and not a DNS rule, or with a trailing ".", which Docker keeps in the name
+// it stores (only a query's is dropped, so "web." is another name than "web"), or with a label of a
+// container ID's form (idLike). The gate's checks and
+// the registry's claims both read an alias through this.
+func NormaliseAlias(a string) (string, bool) {
+	if a == "" || strings.HasSuffix(a, ".") {
+		return "", false
+	}
+
+	for i := range len(a) {
+		if a[i] >= utf8.RuneSelf {
+			return "", false
+		}
+	}
+
+	a = strings.ToLower(a)
+	if idLike(a) {
+		return "", false
+	}
+
+	return a, true
+}
+
+// idLike tells whether an alias has a label of a container ID's form, 12 or 64 hex digits: Docker
+// gives each container its short ID as a DNS name too, so an alias of that form on a shared network
+// would answer for another tenant's container by its ID. Compose never gives one.
+func idLike(alias string) bool {
+	for label := range strings.SplitSeq(alias, ".") {
+		if (len(label) == 12 || len(label) == 64) && strings.Trim(label, "0123456789abcdef") == "" {
+			return true
+		}
+	}
+
+	return false
+}
+
 // Label is a Docker label and its value.
 type Label struct {
 	Key   string `json:"label"`
@@ -81,7 +120,9 @@ var (
 	validDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 	validImage  = regexp.MustCompile(`^[a-z0-9][a-z0-9._/-]{0,254}/$`)
 	validObject = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
-	validAlias  = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$`)
+	// An alias as Docker's DNS keys it (lowercase), with what Compose puts in one: labels of letters,
+	// digits, "-" and "_" (a project named demo_x gives demo_x-php-1)
+	validAlias = regexp.MustCompile(`^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?)*$`)
 
 	// recreated is the name Compose gives a container it recreates, until it removes the old one
 	// and renames the new one to the old name: the first 12 hex of the old one's ID, _, its name.
@@ -345,8 +386,8 @@ func (s *Scope) check(tokenless bool) error {
 		}
 
 		for _, a := range n.Aliases {
-			if !validAlias.MatchString(a) || len(a) > 253 {
-				return fmt.Errorf("networks.%s.aliases: %q isn't a DNS name", name, a)
+			if !validAlias.MatchString(a) || len(a) > 253 || idLike(a) {
+				return fmt.Errorf("networks.%s.aliases: %q isn't a name as Docker's DNS keeps it (lowercase letters, digits, - and _; labels of 1 to 63, 253 in all; none of a container ID's form, 12 hex digits)", name, a)
 			}
 		}
 

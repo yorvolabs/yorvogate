@@ -15,6 +15,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
+	"github.com/yorvolabs/yorvogate/internal/scope"
 )
 
 // The fields of Docker's container types a scope may set, each either free (no power over the host
@@ -464,8 +465,16 @@ func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(str
 			add("on the shared network %s, %s isn't allowed", name, f)
 		}
 
+		// As Docker's DNS keeps it: "WEB" is the scope's "web", "web." another name
 		for _, a := range e.Aliases {
-			if !slices.Contains(shared.Aliases, a) {
+			alias, ok := scope.NormaliseAlias(a)
+			if !ok {
+				add("the alias %q on the shared network %s isn't a name as Docker's DNS keeps it (ASCII, no trailing dot)", a, name)
+
+				continue
+			}
+
+			if !slices.Contains(shared.Aliases, alias) {
 				add("the alias %q on the shared network %s isn't one of its own", a, name)
 			}
 		}

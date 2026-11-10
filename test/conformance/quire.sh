@@ -29,7 +29,7 @@ as() {
 }
 
 cleanup() {
-	for project in ygq-jane ygq-jane-blog; do
+	for project in ygq-jane ygq-jane-blog ygq-jane_shop; do
 		direct ps -aq --filter "label=com.docker.compose.project=$project" | xargs -r docker rm -f >/dev/null 2>&1
 		direct network ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker network rm >/dev/null 2>&1
 		direct volume ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker volume rm >/dev/null 2>&1
@@ -57,6 +57,12 @@ EOF
 cat > "$dir/scopes/jane-blog.json" <<EOF
 {"owner": {"label": "com.docker.compose.project", "value": "ygq-jane-blog"}, "prefixes": ["ygq-jane-blog-", "ygq-jane-blog_"],
  "images": ["quire-sites/ygq-jane-blog/"]}
+EOF
+# jane_shop, a project with "_" (nested in jane's ygq-jane_), on the shared network with the aliases
+# Compose gives it: its service's name, its container's, and its site's
+cat > "$dir/scopes/jane_shop.json" <<EOF
+{"owner": {"label": "com.docker.compose.project", "value": "ygq-jane_shop"}, "prefixes": ["ygq-jane_shop-", "ygq-jane_shop_"],
+ "networks": {"ygq-edge": {"aliases": ["web", "ygq-jane_shop-web-1", "shop.quire.internal"]}}}
 EOF
 chmod 600 "$dir/scopes/"*.json
 
@@ -97,8 +103,8 @@ works "docker run (jane's rootless builder)" orchestrator run -d --name ygq-buil
 	-v ygq-buildkit-jane-state:/home/user/.local/share/buildkit "$buildkit"
 
 # jane's DOCKER_CONFIG: its "quire" context is its socket, current, and the builder's context
-mkdir -p "$dir/jane/docker" "$dir/jane-blog/docker"
-for site in jane jane-blog; do
+mkdir -p "$dir/jane/docker" "$dir/jane-blog/docker" "$dir/jane_shop/docker"
+for site in jane jane-blog jane_shop; do
 	as "$site" docker context create quire --docker "host=unix://$dir/sockets/$site.sock" >/dev/null
 	as "$site" docker context use quire >/dev/null
 done
@@ -193,6 +199,50 @@ esac
 if [ "$(as jane-blog docker ps -a --format '{{.Names}}')" = ygq-jane-blog-app-1 ]; then ok "jane-blog: one container after the recreate"; else ko "jane-blog's ps -a" "$(as jane-blog docker ps -a --format '{{.Names}}')"; fi
 refused "jane: a name of jane-blog's" "isn't one of scope jane's" as jane docker compose -p ygq-jane-blog -f "$blog" up -d
 works "jane-blog: compose down" as jane-blog docker compose -p ygq-jane-blog -f "$blog" down --remove-orphans --volumes
+
+say "== A project with _ in its name, on a shared network"
+mkdir -p "$dir/jane_shop/site"
+cat > "$dir/jane_shop/site/compose.yaml" <<'EOF'
+services:
+  web:
+    image: alpine:3.22
+    command: [sleep, "600"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    pids_limit: 64
+    networks:
+      ygq-edge: {aliases: [shop.quire.internal]}
+networks:
+  ygq-edge: {external: true}
+EOF
+shop="$dir/jane_shop/site/compose.yaml"
+works "jane_shop: compose up --wait (Compose's aliases for a project with _)" as jane_shop docker compose -p ygq-jane_shop -f "$shop" up -d --wait
+# shellcheck disable=SC2016 # a Go template, not the shell's
+aliases=$(direct inspect ygq-jane_shop-web-1 --format '{{range $n, $e := .NetworkSettings.Networks}}{{$n}}={{join $e.Aliases ","}} {{end}}')
+case "$aliases" in
+*ygq-edge=*ygq-jane_shop-web-1*shop.quire.internal* | *ygq-edge=*shop.quire.internal*ygq-jane_shop-web-1*) ok "jane_shop: its aliases on the shared network" ;;
+*) ko "jane_shop: its aliases" "$aliases" ;;
+esac
+works "jane_shop: compose down" as jane_shop docker compose -p ygq-jane_shop -f "$shop" down --remove-orphans
+# Another site's name on the shared network isn't its own
+sed 's/shop.quire.internal/jane.quire.internal/' "$shop" > "$dir/jane_shop/site/other.yaml"
+refused "jane_shop: jane's site's alias" "isn't one of its own" as jane_shop docker compose -p ygq-jane_shop -f "$dir/jane_shop/site/other.yaml" up -d
+as jane_shop docker compose -p ygq-jane_shop -f "$dir/jane_shop/site/other.yaml" down --remove-orphans >/dev/null 2>&1
+# jane's file listing jane_shop's container's name (under jane's ygq-jane_ too, but jane_shop's
+# prefix is longer): check refuses it. On a copy of the scopes, so the running gate keeps jane's.
+mkdir -p "$dir/check/scopes"
+cp -p "$dir/scopes/"*.json "$dir/check/scopes/"
+sed -i 's/"ygq-jane-web-1"/"ygq-jane-web-1", "ygq-jane_shop-web-1"/' "$dir/check/scopes/jane.json"
+sed "s|scopes: $dir/scopes|scopes: $dir/check/scopes|" "$dir/yorvogate.yaml" > "$dir/check/yorvogate.yaml"
+# (Its error is on several lines, one for each file refused: both, as neither held it before.)
+if output=$("${YORVOGATE:-/yorvogate/yorvogate}" check --config "$dir/check/yorvogate.yaml" 2>&1); then
+	ko "check: jane listing jane_shop's container's name as an alias (it was allowed)" "$output"
+elif printf '%s' "$output" | grep -q "jane.json: aliases: scope jane's alias \"ygq-jane_shop-web-1\" on ygq-edge is under scope jane_shop's prefix"; then
+	ok "check: jane listing jane_shop's container's name as an alias"
+else
+	ko "check: jane listing jane_shop's container's name as an alias" "$output"
+fi
 
 say "== Taking a site down"
 works "compose down --remove-orphans --volumes" as jane docker compose -p ygq-jane -f "$jane" down --remove-orphans --volumes
