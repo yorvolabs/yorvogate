@@ -46,6 +46,7 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 - **`state_file`**: where YorvoGate keeps each scope's last valid claims across restarts. It only ever refuses names to scopes, never grants any.
 - **[How YorvoGate compares](docs/comparison.md)** with other Docker API proxies and AuthZ plugins: the work it builds on (sockguard, swarmgate, wollomatic's bind filtering, OPA), what it does differently, and what it doesn't do.
 - **A rootless build from the configuration docs alone, in the conformance suite** (`test/conformance/docs.sh`): the listener, scope file, builder and buildx commands are taken from `docs/configuration.md` and run as written.
+- **Conformance on a CIS-hardened daemon in CI**: the suites run against a Docker with `no-new-privileges` for every container, `icc` and `userland-proxy` off and `live-restore` on, besides Docker's defaults. The leg checks first that Docker and `yorvogate check --docker` say `no-new-privileges`.
 - **The AppArmor profile for rootless BuildKit builders is a release file**, `yorvogate-buildkit-rootless`, in `SHA256SUMS` like the binaries: install the copy of the version you run. The configuration docs show its content.
 
 ### Security

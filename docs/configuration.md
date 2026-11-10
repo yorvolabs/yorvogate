@@ -239,6 +239,8 @@ What a scope's container leaves unset, Docker fills in from its own configuratio
   - Docker's default runtime isn't `runc` and isn't in every scoped listener's `containers.runtimes`.
 - **It notes what changes nothing it checked**, in its log and in `yorvogate check --docker`: Docker's own seccomp profile from a file (scopes' containers get the built-in one anyway), an AppArmor profile from a file, userns-remap, rootless Docker, `no-new-privileges` for every container, and a default cgroup namespace that's the host's (scopes' containers get a private one anyway).
 
+YorvoGate's conformance suite runs in CI against Docker's defaults and against a hardened daemon (CIS: `no-new-privileges`, `icc` off, `userland-proxy` off, `live-restore`, AppArmor and Docker's default seccomp profile).
+
 `yorvogate check --docker` reads Docker's defaults through `upstream`, prints what it found, and fails on what would make scoped listeners refuse. Without `--docker`, `check` doesn't connect to Docker.
 
 | Key | Default | Meaning |
