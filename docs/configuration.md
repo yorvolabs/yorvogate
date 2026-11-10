@@ -94,12 +94,14 @@ A container's configuration is read field by field with Docker's own types: each
 | Networks, volumes: prune | Only its own (its owner label is added to the filters) |
 | Volumes: create | A local volume of its own: its name and owner label, no driver options (with them, a local volume mounts any host path) |
 | Images: list | Without other scopes' images (any name in a protected namespace not its own) and without nameless leftovers |
-| Images: inspect, history, save, distribution | By name or ID, unless one of the image's names is in another's protected namespace |
+| Images: inspect, history, save, distribution | By name or ID, when the image has a name the scope may see (not in another's protected namespace). An image with no name left, such as the one a rebuild replaced, is no one's |
 | Images: pull | From a registry, by name, not into another's protected namespace; never an import (`fromSrc`) |
 | Images: tag, delete | Only names in its own image namespaces (its scope file's `images`): any other name may be another's to run |
 | Images: load | The archive is kept on disk (up to `load_limit`) while every name it gives, whichever image store Docker has, is checked: only names in its own namespaces. That's `manifest.json`'s tags and `repositories` (the classic store), and each image `index.json` lists, by its `io.containerd.image.name` or else its `org.opencontainers.image.ref.name` as it is, a bare one too (the containerd store). The archive must also hold every blob its `index.json` and `manifest.json` reach (nested indexes, manifests, configs, layers, attestations), each matching its digest and size: an archive that refers to content it doesn't hold is refused, naming the first digest. A pulled multi-platform image saved without `--platform` names platforms it lacks, so save it with `docker save --platform linux/<arch>`, or pull every platform first. Plain, gzip and bzip2 archives (xz and zstd are refused) |
 | Images: search | Yes |
 | Everything else | No: push, prune, commit, import, build, events, auth, plugins, swarm, BuildKit sessions |
+
+**An image with no name is no one's.** Docker doesn't record who built or loaded an image, and a label on it is whatever its build or its registry put there, so YorvoGate knows an image's owner only by its names. A rebuild moves the name onto the new image, and the old one then has none: to keep it (to roll back to), tag it before rebuilding, while it still has its name (`docker image tag quire-sites/jane/web:1 quire-sites/jane/web:before-update`). By its ID, the scope doesn't see it once its last name is gone; a trusted listener does.
 
 Another scope's objects are answered as Docker answers objects that don't exist, and in about the same time: a refusal is held until it has taken as long as the slowest of the endpoint's last 256 decisions that found an object (at most 250 ms), so how long Docker takes to look up a name tells little of whether it's another's (the [threat model](threat-model.md#out-of-scope) says how little). A request allowed isn't held. A request names its object by the full ID YorvoGate checked, so what Docker acts on is what was checked.
 

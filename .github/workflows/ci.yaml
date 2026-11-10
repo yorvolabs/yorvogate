@@ -96,7 +96,9 @@ jobs:
           sudo apt-get install -y -q --allow-downgrades "docker-ce=$version" "docker-ce-cli=$version" containerd.io
           # The image store, set either way (the default depends on how Docker was installed)
           sudo python3 -c 'import json, os, sys; p = "/etc/docker/daemon.json"; c = json.load(open(p)) if os.path.exists(p) else {}; c.setdefault("features", {})["containerd-snapshotter"] = sys.argv[1] == "containerd"; json.dump(c, open(p, "w"))' "${{ matrix.store }}"
-          sudo systemctl restart docker
+          # An upgrade starts Docker in its own scripts, and its unit allows 3 starts a minute
+          sudo systemctl reset-failed docker.service docker.socket || true
+          sudo systemctl restart docker || { sudo journalctl -u docker.service --no-pager -n 50; exit 1; }
           driver=$(docker info --format '{{json .DriverStatus}}')
           case "${{ matrix.store }}" in
             containerd) echo "$driver" | grep -q io.containerd.snapshotter ;;
