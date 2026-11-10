@@ -163,6 +163,8 @@ func TestScopeFilesAreChecked(t *testing.T) {
 		"an address as a subnet":  strings.Replace(jane(), `"prefixes"`, `"subnets": ["10.213.0.32"], "prefixes"`, 1),
 		"a newer format":          strings.Replace(jane(), `"prefixes"`, `"version": 2, "prefixes"`, 1),
 		"format 0":                strings.Replace(jane(), `"prefixes"`, `"version": 0, "prefixes"`, 1),
+		"an egress not none":      strings.Replace(jane(), `"prefixes"`, `"egress": "proxy", "prefixes"`, 1),
+		"egress in uppercase":     strings.Replace(jane(), `"prefixes"`, `"egress": "NONE", "prefixes"`, 1),
 		"a format as a string":    strings.Replace(jane(), `"prefixes"`, `"version": "1", "prefixes"`, 1),
 	}
 

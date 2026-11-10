@@ -77,6 +77,7 @@ What a scope's containers may ask of the host. Whatever isn't listed is refused,
 | `max_memory` | — | When set (bytes, at least 6 MiB): every container has a memory limit up to this |
 | `max_pids` | — | When set: every container has a process limit up to this |
 | `protected_images` | none | Image name prefixes (ending with `/`) a scope may use only within its own `images` |
+| `egress` | — | `none`: every scope's containers and builders join only internal networks (see [egress](#egress)) |
 
 A container's configuration is read field by field with Docker's own types: each field is either free (it has no power over the host or other scopes: the command, environment, user, health check, restart policy, CPU shares…), checked by a rule, or refused when set. A field a newer Docker adds is refused until YorvoGate is updated for it. Empty maps and lists ask for nothing, as Docker reads them, but for `MaskedPaths` and `ReadonlyPaths`, where an empty list unmasks `/proc`.
 
@@ -191,8 +192,20 @@ A scope file that isn't valid (or that conflicts) is refused alone: its requests
 
 One case is left to the orchestrator: if tenant `jane` has a Compose service named `blog-php` before a scope `jane-blog` exists, its container `jane-blog-php-1` is jane's. Once `jane-blog` arrives, `jane-blog`'s Compose project can't take that name. Nothing crosses between the scopes, since ownership is by label, but it's a denial of service. An orchestrator that lets tenants pick nested names should refuse dashes in service names.
 - `networks` (optional): shared networks it may join besides its own, each with the `aliases` it may take and the `addresses` it may ask for there (none if left out). An alias is written as Docker's DNS keeps it: lowercase letters, digits, `-` and `_` (Compose's `demo_x-php-1`), labels of 1 to 63 characters separated by `.`, 253 in all. A container may take it in any case (`WEB` is `web` to Docker), never with a trailing dot (`web.` is another name to Docker), and no label of an alias may be of a container ID's form (12 hex digits). An alias with a dot is the scope's on that network, as a prefix is: another scope listing it there collides. One under a scope's prefix is that scope's container's name, which no other scope may list. A bare name (`web`, a Compose service's) is shared: see the [threat model](threat-model.md#out-of-scope).
+- `egress` (optional): `none` keeps its containers and builders on internal networks only. See [egress](#egress). The listener's `containers.egress: none` does the same for every scope.
 - `subnets` (optional): where its networks' addresses must be, in CIDR form: each network it creates names its subnet, inside one of these (otherwise Docker picks from its own pools).
 - `builders` (optional): its BuildKit builders, by exact name (no wildcard), each one scope's only, and outside every scope's prefixes (`buildkit-jane`, not `jane-buildkit`): a name a prefix covers is a container's of that scope, and the file is refused. See [builders](#builders). 0.1's `containers` key is refused: a container a scope "used" was fully its own, privileged or not.
+
+## Egress
+
+A container reaches outside as soon as one of its networks has a gateway, and Docker's resolver forwards outside names only then. A scope with `"egress": "none"` (or on a listener with `containers.egress: none`) is kept off every network with a way out:
+
+- **It creates only internal networks** (`Internal`, Compose's `networks.<name>.internal: true`): any other is refused.
+- **Its containers join only internal networks**, its own and the shared ones its scope names alike, checked as Docker has them when a container is created or connected. `NetworkMode: none` is allowed, and so is another of its containers' network (`container:<name>`) when that one's networks are internal.
+- **What was made before doesn't run again with a way out.** A container on a network that isn't internal can't be started, restarted, unpaused, attached to or exec'd into: disconnect it from that network, or recreate it. It can still be inspected, read, stopped, killed and removed. What's already running inside one keeps its way out, though: when a scope becomes egress-free, YorvoGate logs each of its running containers on a network that isn't internal, and `yorvogate check --docker` lists them. **Turning `egress: none` on means disconnecting or recreating those containers.**
+- **Its builders are on internal networks only, or none.** A builder's `FROM` and `RUN` then fetch through a proxy: give BuildKit `HTTP_PROXY` and `HTTPS_PROXY` naming it.
+
+The way out, when there's one, is a proxy the orchestrator runs: on a shared internal network the scope names, and on a network of its own with a way out that the scope never joins. **The proxy's allowlist is then the scope's egress policy.** Everything on a shared internal network reaches everything else on it, other scopes' containers too, so give each egress-free scope its own, or trust what shares it.
 
 ## The state file
 

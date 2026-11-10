@@ -130,6 +130,9 @@ type Containers struct {
 	// ProtectedImages are image name prefixes (e.g. "quire-sites/") no scope may use but within its
 	// own namespaces (its scope file's "images").
 	ProtectedImages []string `yaml:"protected_images"`
+	// Egress "none" requires of every scope what a scope file's "egress": "none" does: its containers
+	// and builders join only internal networks.
+	Egress string `yaml:"egress"`
 }
 
 var (
@@ -388,6 +391,10 @@ func (c *Containers) check() error {
 
 	if c.MaxMemory < 0 || c.MaxPids < 0 || (c.MaxMemory > 0 && c.MaxMemory < 6<<20) {
 		return errors.New("max_memory (at least 6 MiB, Docker's minimum) and max_pids can't be negative")
+	}
+
+	if c.Egress != "" && c.Egress != "none" {
+		return fmt.Errorf("egress: %q isn't one (only none, or leave it out)", c.Egress)
 	}
 
 	for _, p := range c.ProtectedImages {
