@@ -3,8 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -115,8 +121,8 @@ func TestCheckWarnsOnDangerousConfig(t *testing.T) {
 	scopes := filepath.Join(dir, "scopes")
 	_ = os.Mkdir(scopes, 0o700)
 	configFile := filepath.Join(dir, "yorvogate.yaml")
-	// A scoped TCP listener open to the world, with privileged builders allowed: valid, but dangerous.
-	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://0.0.0.0:2376', mode: scoped, scopes: "+scopes+", allow_privileged_builders: true}\n"), 0o600)
+	// A scoped TCP listener open to the world in cleartext, with privileged builders allowed: valid (it says so), but dangerous.
+	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://0.0.0.0:2376', plaintext: i-understand, mode: scoped, scopes: "+scopes+", allow_privileged_builders: true}\n"), 0o600)
 	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
 
 	var out, errs bytes.Buffer
@@ -475,5 +481,69 @@ func TestCheckListsEgressLeaks(t *testing.T) {
 	var out, errs bytes.Buffer
 	if code := run([]string{"check", "--config", configFile, "--docker"}, &out, &errs); code != 0 || !strings.Contains(out.String(), "  warning: scope ana (egress: none) has running containers on a network that isn't internal: ana-web-1 (ana_default); disconnect or recreate them\n") || strings.Contains(out.String(), "ana-tool-1") {
 		t.Fatalf("%d %q %q", code, out.String(), errs.String())
+	}
+}
+
+// check loads a listener's TLS files as serve would: one that doesn't load, or a client CA shared
+// across trust levels, fails it. It warns of a certificate expiring soon, of an mTLS listener's
+// scopes that pin no certificate, and of plaintext.
+func TestCheckReadsTLS(t *testing.T) {
+	dir := t.TempDir()
+	certs := tlsFiles(t)
+	scopes := filepath.Join(dir, "scopes")
+	_ = os.Mkdir(scopes, 0o700)
+	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
+	_ = os.WriteFile(filepath.Join(scopes, "blog.json"), []byte(`{"owner": {"label": "com.docker.compose.project", "value": "blog"}, "prefixes": ["blog-"], "certificates": [{"sha256": "`+strings.Repeat("b", 64)+`"}]}`), 0o600)
+
+	run := func(listeners string) (int, string, string) {
+		path := filepath.Join(dir, "yorvogate.yaml")
+		_ = os.WriteFile(path, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n"+strings.ReplaceAll(listeners, "CERTS", certs)), 0o600)
+
+		var out, errs bytes.Buffer
+		code := run([]string{"check", "--config", path}, &out, &errs)
+
+		return code, out.String(), errs.String()
+	}
+
+	scoped := "  - {name: sites, address: 'tcp://0.0.0.0:2376', mode: scoped, scopes: " + scopes + ", tls: {certificate: CERTS/server.pem, key: CERTS/server.key, client_ca: CERTS/scopes-ca.pem}}\n"
+
+	code, out, errs := run(scoped)
+	if code != 0 || !strings.Contains(out, "warning: scopes without certificates (jane): any certificate the listener's CA issues with one of their names is that scope") || strings.Contains(out, "expires") {
+		t.Errorf("an mTLS listener: %d %s %s", code, out, errs)
+	}
+
+	trusted := "  - {name: admin, address: 'tcp://0.0.0.0:2375', mode: trusted, allow: {system: read}, tls: {certificate: CERTS/server.pem, key: CERTS/server.key, client_ca: CERTS/scopes-ca.pem}}\n"
+	if code, _, errs := run(scoped + trusted); code != 1 || !strings.Contains(errs, "listener admin: tls.client_ca: a CA (CN=gate.example) is also listener sites's, of the other trust level") {
+		t.Errorf("a shared CA: %d %s", code, errs)
+	}
+
+	if code, _, errs := run(strings.Replace(scoped, "server.key", "missing.key", 1)); code != 1 || !strings.Contains(errs, "listener sites: tls.key: open") {
+		t.Errorf("a missing key: %d %s", code, errs)
+	}
+
+	// A certificate that expires in a week
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(7 * 24 * time.Hour)}
+	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	keyDER, _ := x509.MarshalECPrivateKey(key)
+	_ = os.WriteFile(filepath.Join(certs, "soon.pem"), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600)
+	_ = os.WriteFile(filepath.Join(certs, "soon.key"), pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600)
+
+	soon := "  - {name: admin, address: 'tcp://127.0.0.1:2375', mode: trusted, allow: {system: read}, tls: {certificate: CERTS/soon.pem, key: CERTS/soon.key}}\n"
+	if code, out, errs := run(soon); code != 0 || !strings.Contains(out, "warning: tls.certificate expires "+tmpl.NotAfter.UTC().Format(time.RFC3339)) {
+		t.Errorf("expiring soon: %d %s %s", code, out, errs)
+	}
+
+	plain := "  - {name: admin, address: 'tcp://0.0.0.0:2375', mode: trusted, allow: {system: read}, plaintext: i-understand}\n"
+	if code, out, _ := run(plain); code != 0 || !strings.Contains(out, "plaintext: a trusted listener off loopback without client certificates lets anyone who reaches it in") {
+		t.Errorf("plaintext, trusted: %d %s", code, out)
+	}
+
+	tlsPlain := "  - {name: sites, address: 'tcp://0.0.0.0:2376', mode: scoped, scopes: " + scopes + ", plaintext: i-understand, tls: {certificate: CERTS/server.pem, key: CERTS/server.key}}\n"
+	_ = os.Remove(filepath.Join(scopes, "blog.json"))
+	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
+
+	if code, out, errs := run(tlsPlain); code != 0 || !strings.Contains(out, "whatever ends the TLS connection can replay them") || strings.Contains(out, "scopes without certificates") {
+		t.Errorf("plaintext over TLS, scoped: %d %s %s", code, out, errs)
 	}
 }

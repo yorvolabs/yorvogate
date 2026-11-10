@@ -2,12 +2,20 @@ package main
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yorvolabs/yorvogate/internal/config"
 	"github.com/yorvolabs/yorvogate/internal/scope"
@@ -65,6 +73,8 @@ func TestEveryExampleIsValid(t *testing.T) {
 
 	for name, content := range configs {
 		path := filepath.Join(t.TempDir(), "yorvogate.yaml")
+		// An example's TLS files are this test's: a certificate, its key and a client CA that load
+		content = strings.ReplaceAll(content, "/etc/yorvogate/tls/", tlsFiles(t)+"/")
 		_ = os.WriteFile(path, []byte(content), 0o600)
 
 		var out, errs bytes.Buffer
@@ -188,4 +198,37 @@ func TestTheDocsShowTheShippedAppArmorProfile(t *testing.T) {
 	if shown == nil || strings.TrimSpace(shown[1]) != want {
 		t.Errorf("docs/configuration.md shows a profile other than examples/apparmor/yorvogate-buildkit-rootless:\n%v\nwant:\n%s", shown, want)
 	}
+}
+
+// tlsFiles is a folder with what an example's tls names: server.pem and server.key (valid for a
+// year), and scopes-ca.pem, a CA.
+func tlsFiles(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "gate.example"}, DNSNames: []string{"gate.example"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(365 * 24 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keyDER, _ := x509.MarshalECPrivateKey(key)
+	cert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+
+	for name, content := range map[string][]byte{
+		"server.pem":    cert,
+		"server.key":    pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}),
+		"scopes-ca.pem": cert,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return dir
 }

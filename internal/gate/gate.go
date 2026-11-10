@@ -54,9 +54,17 @@ type Gate struct {
 func Registry(c *config.Config) *scope.Registry {
 	var folders []scope.Folder
 
+	// A folder an mTLS listener serves may pin certificates, whichever of its listeners reads it
+	certified := map[string]bool{}
+	for _, l := range c.Listeners {
+		if l.Mode == config.Scoped && l.MutualTLS() {
+			certified[l.Scopes] = true
+		}
+	}
+
 	for _, l := range c.Listeners {
 		if l.Mode == config.Scoped {
-			folders = append(folders, scope.Folder{Listener: l.Name, Dir: l.Scopes, Tokenless: l.SocketBound()})
+			folders = append(folders, scope.Folder{Listener: l.Name, Dir: l.Scopes, Tokenless: l.SocketBound() || l.MutualTLS(), Certificates: certified[l.Scopes]})
 		}
 	}
 
@@ -270,6 +278,10 @@ type boundKey struct{}
 // scope is the scope a request is for: the one whose socket it came on, or the one it names, with
 // its token.
 func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
+	if g.listener.MutualTLS() {
+		return g.certified(r)
+	}
+
 	if !g.listener.SocketBound() {
 		s, err := g.scopes.Authenticate(r.Header.Get(ScopeHeader), r.Header.Get(TokenHeader))
 		// A scope file that isn't valid is refused as a scope that isn't there, and in the same
@@ -293,6 +305,36 @@ func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 	s, err := g.scopes.Get(name)
 	if err != nil {
 		return nil, refuse(http.StatusForbidden, "scope %s isn't valid now: its socket closes", name)
+	}
+
+	return s, nil
+}
+
+// certified is the scope a request's client certificate names, on an mTLS listener: the certificate
+// is the only credential there, so a token isn't looked at, and a request that sends one is refused.
+func (g *Gate) certified(r *http.Request) (*scope.Scope, error) {
+	if r.Header.Get(TokenHeader) != "" {
+		return nil, refuse(http.StatusBadRequest, "this listener takes a client certificate, not a token: don't send %s", TokenHeader)
+	}
+
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		return nil, refuse(http.StatusInternalServerError, "the request came without a client certificate")
+	}
+
+	leaf := r.TLS.PeerCertificates[0]
+
+	name, err := certificateScope(leaf)
+	if err != nil {
+		return nil, refuse(http.StatusUnauthorized, "the client certificate names no scope: %s", err)
+	}
+
+	if named := r.Header.Get(ScopeHeader); named != "" && named != name {
+		return nil, refuse(http.StatusForbidden, "this client certificate is scope %s's: a request with it can't name another", name)
+	}
+
+	s, err := g.scopes.Get(name)
+	if err != nil || !s.Pinned(SPKI(leaf)) {
+		return nil, refuse(http.StatusUnauthorized, "no such scope, or not its certificate")
 	}
 
 	return s, nil

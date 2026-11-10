@@ -640,3 +640,89 @@ func TestNormaliseAlias(t *testing.T) {
 		}
 	}
 }
+
+// A scope on an mTLS listener may pin its certificates' public keys: up to MaxCertificates, each
+// once, as SHA-256 hex. Elsewhere a pin would never be read, so it's refused.
+func TestCertificatePins(t *testing.T) {
+	pins := func(digests ...string) string {
+		var list []string
+		for _, d := range digests {
+			list = append(list, `{"sha256": "`+d+`"}`)
+		}
+
+		return strings.Replace(jane(), `"prefixes"`, `"certificates": [`+strings.Join(list, ", ")+`], "prefixes"`, 1)
+	}
+	a, b := digest("key a"), digest("key b")
+	certified := func(dir string) *Store {
+		r := NewRegistry([]Folder{{Listener: "sites", Dir: dir, Tokenless: true, Certificates: true}}, "")
+		if err := r.Reload(); err != nil {
+			t.Fatal(err)
+		}
+
+		return r.Store("sites")
+	}
+
+	nine := make([]string, MaxCertificates+1)
+	for i := range nine {
+		nine[i] = digest(strings.Repeat("k", i+1))
+	}
+
+	for name, content := range map[string]string{
+		"an uppercase pin":  pins(strings.ToUpper(a)),
+		"a short pin":       pins(a[:63]),
+		"a pin twice":       pins(a, b, a),
+		"too many":          pins(nine...),
+		"a pin key unknown": strings.Replace(pins(a), `"sha256"`, `"spki"`, 1),
+		"pins as strings":   strings.Replace(jane(), `"prefixes"`, `"certificates": ["`+a+`"], "prefixes"`, 1),
+	} {
+		dir := t.TempDir()
+		write(t, dir, "jane", content)
+
+		if _, err := certified(dir).Get("jane"); err == nil {
+			t.Errorf("%s: allowed", name)
+		}
+	}
+
+	// Not on a listener without mTLS
+	dir := t.TempDir()
+	write(t, dir, "jane", pins(a))
+
+	if _, err := testStore(t, dir, true).Get("jane"); err == nil || !strings.Contains(err.Error(), "certificates: only a scope on an mTLS listener has them (listener sites has no tls.client_ca)") {
+		t.Errorf("pins without mTLS: %v", err)
+	}
+
+	write(t, dir, "jane", pins(nine[:MaxCertificates]...))
+
+	s, err := certified(dir).Get("jane")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	key := func(d string) (k [32]byte) {
+		raw, _ := hex.DecodeString(d)
+		copy(k[:], raw)
+
+		return k
+	}
+
+	for _, d := range nine[:MaxCertificates] {
+		if !s.Pinned(key(d)) {
+			t.Errorf("%s isn't pinned", d)
+		}
+	}
+
+	if s.Pinned(key(nine[MaxCertificates])) || s.Pinned(key(a)) {
+		t.Error("an unpinned key is pinned")
+	}
+
+	// Without pins, any key is the scope's
+	write(t, dir, "jane", strings.Replace(jane(), `"token_sha256": "`+digest(token)+`", `, "", 1))
+
+	if s, err := certified(dir).Get("jane"); err != nil || !s.Pinned(key(a)) {
+		t.Errorf("no pins, no token: %v", err)
+	}
+
+	if !ValidName("jane-blog") || ValidName("Jane") || ValidName("") {
+		t.Error("ValidName")
+	}
+}
