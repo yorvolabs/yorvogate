@@ -37,7 +37,7 @@ cleanup() {
 	direct rm -f ygq-buildkit-jane ygq-db-jane >/dev/null 2>&1
 	direct volume rm ygq-buildkit-jane-state >/dev/null 2>&1
 	direct network rm ygq-edge ygq-link-jane ygq-db >/dev/null 2>&1
-	direct rmi quire-sites/ygq-jane/web:1 quire-sites/ygq-jane/web:2 ygq-base:1 >/dev/null 2>&1
+	direct rmi quire-sites/ygq-jane/web:1 quire-sites/ygq-jane/web:2 quire-sites/ygq-jane/web:before-update quire-sites/ygq-jane/web:late ygq-base:1 >/dev/null 2>&1
 	[ -n "${gate:-}" ] && kill "$gate" 2>/dev/null
 }
 trap cleanup EXIT
@@ -162,6 +162,18 @@ case "$aliases" in *ygq-edge=*jane.quire.internal*) ok "its alias on the shared 
 works "image tag (in its namespace)" as jane docker image tag quire-sites/ygq-jane/web:1 quire-sites/ygq-jane/web:2
 works "image rm (in its namespace)" as jane docker image rm quire-sites/ygq-jane/web:2
 refused "image tag (in another site's namespace)" "namespace" as jane docker image tag quire-sites/ygq-jane/web:1 quire-sites/ygq-jane-blog/web:1
+
+# Quire Server's rollback: the image a rebuild replaces is tagged while it still has its name. An
+# image with no name left is no one's: by its ID, the scope doesn't see it.
+old=$(as jane docker image inspect --format '{{.Id}}' quire-sites/ygq-jane/web:1)
+works "image tag before a rebuild (the rollback's tag)" as jane docker image tag quire-sites/ygq-jane/web:1 quire-sites/ygq-jane/web:before-update
+echo 'RUN echo 2 > /version' >> "$dir/jane/site/Dockerfile"
+works "compose build (a rebuild)" as jane timeout 300 docker compose -p ygq-jane -f "$jane" build --builder ygq-jane
+new=$(as jane docker image inspect --format '{{.Id}}' quire-sites/ygq-jane/web:1)
+kept=$(as jane docker image inspect --format '{{.Id}}' quire-sites/ygq-jane/web:before-update)
+if [ -n "$old" ] && [ "$new" != "$old" ] && [ "$kept" = "$old" ]; then ok "the rollback's tag keeps the replaced image"; else ko "the rollback's tag" "old=$old new=$new kept=$kept"; fi
+works "image rm of the rollback's tag (the image is in use: -f, which removes the name only)" as jane docker image rm -f quire-sites/ygq-jane/web:before-update
+refused "image tag by ID of an image with no name" "No such image" as jane docker image tag "$old" quire-sites/ygq-jane/web:late
 
 # The build's traffic: the dial on jane's socket (only dial-stdio), the result loaded through it
 if grep '"listener":"sites"' "$dir/yorvogate.log" | grep '"scope":"jane"' | grep -q '"endpoint":"image.load"'; then ok "the build's image was loaded through jane's socket"; else ko "no image.load through jane's socket" "$(grep image.load "$dir/yorvogate.log" | tail -2)"; fi
