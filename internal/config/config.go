@@ -60,8 +60,17 @@ type Config struct {
 	// valid when the gate starts still keeps its names from the other scopes. YorvoGate's own file,
 	// outside every scopes folder; optional (without it, claims are held only while the process runs).
 	StateFile string `yaml:"state_file"`
+	// Daemon is what YorvoGate accepts of Docker's own defaults.
+	Daemon Daemon `yaml:"daemon"`
 
 	lowest, highest route.Version
+}
+
+// Daemon is what YorvoGate accepts of Docker's own defaults, which it reads while it serves.
+type Daemon struct {
+	// WithoutLSM accepts a Docker with neither AppArmor nor SELinux (Docker Desktop, rootless Docker,
+	// a host without either); without it, scoped listeners refuse every request on such a Docker.
+	WithoutLSM bool `yaml:"without_lsm"`
 }
 
 // APIRange is a range of Docker API versions.

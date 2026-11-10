@@ -52,6 +52,7 @@ block "" yaml 1 | awk '
 	/^  - name: / { sites = ($3 == "sites") }
 	sites
 ' | grep -v '^    socket_group:' | moved > "$dir/yorvogate.yaml"
+without_lsm "$dir/yorvogate.yaml"
 # The scope file: the docs' example, which names the builder and the image namespace the build uses
 block "Scope files (scoped listeners)" json 1 | moved > "$dir/scopes/ygd-jane.json"
 chmod 600 "$dir/scopes/ygd-jane.json"

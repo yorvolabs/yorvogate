@@ -20,6 +20,7 @@
     "body_limit": {"type": "integer", "minimum": 4096, "maximum": 67108864},
     "load_limit": {"type": "integer", "minimum": 1048576, "maximum": 274877906944},
     "state_file": {"type": "string", "pattern": "^/.*[^/]$"},
+    "daemon": {"type": "object", "additionalProperties": false, "properties": {"without_lsm": {"type": "boolean"}}},
     "listeners": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/listener"}}
   },
   "$defs": {

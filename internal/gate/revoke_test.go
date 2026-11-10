@@ -49,7 +49,7 @@ func tokenGate(t *testing.T, d *docker) (*httptest.Server, *Gate, string) {
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	g := New(c, c.Listeners[0], NewUpstream(c, log), registry, log)
+	g := New(c, c.Listeners[0], NewUpstream(c, log), registry, readDefaults(c), log)
 	server := httptest.NewServer(g)
 	t.Cleanup(server.Close)
 

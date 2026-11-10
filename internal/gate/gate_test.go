@@ -2,6 +2,7 @@ package gate
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -62,6 +63,24 @@ type docker struct {
 	// version lookup that fails
 	arch      string
 	noVersion bool
+	// Docker's /info as YorvoGate reads it (Ubuntu's defaults unless a test changes it)
+	info map[string]any
+}
+
+// readDefaults reads Docker's defaults for a configuration once, as serve does before its first answer.
+func readDefaults(c *config.Config) *Defaults {
+	d := NewDefaults(c)
+	d.Read(context.Background())
+
+	return d
+}
+
+// ubuntuInfo is what Docker 29 on Ubuntu 26.04 says of its defaults.
+func ubuntuInfo() map[string]any {
+	return map[string]any{
+		"SecurityOptions": []string{"name=apparmor,profile=default", "name=seccomp,profile=builtin", "name=cgroupns"},
+		"DefaultRuntime":  "runc",
+	}
 }
 
 func (d *docker) apiVersion() string {
@@ -286,8 +305,18 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 	d.mu.Lock()
 	d.lookups++
 	d.asked = append(d.asked, r.URL.EscapedPath())
-	classic, otherDescriptor, arch, noVersion := d.classic, d.otherDescriptor, d.arch, d.noVersion
+	classic, otherDescriptor, arch, noVersion, info := d.classic, d.otherDescriptor, d.arch, d.noVersion, d.info
 	d.mu.Unlock()
+
+	if strings.HasSuffix(r.URL.Path, "/info") {
+		if info == nil {
+			info = ubuntuInfo()
+		}
+
+		_ = json.NewEncoder(w).Encode(info)
+
+		return
+	}
 
 	if strings.HasSuffix(r.URL.Path, "/version") {
 		if noVersion {
@@ -437,6 +466,14 @@ func gate(t testing.TB, d *docker, listener string) *httptest.Server {
 // gateLogging is gate, logging to log.
 func gateLogging(t testing.TB, d *docker, listener string, log *slog.Logger) *httptest.Server {
 	t.Helper()
+	server, _ := gateAndDefaults(t, d, listener, log)
+
+	return server
+}
+
+// gateAndDefaults is gateLogging, with Docker's defaults as the gate read them before serving.
+func gateAndDefaults(t testing.TB, d *docker, listener string, log *slog.Logger) (*httptest.Server, *Defaults) {
+	t.Helper()
 	scopes := t.TempDir()
 	sum := sha256.Sum256([]byte(token))
 
@@ -502,18 +539,20 @@ listeners:
 		t.Fatal(err)
 	}
 
+	defaults := readDefaults(c)
+
 	for _, l := range c.Listeners {
 		if l.Name == listener {
-			server := httptest.NewServer(New(c, l, NewUpstream(c, log), registry, log))
+			server := httptest.NewServer(New(c, l, NewUpstream(c, log), registry, defaults, log))
 			t.Cleanup(server.Close)
 
-			return server
+			return server, defaults
 		}
 	}
 
 	t.Fatalf("no listener %s", listener)
 
-	return nil
+	return nil, nil
 }
 
 var asJane = map[string]string{"X-YorvoGate-Scope": "jane", "X-YorvoGate-Token": token}

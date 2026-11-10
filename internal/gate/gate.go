@@ -38,6 +38,8 @@ type Gate struct {
 	docker   *Docker
 	upstream *Upstream
 	loads    *loadLimiter
+	// Docker's defaults as last read: while they're unsafe, or unread, every scoped request is refused
+	defaults *Defaults
 	// A token listener's requests being answered, ended when their scope's allowance goes
 	streams streams
 	// The headers a scope sent that weren't forwarded, each warned of once
@@ -62,8 +64,8 @@ func Registry(c *config.Config) *scope.Registry {
 }
 
 // New makes the handler of a listener; a scoped one's scopes are the registry's.
-func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.Registry, log *slog.Logger) *Gate {
-	g := &Gate{config: c, listener: l, upstream: upstream, registry: scopes, log: log.With("listener", l.Name)}
+func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.Registry, defaults *Defaults, log *slog.Logger) *Gate {
+	g := &Gate{config: c, listener: l, upstream: upstream, registry: scopes, defaults: defaults, log: log.With("listener", l.Name)}
 	if l.Mode == config.Scoped {
 		g.scopes = scopes.Store(l.Name)
 		g.docker = NewDocker(c.UpstreamSocket())
@@ -170,6 +172,11 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 
 		entry = entry.With("scope", s.Name)
 
+		daemon, err := g.defaults.current()
+		if err != nil {
+			return nil, nil, err
+		}
+
 		if err := notAForm(r); err != nil {
 			return nil, nil, err
 		}
@@ -186,7 +193,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 
 		ctx, found := lookingUp(r.Context())
 		decision := &scoped{
-			ctx: ctx, req: req, scope: s, policy: g.listener.Containers, pulls: g.listener.Pulls, docker: g.docker,
+			ctx: ctx, req: req, scope: s, policy: g.listener.Containers, pulls: g.listener.Pulls, daemon: daemon, docker: g.docker,
 			builderProfiles: g.listener.BuilderAppArmorProfiles, anyBuilder: g.listener.AllowPrivilegedBuilders,
 			path: r.URL.EscapedPath(), query: r.URL.Query(), upgrading: upgrading(r),
 			stream: r.Body, hasBody: r.ContentLength != 0, loadLimit: g.config.LoadLimit, loads: g.loads,

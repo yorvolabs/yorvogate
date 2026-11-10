@@ -25,6 +25,8 @@ type scoped struct {
 	policy config.Containers
 	// The registries and platforms its pulls may reach
 	pulls config.Pulls
+	// Docker's defaults, as last read (safe: an unsafe read refuses the request first)
+	daemon *daemonState
 	// The listener's AppArmor profiles for builders, and whether any builder is accepted
 	builderProfiles []string
 	anyBuilder      bool
