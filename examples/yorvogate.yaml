@@ -26,3 +26,7 @@ listeners:
     socket_group: "2001"   # the tenants' clients' group
     mode: scoped
     scopes: /etc/yorvogate/scopes
+    # The registries its scopes may pull from (Docker Hub alone if left out); list each you trust
+    # with every scope's images
+    pulls:
+      registries: [docker.io]
