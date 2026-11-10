@@ -173,6 +173,7 @@ new=$(as jane docker image inspect --format '{{.Id}}' quire-sites/ygq-jane/web:1
 kept=$(as jane docker image inspect --format '{{.Id}}' quire-sites/ygq-jane/web:before-update)
 if [ -n "$old" ] && [ "$new" != "$old" ] && [ "$kept" = "$old" ]; then ok "the rollback's tag keeps the replaced image"; else ko "the rollback's tag" "old=$old new=$new kept=$kept"; fi
 works "image rm of the rollback's tag (the image is in use: -f, which removes the name only)" as jane docker image rm -f quire-sites/ygq-jane/web:before-update
+works "the replaced image still exists, nameless" direct image inspect "$old"
 refused "image tag by ID of an image with no name" "No such image" as jane docker image tag "$old" quire-sites/ygq-jane/web:late
 
 # The build's traffic: the dial on jane's socket (only dial-stdio), the result loaded through it
