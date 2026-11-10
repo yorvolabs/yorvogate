@@ -68,6 +68,10 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 - **A builder's volumes weren't checked (Low).** A builder that binds a host path is refused, but one that mounts a volume whose driver options bind one (`type=none,o=bind,device=/`) wasn't. Now each volume a builder mounts is read at each use and must be a plain local one; one that can't be read is refused. It takes an orchestrator creating such a builder.
 - **A scope could take another's name on a shared network (Low).** Two scope files could list one alias on one shared network, and Docker's DNS answered it with both scopes' containers: a site's name could be taken over, in part, by a tenant beside it. Only whoever writes the scope files could set it up. Now a dotted alias, and one under a scope's prefix, is one scope's only, as above.
 
+### Fixed
+
+- **The configuration docs' rootless builder starts on a hardened daemon.** It passes `--security-opt no-new-privileges=false`: a daemon with `"no-new-privileges": true` gives it to every container otherwise, and rootless BuildKit can't map its users under it. The docs listed the builder's option as `no-new-privileges`; it's `no-new-privileges=false`, the only form a builder may have.
+
 ## [0.2.2] - 2026-11-03
 
 Hardening from a security audit of 0.2.1, and a fix for rootless builders on CIS-hardened daemons. Check your configuration with `yorvogate check` before you update: two scoped listeners on one Docker may no longer share an owner label, prefix, image namespace or builder.

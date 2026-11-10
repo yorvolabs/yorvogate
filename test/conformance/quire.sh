@@ -97,8 +97,9 @@ works "docker cp out of the database" orchestrator cp ygq-db-jane:/tmp/dump.sql 
 works "image tag" orchestrator image tag alpine:3.22 ygq-base:1
 works "image inspect" orchestrator image inspect ygq-base:1
 
-# jane's builder, as Quire's agent creates it: rootless BuildKit, not privileged, no capabilities
-set -- --security-opt seccomp=unconfined --security-opt systempaths=unconfined
+# jane's builder, as Quire's agent creates it: rootless BuildKit, not privileged, no capabilities,
+# out of a hardened daemon's no-new-privileges (rootless BuildKit can't map its users under it)
+set -- --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt no-new-privileges=false
 [ -n "$apparmor" ] && set -- "$@" --security-opt "apparmor=$apparmor"
 works "docker run (jane's rootless builder)" orchestrator run -d --name ygq-buildkit-jane "$@" \
 	-v ygq-buildkit-jane-state:/home/user/.local/share/buildkit "$buildkit"

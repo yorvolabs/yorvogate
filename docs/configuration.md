@@ -70,7 +70,7 @@ What a scope's containers may ask of the host. Whatever isn't listed is refused,
 | `capabilities` | none | Capabilities that may be added, by name without `CAP_` (`ALL` never) |
 | `drop_all_capabilities` | `false` | Every container drops all capabilities first (`CapDrop: [ALL]`) |
 | `no_new_privileges` | `false` | Every container runs with `no-new-privileges` |
-| `security_options` | none | Other security options allowed, exactly as written (`no-new-privileges` always is) |
+| `security_options` | none | Other security options allowed, exactly as written (`no-new-privileges` always is). Listing `no-new-privileges=false` lets the listener's containers take back what a hardened daemon's `no-new-privileges` default gives them |
 | `runtimes` | none | Runtimes allowed besides Docker's default |
 | `log_drivers` | none | Log drivers allowed besides `json-file`, `local` and `none` |
 | `log_options` | none | Options of the listed log drivers, each with the exact values allowed (`syslog-address: [udp://10.0.0.9:514]`); see [log options](#log-options) |
@@ -254,7 +254,7 @@ A scope builds images through a BuildKit builder the orchestrator runs for it: a
   - not privileged; no added capabilities; no devices, device requests or device cgroup rules;
   - no binds or host paths (volumes and tmpfs only), and each volume a plain `local` one, without driver options (one with `type=none,o=bind,device=…` is a host path); no host namespaces (PID, IPC, UTS, user, cgroup, network `host`), and none of another container's; no published ports; no `Sysctls`;
   - it runs as a user other than root (`moby/buildkit:<version>-rootless` runs as `1000:1000`);
-  - its security options only `seccomp=unconfined`, `systempaths=unconfined`, `no-new-privileges`, and `apparmor=<a profile in the listener's builder_apparmor_profiles>`. YorvoGate sees only a profile's name, so the operator vouches for each name listed. `apparmor=unconfined` is accepted only if listed.
+  - its security options only `seccomp=unconfined`, `systempaths=unconfined`, `no-new-privileges=false`, and `apparmor=<a profile in the listener's builder_apparmor_profiles>`. YorvoGate sees only a profile's name, so the operator vouches for each name listed. `apparmor=unconfined` is accepted only if listed.
 - These options widen the kernel's attack surface for an unprivileged, capability-less process: the accepted risk of builds on a shared kernel.
 - `allow_privileged_builders: true` accepts any builder. A privileged builder is root on the host for whoever can exec into it: never for tenants.
 
@@ -265,11 +265,12 @@ docker run -d --name buildkit-jane \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=yorvogate-buildkit-rootless \
   --security-opt systempaths=unconfined \
+  --security-opt no-new-privileges=false \
   -v buildkit-jane-state:/home/user/.local/share/buildkit \
   moby/buildkit:v0.34.0-rootless@sha256:65eca3c01cd1180c8f64565c4e3c5983af5145818b0e6fa863385d099eb73855
 ```
 
-Don't add `no-new-privileges`: it breaks rootless BuildKit (`newuidmap: Could not set caps`).
+`no-new-privileges=false` is there for a hardened daemon (CIS: `"no-new-privileges": true` in daemon.json), which runs every container with `no-new-privileges` unless it opts out: rootless BuildKit can't map its users under it (`newuidmap: Could not set caps`). Elsewhere it changes nothing. A builder with `no-new-privileges` itself is refused, since it couldn't start.
 
 On Ubuntu 24.04 and later, unprivileged user namespaces are restricted by AppArmor (`kernel.apparmor_restrict_unprivileged_userns=1`), and rootless BuildKit doesn't start under `apparmor=unconfined`. Load YorvoGate's profile for it, `yorvogate-buildkit-rootless`, and list it in the listener's `builder_apparmor_profiles`. It grants only `userns`, which is all the restriction takes away:
 
