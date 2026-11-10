@@ -4,10 +4,13 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
-## [Unreleased]
+### Added
+
+- **TLS and mTLS listeners.** A TCP listener takes `tls` (its certificate and key, TLS 1.3 only), read again when the files change, keeping the last good ones when they don't load. With `tls.client_ca`, clients must present a certificate from that CA alone, for client authentication. On a scoped listener the certificate is the scope: its one common name is the scope's name, no token is needed (and one sent is refused), and a scope file's `certificates` can pin its keys, for revocation and rotation. A certificate no longer pinned, or expired, ends its streams. On a trusted listener, `clients` can pin which certificates connect. A trusted listener's CA can't be a scoped listener's. buildx's own connections carry the certificate, unlike a token: its `remote` driver reaches a scope's builder as the scope. See [TLS and client certificates](docs/configuration.md#tls-and-client-certificates).
 
 ### Changed
 
+- **Breaking: a TCP listener off loopback needs mTLS** (`tls` with `client_ca`), whatever its mode, or `plaintext: i-understand` to accept cleartext. Only a loopback IP address counts as loopback, not a host name (`localhost` included). `yorvogate check` warns about a listener with `plaintext`.
 - **Built with Go 1.27.4.**
 
 ## [0.3.0-rc.1] - 2026-11-10
