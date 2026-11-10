@@ -185,6 +185,16 @@ works "jane: exec -d" as jane docker compose -p ygc-jane -f "$jane" exec -d app 
 works "jane: logs" as jane docker compose -p ygc-jane -f "$jane" logs
 works "jane: restart" as jane docker compose -p ygc-jane -f "$jane" restart
 works "jane: pull" as jane docker pull -q alpine:3.22
+# A pull's platform is the host's (as containerd writes it), and its registry one the listener lists
+host=$(direct version -f '{{.Server.Arch}}')
+if [ "$host" = arm64 ]; then other=linux/amd64; else other=linux/arm64; fi
+works "jane: pull, naming the host's platform" as jane docker pull -q --platform "linux/$host" alpine:3.22
+refused "jane: pull of another platform" "isn't the host's" as jane docker pull -q --platform "$other" alpine:3.22
+refused "jane: pull from a registry on loopback" "isn't one this listener's scopes may pull from" as jane docker pull -q localhost:5000/ygc/x
+refused "jane: pull from a private address" "isn't one this listener's scopes may pull from" as jane docker pull -q 127.0.0.1:5000/ygc/x
+refused "jane: pull from the metadata address" "isn't one this listener's scopes may pull from" as jane docker pull -q 169.254.169.254/ygc/x
+refused "jane: pull from another registry" "isn't one this listener's scopes may pull from" as jane docker pull -q ghcr.io/yorvolabs/yorvogate:0.2.2
+refused "jane: search on another registry" "isn't one this listener's scopes may pull from" as jane docker search localhost:5000/ygc
 works "jane: tag into its namespace" as jane docker tag alpine:3.22 ygc-jane/app:1
 works "blog: tag into its namespace" as blog docker tag alpine:3.22 ygc-blog/app:1
 works "jane: inspect its image" as jane docker image inspect ygc-jane/app:1
