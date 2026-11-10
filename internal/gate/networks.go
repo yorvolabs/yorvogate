@@ -48,6 +48,10 @@ func (s *scoped) createNetwork(body []byte) ([]byte, error) {
 		add("the scope %q isn't allowed (only local)", req.Scope)
 	}
 
+	if s.egressFree() && !req.Internal {
+		add("scope %s may create only internal networks (egress: none): set Internal (Compose: networks.<name>.internal: true)", s.scope.Name)
+	}
+
 	var configs []network.IPAMConfig
 	if req.IPAM != nil {
 		for _, f := range unset(req.IPAM, ipamFields) {

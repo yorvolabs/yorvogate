@@ -455,8 +455,18 @@ func (s *scoped) networking(mode container.NetworkMode, nc *network.NetworkingCo
 		return
 	case strings.HasPrefix(string(mode), "container:"):
 		other := strings.TrimPrefix(string(mode), "container:")
-		if !s.ownsContainer(other) {
+		c, err := s.docker.Container(s.ctx, s.version, other)
+
+		switch {
+		case err != nil || !s.owned(c):
 			add("NetworkMode container:%s isn't one of its own containers", other)
+		case s.egressFree():
+			// The one it joins may have been made before the scope was egress-free.
+			if outside, err := external(s.ctx, s.docker, s.version, c.inspection); err != nil {
+				add("the networks of container %s couldn't be checked: %v", other, err)
+			} else if len(outside) > 0 {
+				add("the container %s whose network it joins is on a network that isn't internal (%s; egress: none)", other, strings.Join(outside, ", "))
+			}
 		}
 
 		if len(endpoints) > 0 {
@@ -483,6 +493,10 @@ func (s *scoped) networking(mode container.NetworkMode, nc *network.NetworkingCo
 
 func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(string, ...any)) {
 	if shared, ok := s.scope.Networks[name]; ok {
+		if s.egressFree() {
+			s.internal(name, add)
+		}
+
 		if e == nil {
 			return
 		}
@@ -527,6 +541,10 @@ func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(str
 		add("the network %s isn't one of its own, nor a shared one it may join", name)
 
 		return
+	}
+
+	if s.egressFree() && !n.Internal {
+		add("the network %s isn't internal (egress: none)", name)
 	}
 
 	if e != nil {

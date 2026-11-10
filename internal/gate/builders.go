@@ -72,7 +72,20 @@ func (s *scoped) builder(c *object) error {
 
 	volume := func(name string) (*object, error) { return s.docker.Volume(s.ctx, s.version, name) }
 
-	if problems := builderProblems(c.inspection, s.builderProfiles, volume); len(problems) > 0 {
+	problems := builderProblems(c.inspection, s.builderProfiles, volume)
+
+	// An egress-free scope's builder fetches through the orchestrator's proxy, if at all: its RUN
+	// steps would otherwise be the way out.
+	if s.egressFree() {
+		outside, err := external(s.ctx, s.docker, s.version, c.inspection)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("its networks couldn't be checked: %v", err))
+		} else if len(outside) > 0 {
+			problems = append(problems, fmt.Sprintf("it's on a network that isn't internal (%s; egress: none)", strings.Join(outside, ", ")))
+		}
+	}
+
+	if len(problems) > 0 {
 		return refuse(http.StatusForbidden, "builder %s isn't configured as a builder must be: %s", c.Name, strings.Join(problems, "; "))
 	}
 

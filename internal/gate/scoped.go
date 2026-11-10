@@ -232,7 +232,7 @@ func (s *scoped) container() (bool, error) {
 		return true, s.builder(c)
 	}
 
-	return false, nil
+	return false, s.runsInside(c, false)
 }
 
 // owned tells whether a container is the scope's own: by its label, and never one of its builders

@@ -53,6 +53,9 @@ type object struct {
 	Driver  string
 	Options map[string]string
 
+	// Networks only: whether it has no way out (no gateway)
+	Internal bool
+
 	inspection *container.InspectResponse
 }
 
@@ -76,9 +79,10 @@ func (d *Docker) Container(ctx context.Context, version, id string) (*object, er
 // Network looks a network up by ID or name; nil when there's none.
 func (d *Docker) Network(ctx context.Context, version, id string) (*object, error) {
 	var answer struct {
-		ID     string `json:"Id"`
-		Name   string
-		Labels map[string]string
+		ID       string `json:"Id"`
+		Name     string
+		Labels   map[string]string
+		Internal bool
 	}
 
 	found, err := d.get(ctx, version, "/networks/"+url.PathEscape(id), &answer)
@@ -86,7 +90,7 @@ func (d *Docker) Network(ctx context.Context, version, id string) (*object, erro
 		return nil, err
 	}
 
-	return &object{ID: resolvedID(answer.ID), Name: answer.Name, Labels: answer.Labels}, nil
+	return &object{ID: resolvedID(answer.ID), Name: answer.Name, Labels: answer.Labels, Internal: answer.Internal}, nil
 }
 
 // Volume looks a volume up by name; nil when there's none.

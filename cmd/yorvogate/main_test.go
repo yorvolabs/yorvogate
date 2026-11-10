@@ -430,3 +430,50 @@ func TestCheckReadsDockersDefaults(t *testing.T) {
 		t.Fatalf("no LSM, accepted: %d %q %q", code, out.String(), errs.String())
 	}
 }
+
+// check --docker lists an egress-free scope's running containers on a network that isn't internal.
+func TestCheckListsEgressLeaks(t *testing.T) {
+	dir := t.TempDir()
+	scopes := filepath.Join(dir, "scopes")
+	_ = os.Mkdir(scopes, 0o700)
+	socket := filepath.Join(dir, "docker.sock")
+
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	answers := map[string]string{
+		"/info":                  `{"SecurityOptions": ["name=apparmor,profile=default", "name=seccomp,profile=builtin", "name=cgroupns"], "DefaultRuntime": "runc"}`,
+		"/containers/json":       `[{"Id": "a1"}, {"Id": "a2"}]`,
+		"/containers/a1/json":    `{"Id": "a1", "Name": "/ana-web-1", "Config": {}, "HostConfig": {"NetworkMode": "ana_default"}, "NetworkSettings": {"Networks": {"ana_default": {"NetworkID": "n1"}}}}`,
+		"/containers/a2/json":    `{"Id": "a2", "Name": "/ana-tool-1", "Config": {}, "HostConfig": {"NetworkMode": "ana_internal"}, "NetworkSettings": {"Networks": {"ana_internal": {"NetworkID": "n2"}}}}`,
+		"/networks/n1":           `{"Id": "n1", "Name": "ana_default", "Internal": false}`,
+		"/networks/ana_default":  `{"Id": "n1", "Name": "ana_default", "Internal": false}`,
+		"/networks/n2":           `{"Id": "n2", "Name": "ana_internal", "Internal": true}`,
+		"/networks/ana_internal": `{"Id": "n2", "Name": "ana_internal", "Internal": true}`,
+	}
+
+	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Without the version: "/v1.44/networks/n1" is "/networks/n1"
+		path := r.URL.Path[strings.Index(r.URL.Path[1:], "/")+1:]
+		if answer, ok := answers[path]; ok {
+			_, _ = w.Write([]byte(answer))
+
+			return
+		}
+
+		http.NotFound(w, r)
+	})}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	_ = os.WriteFile(filepath.Join(scopes, "ana.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "ana"}, "prefixes": ["ana-", "ana_"], "egress": "none"}`), 0o600)
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	_ = os.WriteFile(configFile, []byte("upstream: unix://"+socket+"\nlisteners:\n  - {name: agents, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+
+	var out, errs bytes.Buffer
+	if code := run([]string{"check", "--config", configFile, "--docker"}, &out, &errs); code != 0 || !strings.Contains(out.String(), "  warning: scope ana (egress: none) has running containers on a network that isn't internal: ana-web-1 (ana_default); disconnect or recreate them\n") || strings.Contains(out.String(), "ana-tool-1") {
+		t.Fatalf("%d %q %q", code, out.String(), errs.String())
+	}
+}
