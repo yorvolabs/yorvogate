@@ -23,6 +23,8 @@ type scoped struct {
 	req    route.Request
 	scope  *scope.Scope
 	policy config.Containers
+	// The registries and platforms its pulls may reach
+	pulls config.Pulls
 	// The listener's AppArmor profiles for builders, and whether any builder is accepted
 	builderProfiles []string
 	anyBuilder      bool
@@ -193,13 +195,13 @@ func (s *scoped) deleteImage() error {
 
 // distribution: Docker answers it from the registry, never from the images it has, and the answer
 // has no names to filter. A name in another scope's protected namespace is refused before any request.
-// Which registries Docker may reach is 0.3-d's.
+// It reaches only a registry of the listener's (pulls.go).
 func (s *scoped) distribution() error {
 	if err := s.image(s.req.Params["name"]); err != nil {
 		return refuse(http.StatusNotFound, "No such image: %s", s.req.Params["name"])
 	}
 
-	return nil
+	return s.registry(ReferenceRegistry(s.req.Params["name"]), "distribution.inspect")
 }
 
 // The streams whose body is an archive: one YorvoGate reads (image.load), or one that goes into the

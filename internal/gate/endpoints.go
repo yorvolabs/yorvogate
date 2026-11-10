@@ -112,7 +112,7 @@ var forScopes = map[string]descriptor{
 		"fromSrc": "importing (fromSrc) isn't allowed, only pulls", "repo": "importing (repo) isn't allowed, only pulls",
 		"message": "importing (message) isn't allowed, only pulls", "changes": "importing (changes) isn't allowed, only pulls",
 	}},
-	"image.search":    {rule: rule(allowed), query: freely("term", "limit", "filters")},
+	"image.search":    {rule: rule((*scoped).search), query: with(freely("limit", "filters"), "term")},
 	"image.save-many": {rule: rule((*scoped).saveMany), query: with(freely("platform"), "names"), many: "names"},
 	"image.load":      {rule: rule((*scoped).load), query: freely("quiet", "platform")},
 	"image.inspect":   {rule: rule((*scoped).inspectImage), query: freely("manifests", "platform")},

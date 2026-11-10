@@ -35,6 +35,8 @@ listeners:                              # at least one
       max_memory: 1073741824
       max_pids: 512
       protected_images: [registry.example.com/tenants/]
+    pulls:                              # the registries and platforms scopes' pulls may reach (below)
+      registries: [docker.io, registry.example.com]
 
   - name: sites                         # each scope on a socket of its own, instead of an address
     scope_sockets: /run/yorvogate/sites # <scope>.sock for each valid scope file
@@ -77,6 +79,22 @@ What a scope's containers may ask of the host. Whatever isn't listed is refused,
 
 A container's configuration is read field by field with Docker's own types: each field is either free (it has no power over the host or other scopes: the command, environment, user, health check, restart policy, CPU shares…), checked by a rule, or refused when set. A field a newer Docker adds is refused until YorvoGate is updated for it. Empty maps and lists ask for nothing, as Docker reads them, but for `MaskedPaths` and `ReadonlyPaths`, where an empty list unmasks `/proc`.
 
+## Pulls (scoped listeners)
+
+Which registries the daemon may reach for a scope, and which platforms a scope may pull. Only Docker Hub is allowed unless you list others.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `registries` | `[docker.io]` | The registries a scope's pulls, distribution inspections and searches may reach. Each is a host, with a port if it has one (`registry.example.com`, `registry.local:5000`, `10.0.0.5:5000`, `[::1]:5000`), matched exactly, in any case. There are no wildcards, schemes or paths. `docker.io` is also `index.docker.io` and `registry-1.docker.io` |
+| `platforms` | none | Platforms a pull may name besides the host's own, written as containerd writes them (`linux/arm64`, `linux/arm/v7`) |
+
+- **Which registry a request reaches is read as Docker reads it.** For a pull (`fromImage`) and a distribution inspection, the first part of a name with a `/` is a registry when it's `localhost`, has a `.` or a `:`, or isn't all lowercase. Anything else is on Docker Hub. For a search (`term`), only `localhost`, a `.` or a `:` make one. A request for a registry the listener doesn't list is refused before Docker is asked.
+- **Loopback, link-local and private addresses are refused unless listed**, as every registry is: `localhost`, `127.0.0.1`, `169.254.169.254` and `10.0.0.5:5000` each work only if they're in `registries`. YorvoGate doesn't resolve names: a listed host is trusted whatever it resolves to.
+- **List only a registry you trust with every scope's images.** On Docker's containerd image store, a pulled image is made of the blobs its manifest names, and Docker doesn't fetch a blob it already has. A registry that serves manifests naming blobs the puller can't read could give a scope another scope's layers. Docker Hub and ghcr.io refuse such manifests. A registry also decides where the daemon fetches blobs from (it may redirect them).
+- **A registry is listed for the whole listener, never for one scope.** A scope's `images` namespace on a registry the listener doesn't list (`ghcr.io/jane/`) doesn't allow that registry. `yorvogate check` gives a notice for each such scope.
+- **A pull's platform is the host's, or one listed.** The host's is Docker's own, from its version (`Os`, `Arch`). A `platform` is read with containerd's table (`linux/x86_64` is `linux/amd64`, `linux/aarch64` and `linux/arm64/v8` are `linux/arm64`, `linux/armhf` is `linux/arm/v7`). It's refused in uppercase, as an OS or architecture alone, or as anything else that isn't `os/arch` or `os/arch/variant`. On the classic image store, pulling another platform changes what a shared name runs for every scope. Docker's version gives no variant, so a 32-bit `arm` host is taken as `linux/arm/v7`: on an ARMv6 host, list `linux/arm/v6` to pull the host's own, and know that `linux/arm/v7` is allowed though the host can't run it. If Docker's own platform can't be read, a pull that names a platform is refused, saying why. One that names none isn't. The `platform` of a save, load, inspection, history or container create isn't checked: it chooses among what Docker already has, under names the scope may use.
+- **Only what the daemon fetches is covered.** A scope's builder fetches a `FROM` image over its own container's network, and any of its containers can reach whatever that network reaches. Restricting that is egress control: the networks you give scopes, and the host's firewall.
+
 ## What a scope may do
 
 | Endpoints | Allowed |
@@ -94,11 +112,11 @@ A container's configuration is read field by field with Docker's own types: each
 | Networks, volumes: prune | Only its own (its owner label is added to the filters) |
 | Volumes: create | A local volume of its own: its name and owner label, no driver options (with them, a local volume mounts any host path) |
 | Images: list | Without other scopes' images (any name in a protected namespace not its own) and without nameless leftovers |
-| Images: inspect, history, save, distribution | By name or ID, when the image has a name the scope may see (not in another's protected namespace). An image with no name left, such as the one a rebuild replaced, is no one's |
-| Images: pull | From a registry, by name, not into another's protected namespace; never an import (`fromSrc`) |
+| Images: inspect, history, save, distribution | By name or ID, when the image has a name the scope may see (not in another's protected namespace). An image with no name left, such as the one a rebuild replaced, is no one's. A distribution inspection reaches only a registry in [`pulls.registries`](#pulls-scoped-listeners) |
+| Images: pull | By name, from a registry in [`pulls.registries`](#pulls-scoped-listeners), of the host's platform or one in `pulls.platforms`, not into another's protected namespace; never an import (`fromSrc`) |
 | Images: tag, delete | Only names in its own image namespaces (its scope file's `images`): any other name may be another's to run |
 | Images: load | The archive is kept on disk (up to `load_limit`) while every name it gives, whichever image store Docker has, is checked: only names in its own namespaces. That's `manifest.json`'s tags and `repositories` (the classic store), and each image `index.json` lists, by its `io.containerd.image.name` or else its `org.opencontainers.image.ref.name` as it is, a bare one too (the containerd store). The archive must also hold every blob its `index.json` and `manifest.json` reach (nested indexes, manifests, configs, layers, attestations), each matching its digest and size: an archive that refers to content it doesn't hold is refused, naming the first digest. A pulled multi-platform image saved without `--platform` names platforms it lacks, so save it with `docker save --platform linux/<arch>`, or pull every platform first. Plain, gzip and bzip2 archives (xz and zstd are refused) |
-| Images: search | Yes |
+| Images: search | On a registry in [`pulls.registries`](#pulls-scoped-listeners) |
 | Everything else | No: push, prune, commit, import, build, events, auth, plugins, swarm, BuildKit sessions |
 
 **An image with no name is no one's.** Docker doesn't record who built or loaded an image, and a label on it is whatever its build or its registry put there, so YorvoGate knows an image's owner only by its names. A rebuild moves the name onto the new image, and the old one then has none: to keep it (to roll back to), tag it before rebuilding, while it still has its name (`docker image tag quire-sites/jane/web:1 quire-sites/jane/web:before-update`). By its ID, the scope doesn't see it once its last name is gone; a trusted listener does.

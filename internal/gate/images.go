@@ -118,8 +118,9 @@ func (s *scoped) ownsImageName(ref, what string) error {
 	return nil
 }
 
-// pull checks a pull: from a registry by name, and not into another scope's protected namespace. An
-// import (from a URL or an archive) is refused by its parameters (forScopes).
+// pull checks a pull: by name, not into another scope's protected namespace, from a registry of the
+// listener's, of the host's platform or one the listener lists. An import (from a URL or an archive)
+// is refused by its parameters (forScopes).
 func (s *scoped) pull() error {
 	// Docker reads an import's archive from the body; a pull has none.
 	if s.hasBody {
@@ -144,7 +145,11 @@ func (s *scoped) pull() error {
 		return refuse(http.StatusForbidden, "image.create: %v", err)
 	}
 
-	return nil
+	if err := s.registry(ReferenceRegistry(from), "image.create"); err != nil {
+		return err
+	}
+
+	return s.platform(s.query.Get("platform"))
 }
 
 // tag checks a tag: from an image it may read (the one checked, by its ID), into a name of its own.

@@ -93,6 +93,8 @@ type Listener struct {
 	// AllowPrivilegedBuilders (scoped) accepts a scope's builder whatever its configuration,
 	// privileged included: the scope is then root on the host. Never for tenants.
 	AllowPrivilegedBuilders bool `yaml:"allow_privileged_builders"`
+	// Pulls (scoped): the registries and platforms its scopes' pulls may reach.
+	Pulls Pulls `yaml:"pulls"`
 }
 
 // Containers is what a scoped listener lets its scopes' containers ask of the host. What isn't listed
@@ -332,12 +334,16 @@ func (l *Listener) check() error {
 				return fmt.Errorf("builder_apparmor_profiles: %q isn't an AppArmor profile's name", p)
 			}
 		}
+
+		if err := l.Pulls.check(); err != nil {
+			return fmt.Errorf("pulls: %w", err)
+		}
 	default:
 		return fmt.Errorf("mode: %q must be trusted or scoped", l.Mode)
 	}
 
-	if l.Mode == Trusted && (!l.Containers.empty() || len(l.BuilderAppArmorProfiles) > 0 || l.AllowPrivilegedBuilders) {
-		return errors.New("containers, builder_apparmor_profiles and allow_privileged_builders: only a scoped listener has them")
+	if l.Mode == Trusted && (!l.Containers.empty() || len(l.BuilderAppArmorProfiles) > 0 || l.AllowPrivilegedBuilders || !l.Pulls.empty()) {
+		return errors.New("containers, builder_apparmor_profiles, allow_privileged_builders and pulls: only a scoped listener has them")
 	}
 
 	return nil

@@ -327,3 +327,28 @@ func TestCheckFormatVersions(t *testing.T) {
 		t.Fatalf("version 2: %d %q", code, errs.String())
 	}
 }
+
+// A scope whose image namespaces are on a registry its listener doesn't list gets a notice: its
+// pulls from there are refused. It's no error: the scope still works.
+func TestCheckNamesRegistriesNotListed(t *testing.T) {
+	dir := t.TempDir()
+	scopes := filepath.Join(dir, "scopes")
+	_ = os.Mkdir(scopes, 0o700)
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	config := "upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: " + scopes + "%s}\n"
+	_ = os.WriteFile(configFile, []byte(strings.Replace(config, "%s", "", 1)), 0o600)
+	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"], "images": ["quire-sites/jane/", "ghcr.io/jane/", "ghcr.io/jane-tools/", "registry.local/jane/"]}`), 0o600)
+	_ = os.WriteFile(filepath.Join(scopes, "blog.json"), []byte(`{"token_sha256": "`+strings.Repeat("b", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "blog"}, "prefixes": ["blog-"], "images": ["quire-sites/blog/"]}`), 0o600)
+
+	var out, errs bytes.Buffer
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 || !strings.Contains(out.String(), "  notice: scope jane's images are on ghcr.io, registry.local, which pulls.registries doesn't list: its pulls from there are refused\n") || strings.Contains(out.String(), "blog's") {
+		t.Fatalf("%d %q %q", code, out.String(), errs.String())
+	}
+
+	_ = os.WriteFile(configFile, []byte(strings.Replace(config, "%s", ", pulls: {registries: [docker.io, ghcr.io, registry.local]}", 1)), 0o600)
+	out.Reset()
+
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 || strings.Contains(out.String(), "notice") {
+		t.Fatalf("every registry listed: %d %q %q", code, out.String(), errs.String())
+	}
+}

@@ -104,6 +104,13 @@ func TestTheSchemasRefuseMistakes(t *testing.T) {
 		"too little memory":     strings.Replace(base, "scopes: /etc/s", "scopes: /etc/s, containers: {max_memory: 1024}", 1),
 		"a tiny body limit":     "body_limit: 10\n" + base,
 		"a version not one":     "api: {max: latest}\n" + base,
+		"a registry's scheme":   strings.Replace(base, "scopes: /etc/s", "scopes: /etc/s, pulls: {registries: ['https://ghcr.io']}", 1),
+		"a registry's path":     strings.Replace(base, "scopes: /etc/s", "scopes: /etc/s, pulls: {registries: [ghcr.io/x]}", 1),
+		"a registry wildcard":   strings.Replace(base, "scopes: /etc/s", "scopes: /etc/s, pulls: {registries: ['*.example.com']}", 1),
+		"an OS alone":           strings.Replace(base, "scopes: /etc/s", "scopes: /etc/s, pulls: {platforms: [linux]}", 1),
+		"a platform's case":     strings.Replace(base, "scopes: /etc/s", "scopes: /etc/s, pulls: {platforms: [Linux/arm64]}", 1),
+		"an unknown pulls key":  strings.Replace(base, "scopes: /etc/s", "scopes: /etc/s, pulls: {mirrors: [x]}", 1),
+		"pulls on trusted":      strings.Replace(base, "mode: scoped, scopes: /etc/s", "mode: trusted, allow: {system: read}, pulls: {registries: [ghcr.io]}", 1),
 	} {
 		if cs.Validate(asJSON(t, content)) == nil {
 			t.Errorf("config, %s: accepted", name)

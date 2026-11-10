@@ -44,7 +44,8 @@
         "scopes": {"$ref": "#/$defs/absolute"},
         "containers": {"$ref": "#/$defs/containers"},
         "builder_apparmor_profiles": {"type": "array", "items": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"}},
-        "allow_privileged_builders": {"type": "boolean"}
+        "allow_privileged_builders": {"type": "boolean"},
+        "pulls": {"$ref": "#/$defs/pulls"}
       },
       "oneOf": [
         {"required": ["address"], "not": {"required": ["scope_sockets"]}},
@@ -53,7 +54,7 @@
       "if": {"properties": {"mode": {"const": "trusted"}}},
       "then": {
         "required": ["allow"],
-        "not": {"anyOf": [{"required": ["scopes"]}, {"required": ["containers"]}, {"required": ["builder_apparmor_profiles"]}, {"required": ["allow_privileged_builders"]}]}
+        "not": {"anyOf": [{"required": ["scopes"]}, {"required": ["containers"]}, {"required": ["builder_apparmor_profiles"]}, {"required": ["allow_privileged_builders"]}, {"required": ["pulls"]}]}
       },
       "else": {"required": ["scopes"], "not": {"required": ["allow"]}}
     },
@@ -71,6 +72,14 @@
         "max_memory": {"type": "integer", "anyOf": [{"const": 0}, {"minimum": 6291456}]},
         "max_pids": {"type": "integer", "minimum": 0},
         "protected_images": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._/-]{0,254}/$"}}
+      }
+    },
+    "pulls": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "registries": {"type": "array", "items": {"type": "string", "pattern": "^(\\[[0-9A-Fa-f:.]+\\]|[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?)*)(:[0-9]{1,5})?$"}},
+        "platforms": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9_.-]+/[a-z0-9_.-]+(/[a-z0-9_.-]+)?$"}}
       }
     },
     "names": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"}}
