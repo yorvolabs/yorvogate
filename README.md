@@ -59,6 +59,24 @@ cosign verify-blob SHA256SUMS --bundle SHA256SUMS.sigstore.json \
 sha256sum --check --ignore-missing SHA256SUMS
 ```
 
+**What the image was built from.** It carries its SBOM and build provenance. The signed index lists them by their digests, so the signature covers them. Read them by the image's digest, which the release notes give, after checking that digest's signature:
+
+```bash
+digest=sha256:…   # from the release notes
+cosign verify ghcr.io/yorvolabs/yorvogate@$digest \
+  --certificate-identity "https://github.com/yorvolabs/yorvogate/.github/workflows/release.yaml@refs/tags/v$version" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+docker buildx imagetools inspect ghcr.io/yorvolabs/yorvogate@$digest --format '{{json .Provenance}}' | jq 'map_values(.SLSA | {
+  builder: .runDetails.builder.id,
+  source: .buildDefinition.externalParameters.request.root.request.args."vcs:source",
+  revision: .buildDefinition.externalParameters.request.root.request.args."vcs:revision",
+  version: .buildDefinition.externalParameters.request.args."build-arg:VERSION"})'
+docker buildx imagetools inspect ghcr.io/yorvolabs/yorvogate@$digest --format '{{json .SBOM}}'
+```
+
+For each platform, `source` is `https://github.com/yorvolabs/yorvogate`, `revision` is the commit the tag names (`git rev-parse "v$version^{commit}"`), `version` is the version, and `builder` is a run of this repository's Actions. These are claims the release workflow signed: they're worth what the signature's identity check is worth (this workflow, at this tag), and they don't check the build independently. The reproducible binaries do that.
+
 The binaries are reproducible: built from the tag (`make dist VERSION=$version` in the development container), they have the same checksums.
 
 ## Configuration

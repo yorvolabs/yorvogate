@@ -6,6 +6,7 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ### Changed
 
+- **A release's image is tagged only once it's scanned and signed.** It's pushed by its digest, scanned with Trivy, and signed, and only then does its version name it. The tag is read back to check it names the signed digest. The Dockerfile's frontend, the SBOM generator and CI's shellcheck image are pinned by digest. The README shows how to read the image's SBOM and provenance once its signature checks out.
 - **Scopes' claims are decided over every scoped listener, as one folder.** Scoped listeners share one Docker, so a name belongs to the scope with the longest prefix it starts with whichever listener each scope is on; image namespaces and owner labels work the same way. `yorvogate check` and a running gate decide the same way, from one snapshot of every scope file, rebuilt every 2 seconds and on `SIGHUP`; a request reads no file.
 - **Breaking: of two scopes that collide, the one that held the claim keeps it; two new ones are both refused.** Files' modification times no longer decide which. `serve` starts with a collision, refusing the scopes in it, as it does within one listener.
 - **Breaking: a scope file that isn't valid keeps its claims** until it's removed: its names and image namespaces are no other scope's meanwhile. Until now they were its neighbour's at once.

@@ -4,7 +4,7 @@ name: Release
 # A version tag (v1.2.3) on main makes a release, once CI has passed on its commit:
 #   - the image, ghcr.io/yorvolabs/yorvogate:<version>, for x86_64 and arm64, with its SBOM and build
 #     provenance, scanned (no fixable high or critical flaw), and signed with Sigstore (keyless: the
-#     signature says this workflow made it, for this tag);
+#     signature says this workflow made it, for this tag), pushed by its digest and tagged only then;
 #   - the binaries for Linux (x86_64, arm64), the formats' JSON Schemas, the AppArmor profile for
 #     rootless BuildKit, their SHA256SUMS, and its signature (a Sigstore bundle);
 #   - a GitHub release with them, and the changelog's section for the version as its notes.
@@ -78,6 +78,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # By its digest only: the version names it once it's scanned and signed ("Tag the signed image")
       - name: Build and push the image
         id: image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -85,12 +86,12 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           pull: true
-          push: true
-          tags: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: VERSION=${{ steps.version.outputs.version }}
-          # How it was built, and what's in it, attached to the image
+          # How it was built, and what's in it, attached to the image. mode=max records every build
+          # arg in the provenance, which anyone can read: VERSION is the only one there may be.
           provenance: mode=max
-          sbom: true
+          sbom: generator=docker/buildkit-syft-scanner:stable-1@sha256:873a7458c3c8ac8e32c7b796c10e1600b07b963d2aa000a72a2d97aaaa2d6315
 
       - name: No known flaw with a fix in it
         # Before it's signed: an image that fails here never checks out. Signed in (a new package may
@@ -116,6 +117,17 @@ jobs:
 
       - name: Sign the image
         run: cosign sign --yes "$IMAGE@${{ steps.image.outputs.digest }}"
+
+      - name: Tag the signed image
+        # The version names exactly the image scanned and signed: tagged as it is (one source, so the
+        # index is copied unchanged), then read back. Another digest under the tag is a failed release.
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          docker buildx imagetools create --tag "$IMAGE:$VERSION" "$IMAGE@$DIGEST"
+          tagged=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest.Digest}}' | tr -d '"')
+          [ "$tagged" = "$DIGEST" ] || { echo "::error::$IMAGE:$VERSION is $tagged, not the signed $DIGEST."; exit 1; }
 
       - name: The binaries, their checksums, signed
         env:
