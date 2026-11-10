@@ -58,6 +58,10 @@ type docker struct {
 	// YorvoGate's own lookups, counted, and their paths as sent
 	lookups int
 	asked   []string
+	// Docker's architecture as its version gives it ("amd64" unless a test changes it), and a
+	// version lookup that fails
+	arch      string
+	noVersion bool
 }
 
 func (d *docker) apiVersion() string {
@@ -282,8 +286,24 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 	d.mu.Lock()
 	d.lookups++
 	d.asked = append(d.asked, r.URL.EscapedPath())
-	classic, otherDescriptor := d.classic, d.otherDescriptor
+	classic, otherDescriptor, arch, noVersion := d.classic, d.otherDescriptor, d.arch, d.noVersion
 	d.mu.Unlock()
+
+	if strings.HasSuffix(r.URL.Path, "/version") {
+		if noVersion {
+			http.Error(w, `{"message":"busy"}`, http.StatusInternalServerError)
+
+			return
+		}
+
+		if arch == "" {
+			arch = "amd64"
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"Os": "linux", "Arch": arch})
+
+		return
+	}
 
 	if m := imageLookup.FindStringSubmatch(r.URL.Path); m != nil {
 		img := findImage(m[1])
@@ -461,6 +481,13 @@ listeners:
     mode: scoped
     scopes: ` + scopes + `
     allow_privileged_builders: true
+  - name: registries
+    address: tcp://127.0.0.1:2379
+    mode: scoped
+    scopes: ` + scopes + `
+    pulls:
+      registries: [index.docker.io, GHCR.io, "registry.local:5000", "10.0.0.5:5000", "[::1]:5000", localhost]
+      platforms: [linux/arm64, linux/arm/v7]
 `))
 	if err != nil {
 		t.Fatal(err)

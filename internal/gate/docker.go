@@ -18,6 +18,7 @@ import (
 // only reads, and only what the decision needs.
 type Docker struct {
 	client *http.Client
+	host   hostPlatform
 }
 
 // NewDocker asks Docker through its unix socket.
@@ -156,6 +157,17 @@ func (d *Docker) Exec(ctx context.Context, version, id string) (*execInfo, error
 }
 
 func (d *Docker) get(ctx context.Context, version, path string, into any) (bool, error) {
+	found, err := d.fetch(ctx, version, path, into)
+	if found {
+		// The decision found an object: its time is remembered (refusals.go)
+		foundObject(ctx)
+	}
+
+	return found, err
+}
+
+// fetch reads one of Docker's answers; false when it's a 404.
+func (d *Docker) fetch(ctx context.Context, version, path string, into any) (bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/v"+version+path, nil)
 	if err != nil {
 		return false, err
@@ -177,9 +189,6 @@ func (d *Docker) get(ctx context.Context, version, path string, into any) (bool,
 	if res.StatusCode != http.StatusOK {
 		return false, fmt.Errorf("asking Docker %s: %s", path, res.Status)
 	}
-
-	// The decision found an object: its time is remembered (refusals.go)
-	foundObject(ctx)
 
 	if err := json.NewDecoder(io.LimitReader(res.Body, 16<<20)).Decode(into); err != nil {
 		return false, fmt.Errorf("the answer of Docker to %s: %w", path, err)
