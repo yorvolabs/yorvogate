@@ -208,10 +208,10 @@ What a scope's container leaves unset, Docker fills in from its own configuratio
 
 - **It writes the safe value into what it forwards.** A scope's container that doesn't say otherwise gets a private cgroup namespace (`CgroupnsMode: private`, whatever `default-cgroupns-mode` is), Docker's built-in seccomp profile (`seccomp=builtin`, whatever `seccomp-profile` is), and the default runtime YorvoGate last read and found safe. The IPC mode is left as asked: Docker's default is a private or shareable namespace, never the host's, and Compose's `ipc: service:x` needs the shareable one. A trusted listener's requests go to Docker as they came.
 - **It reads Docker's defaults** (`/info`) before it answers a scope, then every 60 seconds, and every 10 seconds while they're unsafe or couldn't be read. While they'd widen what a scope may do, every request on a scoped listener is refused (503), saying why:
-  - the kernel has no seccomp (Docker lists none), so even the built-in profile can't apply;
+  - the kernel has no seccomp (Docker lists none), so even the built-in profile can't apply, or Docker's own profile is `unconfined`: Docker reads a container's profile each time it starts, so a container created before YorvoGate wrote `seccomp=builtin` would start unconfined;
   - Docker has neither AppArmor nor SELinux. Set `daemon: {without_lsm: true}` to accept that: Docker Desktop, rootless Docker, and a host without either need it, while Ubuntu has AppArmor;
   - Docker's default runtime isn't `runc` and isn't in every scoped listener's `containers.runtimes`.
-- **It notes what changes nothing it checked**, in its log and in `yorvogate check --docker`: Docker's own seccomp profile unconfined or from a file (scopes' containers get the built-in one anyway), an AppArmor profile from a file, userns-remap, rootless Docker, `no-new-privileges` for every container, and a default cgroup namespace that's the host's (scopes' containers get a private one anyway).
+- **It notes what changes nothing it checked**, in its log and in `yorvogate check --docker`: Docker's own seccomp profile from a file (scopes' containers get the built-in one anyway), an AppArmor profile from a file, userns-remap, rootless Docker, `no-new-privileges` for every container, and a default cgroup namespace that's the host's (scopes' containers get a private one anyway).
 
 `yorvogate check --docker` reads Docker's defaults through `upstream`, prints what it found, and fails on what would make scoped listeners refuse. Without `--docker`, `check` doesn't connect to Docker.
 

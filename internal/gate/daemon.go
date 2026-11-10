@@ -17,8 +17,9 @@ import (
 // What a scope's container leaves unset, Docker fills from its own configuration. YorvoGate writes the
 // safe value into what it forwards where Docker lets it (a private cgroup namespace, Docker's built-in
 // seccomp profile, the default runtime it checked), and reads Docker's defaults for the rest: while
-// they would widen what a scope may do (no seccomp in the kernel, no AppArmor or SELinux, a default
-// runtime not allowed), or haven't been read, scoped listeners refuse every request.
+// they would widen what a scope may do (no seccomp in the kernel or an unconfined profile, no
+// AppArmor or SELinux, a default runtime not allowed), or haven't been read, scoped listeners refuse
+// every request.
 
 // How often Docker's defaults are read, and how soon again when they couldn't be
 const (
@@ -170,7 +171,9 @@ func judge(info dockerInfo, runtimeAllowed func(string) bool, noLSM bool) *daemo
 	case !ok:
 		state.unsafe = append(state.unsafe, "the kernel has no seccomp (Docker's info lists none), so no container has a seccomp profile")
 	case seccomp["profile"] == "unconfined":
-		state.notes = append(state.notes, "Docker's own seccomp profile is unconfined: scopes' containers get Docker's built-in one, which YorvoGate asks for")
+		// A profile is read at each start (seccomp_linux.go:50-53): a container created without
+		// "seccomp=builtin" (before YorvoGate wrote it) would start unconfined.
+		state.unsafe = append(state.unsafe, "Docker's own seccomp profile is unconfined, which a container created without seccomp=builtin gets each time it starts")
 	case seccomp["profile"] != "builtin":
 		state.notes = append(state.notes, fmt.Sprintf("Docker's own seccomp profile is %s: scopes' containers get Docker's built-in one, which YorvoGate asks for", seccomp["profile"]))
 	}

@@ -35,7 +35,7 @@ func TestJudgeDockersDefaults(t *testing.T) {
 		"Ubuntu's":                     {ubuntu, "runc", false, "", ""},
 		"SELinux instead of AppArmor":  {[]string{"name=selinux", "name=seccomp,profile=builtin", "name=cgroupns"}, "runc", false, "", ""},
 		"a default runtime listed":     {ubuntu, "runsc", false, "", ""},
-		"seccomp unconfined":           {[]string{"name=apparmor,profile=default", "name=seccomp,profile=unconfined", "name=cgroupns"}, "runc", false, "", "Docker's own seccomp profile is unconfined"},
+		"seccomp unconfined":           {[]string{"name=apparmor,profile=default", "name=seccomp,profile=unconfined", "name=cgroupns"}, "runc", false, "Docker's own seccomp profile is unconfined, which a container created without seccomp=builtin gets each time it starts", ""},
 		"a seccomp profile's path":     {[]string{"name=apparmor,profile=default", "name=seccomp,profile=/etc/docker/seccomp.json", "name=cgroupns"}, "runc", false, "", "Docker's own seccomp profile is /etc/docker/seccomp.json"},
 		"an AppArmor profile's path":   {[]string{"name=apparmor,profile=/etc/x", "name=seccomp,profile=builtin", "name=cgroupns"}, "runc", false, "", "Docker's AppArmor profile is /etc/x"},
 		"a host cgroup namespace":      {[]string{"name=apparmor,profile=default", "name=seccomp,profile=builtin"}, "runc", false, "", "Docker's default cgroup namespace is the host's"},

@@ -378,7 +378,7 @@ func TestCheckReadsDockersDefaults(t *testing.T) {
 	scopes := filepath.Join(dir, "scopes")
 	_ = os.Mkdir(scopes, 0o700)
 	socket := filepath.Join(dir, "docker.sock")
-	info := `{"SecurityOptions": ["name=apparmor,profile=default", "name=seccomp,profile=unconfined", "name=cgroupns"], "DefaultRuntime": "runc"}`
+	info := `{"SecurityOptions": ["name=apparmor,profile=default", "name=seccomp,profile=/etc/docker/seccomp.json", "name=cgroupns"], "DefaultRuntime": "runc"}`
 
 	listener, err := net.Listen("unix", socket)
 	if err != nil {
@@ -404,7 +404,7 @@ func TestCheckReadsDockersDefaults(t *testing.T) {
 	write("")
 
 	var out, errs bytes.Buffer
-	if code := run([]string{"check", "--config", configFile, "--docker"}, &out, &errs); code != 0 || !strings.Contains(out.String(), "Docker's defaults: ok\n  notice: Docker's own seccomp profile is unconfined") {
+	if code := run([]string{"check", "--config", configFile, "--docker"}, &out, &errs); code != 0 || !strings.Contains(out.String(), "Docker's defaults: ok\n  notice: Docker's own seccomp profile is /etc/docker/seccomp.json") {
 		t.Fatalf("safe, with a note: %d %q %q", code, out.String(), errs.String())
 	}
 
