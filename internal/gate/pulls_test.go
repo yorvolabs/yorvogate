@@ -252,3 +252,22 @@ func TestAPullsPlatformWithoutDockers(t *testing.T) {
 		t.Errorf("Docker's platform was read again (%d lookups more)", d.lookupCount()-lookups)
 	}
 }
+
+// A trusted listener's pull is Docker's to decide: any registry, any platform, as it was asked.
+func TestATrustedPullReachesDockerAsAsked(t *testing.T) {
+	d := startDocker(t)
+	server := gate(t, d, "images")
+
+	status, answer := send(t, server, "POST", "/v1.56/images/create?fromImage=localhost:5000/x&tag=1&platform=linux/arm64", "", nil)
+	if status != http.StatusOK {
+		t.Fatalf("%d %s", status, answer)
+	}
+
+	if got := d.last(); got.path != "/v1.56/images/create" || got.query != "fromImage=localhost:5000/x&tag=1&platform=linux/arm64" {
+		t.Errorf("Docker got %s ?%s", got.path, got.query)
+	}
+
+	if d.lookupCount() != 0 {
+		t.Errorf("Docker was asked %d times by the gate", d.lookupCount())
+	}
+}

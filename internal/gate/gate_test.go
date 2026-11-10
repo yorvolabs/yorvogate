@@ -488,6 +488,10 @@ listeners:
     pulls:
       registries: [index.docker.io, GHCR.io, "registry.local:5000", "10.0.0.5:5000", "[::1]:5000", localhost]
       platforms: [linux/arm64, linux/arm/v7]
+  - name: images
+    address: tcp://127.0.0.1:2380
+    mode: trusted
+    allow: {images: write}
 `))
 	if err != nil {
 		t.Fatal(err)
