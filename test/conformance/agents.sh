@@ -49,6 +49,7 @@ listeners:
     mode: scoped
     scopes: $dir/scopes
 EOF
+without_lsm "$dir/yorvogate.yaml"
 
 ${YORVOGATE:-/yorvogate/yorvogate} serve --config "$dir/yorvogate.yaml" 2> "$dir/yorvogate.log" &
 gate=$!

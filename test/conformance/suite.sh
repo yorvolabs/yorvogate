@@ -128,6 +128,7 @@ if [ "$listener" = sockets ]; then
       protected_images: [ygc-jane/, ygc-blog/]
 EOF
 fi
+without_lsm "$dir/yorvogate.yaml"
 
 ${YORVOGATE:-/yorvogate/yorvogate} serve --config "$dir/yorvogate.yaml" 2> "$dir/yorvogate.log" &
 gate=$!
@@ -180,6 +181,10 @@ blog=$(project blog)
 say "== What a tenant does works"
 works "jane: compose up (network, volume)" as jane docker compose -p ygc-jane -f "$jane" up -d
 works "blog: compose up" as blog docker compose -p ygc-blog -f "$blog" up -d
+# What Compose left unset, YorvoGate stated: a private cgroup namespace, Docker's built-in seccomp
+# profile, the default runtime
+stated=$(direct inspect ygc-jane-app-1 --format '{{.HostConfig.CgroupnsMode}} {{.HostConfig.Runtime}} {{json .HostConfig.SecurityOpt}}')
+case "$stated" in "private runc "*'"seccomp=builtin"'*) ok "jane: its container's cgroup namespace, runtime and seccomp profile, as YorvoGate stated them" ;; *) ko "jane: its container's stated defaults" "$stated" ;; esac
 works "jane: exec, writing to its volume" as jane docker compose -p ygc-jane -f "$jane" exec -T app sh -c 'echo kept > /data/x && cat /data/x'
 works "jane: exec -d" as jane docker compose -p ygc-jane -f "$jane" exec -d app true
 works "jane: logs" as jane docker compose -p ygc-jane -f "$jane" logs

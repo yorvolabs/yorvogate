@@ -72,6 +72,7 @@ sed -e "s|unix:///run/yorvogate/trusted/trusted.sock|unix://$dir/orchestrator.so
 	-e "s|scope_sockets: /run/yorvogate/sites|scope_sockets: $dir/sockets|" \
 	-e "s|scopes: /etc/yorvogate/sites|scopes: $dir/scopes|" \
 	"$(dirname "$0")/quire/yorvogate.yaml" > "$dir/yorvogate.yaml"
+without_lsm "$dir/yorvogate.yaml"
 if grep -v '^[[:space:]]*#' "$dir/yorvogate.yaml" | grep -q '/run/yorvogate\|/etc/yorvogate'; then
 	ko "Quire Server's configuration has a path this test doesn't move" "$(grep -v '^[[:space:]]*#' "$dir/yorvogate.yaml" | grep '/run/yorvogate\|/etc/yorvogate')"
 fi

@@ -20,6 +20,14 @@ ko() {
 # The real Docker, straight (to set up and to check what exists)
 direct() { env -u DOCKER_HOST -u DOCKER_CONFIG docker "$@"; }
 
+# without_lsm adds to a configuration that it accepts a Docker with neither AppArmor nor SELinux,
+# when this one has neither (Docker Desktop): a test's setting, never a host's.
+without_lsm() {
+	if ! direct info --format '{{json .SecurityOptions}}' | grep -q 'name=apparmor\|name=selinux'; then
+		printf 'daemon: {without_lsm: true}\n' >> "$1"
+	fi
+}
+
 # works NAME COMMAND…: it must succeed.
 works() {
 	name=$1

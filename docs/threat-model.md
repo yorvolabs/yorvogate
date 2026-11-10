@@ -6,7 +6,7 @@ What YorvoGate holds, so you can tell a vulnerability from a limit, and set it u
 
 - Whoever can write YorvoGate's configuration or a scoped listener's scope files: they decide the policy.
 - A client of a **trusted** listener: it gets what the listener's allowlist names. Access to Docker's containers or exec endpoints is root on the machine, so give a trusted listener only to a client that is root-equivalent anyway.
-- Docker, runc and the kernel.
+- Docker, runc and the kernel. Docker's own configuration only as YorvoGate checks it: what a scope's container leaves unset, YorvoGate writes itself (a private cgroup namespace, Docker's built-in seccomp profile, the default runtime it read), and while Docker's defaults would widen what a scope may do (no seccomp in the kernel, neither AppArmor nor SELinux, a default runtime not allowed), scoped listeners refuse every request. They're read every 60 seconds; what's checked that way changes only when Docker restarts (its LSM, its kernel's seccomp), and a default runtime reloaded in between doesn't reach scopes' containers, which get the one YorvoGate read. See [Docker's defaults](configuration.md#dockers-defaults).
 
 ## Who isn't
 
