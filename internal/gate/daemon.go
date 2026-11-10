@@ -43,6 +43,8 @@ type daemonState struct {
 	notes []string
 	// Docker's default runtime, as this read found it
 	runtime string
+	// Docker's default log driver: a container's log options are its own when it names none
+	logDriver string
 }
 
 // NewDefaults reads Docker's defaults for a configuration's scoped listeners: a default runtime is
@@ -69,6 +71,7 @@ func NewDefaults(c *config.Config) *Defaults {
 type dockerInfo struct {
 	SecurityOptions []string
 	DefaultRuntime  string
+	LoggingDriver   string
 }
 
 // Read reads Docker's defaults once. A read that fails is unsafe: what Docker would do isn't known.
@@ -159,7 +162,7 @@ func securityOption(o string) map[string]string {
 // judge tells, of Docker's defaults, what would widen what scopes may do, and what's only noted.
 // (moby 29.9.2, daemon/info.go:198-229, writes SecurityOptions.)
 func judge(info dockerInfo, runtimeAllowed func(string) bool, noLSM bool) *daemonState {
-	state := &daemonState{runtime: info.DefaultRuntime}
+	state := &daemonState{runtime: info.DefaultRuntime, logDriver: info.LoggingDriver}
 	options := map[string]map[string]string{}
 
 	for _, o := range info.SecurityOptions {

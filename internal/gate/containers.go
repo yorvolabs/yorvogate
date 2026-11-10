@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/docker/go-units"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
@@ -214,6 +215,41 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 	return json.Marshal(req)
 }
 
+// The log options every driver takes (moby 29.9.2, daemon/logger/factory.go:127-130 and the common
+// attributes), and those of the drivers every scope has (jsonfilelog.go:146-160, local/local.go:38-49).
+var (
+	commonLogOptions = []string{"mode", "max-buffer-size", "tag", "labels", "labels-regex", "env", "env-regex"}
+	ownLogOptions    = map[string][]string{"json-file": {"max-size", "max-file", "compress"}, "local": {"max-size", "max-file", "compress"}}
+)
+
+// logOptions checks a container's log options for the driver its logs go to: the one it names, or
+// Docker's default. json-file and local take their own; another driver the listener allows takes
+// only the values its log_options list, so a scope can't point Docker at an address of its choosing.
+// A non-blocking log's buffer is in Docker's own memory: it's bounded.
+func (s *scoped) logOptions(c container.LogConfig, add func(string, ...any)) {
+	driver := c.Type
+	if driver == "" && s.daemon != nil {
+		driver = s.daemon.logDriver
+	}
+
+	for option, value := range c.Config {
+		switch {
+		case driver == "none":
+			add("the log driver none takes no option (%s)", option)
+		case option == "max-buffer-size":
+			size, err := units.RAMInBytes(value)
+			if err != nil || size > s.policy.LogBuffer() {
+				add("the log option max-buffer-size %q isn't allowed (at most %d bytes: the buffer is in Docker's own memory)", value, s.policy.LogBuffer())
+			}
+		case slices.Contains(commonLogOptions, option), slices.Contains(ownLogOptions[driver], option):
+		case driver == "json-file" || driver == "local":
+			add("the log option %s isn't one of the %s driver's", option, driver)
+		case !slices.Contains(s.policy.LogOptions[option], value):
+			add("the log option %s=%q isn't one the listener allows for the %s driver", option, value, driver)
+		}
+	}
+}
+
 // safeDefaults writes into a container's host configuration what Docker would otherwise take from its
 // own: "default-cgroupns-mode" may be host, "seccomp-profile" unconfined, and "default-runtime" is
 // reloaded live. A container's "seccomp=builtin" is Docker's built-in profile whatever the daemon's
@@ -316,6 +352,8 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 
 	if h.LogConfig.Type != "" && !slices.Contains(append([]string{"json-file", "local", "none"}, p.LogDrivers...), h.LogConfig.Type) {
 		add("the log driver %q isn't allowed", h.LogConfig.Type)
+	} else {
+		s.logOptions(h.LogConfig, add)
 	}
 
 	if h.OomScoreAdj < 0 {

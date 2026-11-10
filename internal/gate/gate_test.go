@@ -77,6 +77,17 @@ type docker struct {
 	info map[string]any
 }
 
+// dockerInfoAnswer is Docker's whole /info, as Docker 29.9.2 on a hardened host answers it
+// (testdata/info.json: its fields as Docker writes them; its values a made-up host's).
+var dockerInfoAnswer = func() string {
+	b, err := os.ReadFile("testdata/info.json")
+	if err != nil {
+		panic(err)
+	}
+
+	return string(b)
+}()
+
 // readDefaults reads Docker's defaults for a configuration once, as serve does before its first answer.
 func readDefaults(c *config.Config) *Defaults {
 	d := NewDefaults(c)
@@ -90,6 +101,7 @@ func ubuntuInfo() map[string]any {
 	return map[string]any{
 		"SecurityOptions": []string{"name=apparmor,profile=default", "name=seccomp,profile=builtin", "name=cgroupns"},
 		"DefaultRuntime":  "runc",
+		"LoggingDriver":   "json-file",
 	}
 }
 
@@ -271,9 +283,18 @@ func startDocker(t testing.TB) *docker {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/version"):
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"Version": "30.0.0", "ApiVersion": d.apiVersion(), "MinAPIVersion": "1.40", "Os": "linux",
-				"Components": []map[string]any{{"Name": "Engine", "Version": "30.0.0", "Details": map[string]any{"ApiVersion": d.apiVersion(), "MinAPIVersion": "1.40", "Os": "linux"}}},
+				"Version": "30.0.0", "ApiVersion": d.apiVersion(), "MinAPIVersion": "1.40", "Os": "linux", "Arch": "amd64",
+				"KernelVersion": "7.1.0-14-generic", "GitCommit": "0367cbe", "GoVersion": "go1.27.3", "BuildTime": "2026-10-30T10:00:00Z",
+				"Platform": map[string]any{"Name": "Docker Engine - Community"},
+				"Components": []map[string]any{
+					{"Name": "Engine", "Version": "30.0.0", "Details": map[string]any{"ApiVersion": d.apiVersion(), "MinAPIVersion": "1.40", "Os": "linux", "Arch": "amd64", "KernelVersion": "7.1.0-14-generic", "GitCommit": "0367cbe", "Experimental": "false"}},
+					{"Name": "containerd", "Version": "v2.4.2", "Details": map[string]any{"GitCommit": "abc"}},
+					{"Name": "runc", "Version": "1.5.2", "Details": map[string]any{"GitCommit": "v1.5.2-0-g29dd3dc2"}},
+					{"Name": "docker-init", "Version": "0.19.0", "Details": map[string]any{"GitCommit": "de40ad0"}},
+				},
 			})
+		case strings.HasSuffix(r.URL.Path, "/info"):
+			_, _ = w.Write([]byte(dockerInfoAnswer))
 		case r.URL.Path == "/v1.56/images/json":
 			list := []map[string]any{}
 			for _, img := range images {
@@ -327,9 +348,26 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 		for _, c := range containers {
 			for _, l := range filters["label"] {
 				if k, v, _ := strings.Cut(l, "="); c.labels[k] == v {
-					list = append(list, map[string]any{"Id": c.id})
+					state := "running"
+					if c.id == janeAgent {
+						state = "exited"
+					}
+
+					list = append(list, map[string]any{"Id": c.id, "Names": []string{"/" + c.name}, "State": state})
 				}
 			}
+		}
+
+		_ = json.NewEncoder(w).Encode(list)
+
+		return
+	}
+
+	// The image list, as YorvoGate counts what a scope sees
+	if strings.HasSuffix(r.URL.Path, "/images/json") {
+		list := []map[string]any{}
+		for _, img := range images {
+			list = append(list, map[string]any{"Id": img.id, "RepoTags": img.tags})
 		}
 
 		_ = json.NewEncoder(w).Encode(list)
@@ -569,6 +607,17 @@ listeners:
     address: tcp://127.0.0.1:2380
     mode: trusted
     allow: {images: write}
+  - name: logs
+    address: tcp://127.0.0.1:2385
+    mode: scoped
+    scopes: ` + scopes + `
+    containers:
+      capabilities: [NET_BIND_SERVICE, CHOWN]
+      ulimits: [nofile]
+      log_drivers: [syslog]
+      log_options: {syslog-address: ["udp://10.0.0.9:514"], syslog-facility: [daemon, local0]}
+      max_log_buffer: 2097152
+      runtimes: [runsc]
   - name: egress
     address: tcp://127.0.0.1:2384
     mode: scoped
