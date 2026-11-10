@@ -34,6 +34,16 @@ const (
 	blogNet     = "eeee000000000000000000000000000000000000000000000000000000000005"
 	linkNet     = "ffff000000000000000000000000000000000000000000000000000000000006"
 	nestedPHP   = "9999000000000000000000000000000000000000000000000000000000000007"
+	// An agent of jane's on internal networks only: its own, and the shared one with the egress proxy
+	janeAgent    = "8888000000000000000000000000000000000000000000000000000000000008"
+	janeInternal = "7777000000000000000000000000000000000000000000000000000000000009"
+	egressNet    = "6666000000000000000000000000000000000000000000000000000000000010"
+)
+
+// Which networks are internal, by name, and each container's networks (the first its NetworkMode)
+var (
+	internalNetworks  = map[string]bool{"jane_internal": true, "quire-egress": true}
+	containerNetworks = map[string][]string{janePHP: {"jane_default"}, blogPHP: {"blog_default"}, nestedPHP: {"jane_default"}, janeAgent: {"jane_internal", "quire-egress"}}
 )
 
 // docker is a fake Docker on a unix socket. It knows two scopes' objects (jane's and blog's, by
@@ -133,12 +143,12 @@ var (
 	blog = map[string]string{"com.docker.compose.project": "blog"}
 
 	// jane-blog-php-1 starts with jane's prefix, but it's scope jane-blog's (a site nested in jane's name).
-	containers = []fakeObject{{janePHP, "jane-php-1", jane}, {blogPHP, "blog-php-1", blog}, {janeBuilder, "buildx_buildkit_jane0", nil}, {nestedPHP, "jane-blog-php-1", map[string]string{"com.docker.compose.project": "jane-blog"}}}
-	networks   = []fakeObject{{janeNet, "jane_default", jane}, {blogNet, "blog_default", blog}, {linkNet, "quire-link-jane", nil}}
+	containers = []fakeObject{{janePHP, "jane-php-1", jane}, {blogPHP, "blog-php-1", blog}, {janeBuilder, "buildx_buildkit_jane0", nil}, {nestedPHP, "jane-blog-php-1", map[string]string{"com.docker.compose.project": "jane-blog"}}, {janeAgent, "jane-agent-1", jane}}
+	networks   = []fakeObject{{janeNet, "jane_default", jane}, {blogNet, "blog_default", blog}, {linkNet, "quire-link-jane", nil}, {janeInternal, "jane_internal", jane}, {egressNet, "quire-egress", nil}}
 	// jane_stolen has jane's prefix but blog's label: a name doesn't make a volume jane's.
 	// jane_hostbind has jane's label but a local driver that binds the host root: owned, yet unsafe to mount.
 	volumes = []fakeObject{{"jane_data", "jane_data", jane}, {"blog_data", "blog_data", blog}, {"jane_stolen", "jane_stolen", blog}, {"jane_hostbind", "jane_hostbind", jane}, {"buildx_buildkit_jane0_state", "buildx_buildkit_jane0_state", nil}}
-	execs   = map[string]string{"exec-jane": janePHP, "exec-blog": blogPHP, "exec-dial": janeBuilder, "exec-dial-as-docker-says": janeBuilder, "exec-shell": janeBuilder, "exec-dial-root": janeBuilder}
+	execs   = map[string]string{"exec-agent": janeAgent, "exec-jane": janePHP, "exec-blog": blogPHP, "exec-dial": janeBuilder, "exec-dial-as-docker-says": janeBuilder, "exec-shell": janeBuilder, "exec-dial-root": janeBuilder}
 	// What each exec runs (the others, a shell)
 	execCommands = map[string]map[string]any{
 		"exec-dial": {"entrypoint": "buildctl", "arguments": []string{"dial-stdio"}},
@@ -308,6 +318,25 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 	classic, otherDescriptor, arch, noVersion, info := d.classic, d.otherDescriptor, d.arch, d.noVersion, d.info
 	d.mu.Unlock()
 
+	// A list of containers, by their label (YorvoGate's own, of a scope's running containers)
+	if strings.HasSuffix(r.URL.Path, "/containers/json") {
+		var filters map[string][]string
+		_ = json.Unmarshal([]byte(r.URL.Query().Get("filters")), &filters)
+
+		list := []map[string]any{}
+		for _, c := range containers {
+			for _, l := range filters["label"] {
+				if k, v, _ := strings.Cut(l, "="); c.labels[k] == v {
+					list = append(list, map[string]any{"Id": c.id})
+				}
+			}
+		}
+
+		_ = json.NewEncoder(w).Encode(list)
+
+		return
+	}
+
 	if strings.HasSuffix(r.URL.Path, "/info") {
 		if info == nil {
 			info = ubuntuInfo()
@@ -369,7 +398,18 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 	switch m[1] {
 	case "containers":
 		if o := find(containers, m[2]); o != nil {
-			answer = map[string]any{"Id": o.id, "Name": "/" + o.name, "Config": map[string]any{"Labels": o.labels}, "HostConfig": map[string]any{}}
+			host, settings := map[string]any{}, map[string]any{}
+			for i, n := range containerNetworks[o.id] {
+				if i == 0 {
+					host["NetworkMode"] = n
+				}
+
+				if net := find(networks, n); net != nil {
+					settings[n] = map[string]any{"NetworkID": net.id}
+				}
+			}
+
+			answer = map[string]any{"Id": o.id, "Name": "/" + o.name, "Config": map[string]any{"Labels": o.labels}, "HostConfig": host, "NetworkSettings": map[string]any{"Networks": settings}}
 			if o.id == janeBuilder {
 				d.mu.Lock()
 				answer = d.builder
@@ -378,7 +418,7 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 		}
 	case "networks":
 		if o := find(networks, m[2]); o != nil {
-			answer = map[string]any{"Id": o.id, "Name": o.name, "Labels": o.labels}
+			answer = map[string]any{"Id": o.id, "Name": o.name, "Labels": o.labels, "Internal": internalNetworks[o.name]}
 		}
 	case "volumes":
 		if o := find(volumes, m[2]); o != nil {
@@ -451,7 +491,7 @@ const scopeFile = `{
 	"owner": {"label": "com.docker.compose.project", "value": "jane"},
 	"prefixes": ["jane-", "jane_"],
 	"images": ["quire-sites/jane/"],
-	"networks": {"quire-link-jane": {"aliases": ["jane.example.quire.internal"], "addresses": ["10.213.0.4"]}},
+	"networks": {"quire-link-jane": {"aliases": ["jane.example.quire.internal"], "addresses": ["10.213.0.4"]}, "quire-egress": {}},
 	"builders": ["buildx_buildkit_jane0"],
 	"subnets": ["10.213.0.32/27", "10.213.0.64/27"]
 }`
@@ -529,6 +569,12 @@ listeners:
     address: tcp://127.0.0.1:2380
     mode: trusted
     allow: {images: write}
+  - name: egress
+    address: tcp://127.0.0.1:2384
+    mode: scoped
+    scopes: ` + scopes + `
+    builder_apparmor_profiles: [yorvogate-buildkit-rootless]
+    containers: {capabilities: [NET_BIND_SERVICE, CHOWN], ulimits: [nofile], egress: none}
 `))
 	if err != nil {
 		t.Fatal(err)

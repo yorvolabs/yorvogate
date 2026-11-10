@@ -232,7 +232,7 @@ func (s *scoped) container() (bool, error) {
 		return true, s.builder(c)
 	}
 
-	return false, nil
+	return false, s.runsInside(c, false)
 }
 
 // owned tells whether a container is the scope's own: by its label, and never one of its builders
@@ -269,7 +269,8 @@ func (s *scoped) exec() error {
 
 	switch {
 	case s.owned(c):
-		return nil
+		// An exec made before the scope was egress-free runs code in a container with a way out.
+		return s.runsInside(c, false)
 	case c != nil && s.scope.Builds(c.Name):
 		if s.req.Endpoint.Name != "exec.start" {
 			return refuse(http.StatusForbidden, "%s isn't allowed in builder %s: only buildctl dial-stdio, created and started", s.req.Endpoint.Name, c.Name)

@@ -108,6 +108,7 @@ func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 		"an unknown key":                 strings.Replace(valid, "upstream:", "upstreem: x\nupstream:", 1),
 		"an unknown listener key":        strings.Replace(valid, "mode: scoped", "mode: scoped\n    tls: true", 1),
 		"two documents":                  valid + "\n---\nupstream: unix:///x\n",
+		"an egress not none":             strings.Replace(valid, "mode: scoped", "mode: scoped\n    containers: {egress: all}", 1),
 		"upstream over TCP":              strings.Replace(valid, "unix:///var/run/docker.sock", "tcp://127.0.0.1:2375", 1),
 		"upstream not absolute":          strings.Replace(valid, "unix:///var/run/docker.sock", "unix://docker.sock", 1),
 		"an unknown mode":                strings.Replace(valid, "mode: scoped", "mode: open", 1),

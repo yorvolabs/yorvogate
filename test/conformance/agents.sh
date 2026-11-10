@@ -20,13 +20,16 @@ label=com.docker.compose.project
 ana() { direct exec ygca-agent-ana "$@"; }
 # Agent bob, straight through its socket (from here)
 bob() { env -u DOCKER_HOST -u DOCKER_CONFIG docker -H "unix://$sockets/ygca-bob.sock" "$@"; }
+# Agent eve, kept off the internet (egress: none), straight through its socket
+eve() { env -u DOCKER_HOST -u DOCKER_CONFIG docker -H "unix://$sockets/ygca-eve.sock" "$@"; }
 
 cleanup() {
-	for agent in ygca-ana ygca-bob; do
+	for agent in ygca-ana ygca-bob ygca-eve; do
 		direct ps -aq --filter "label=$label=$agent" | xargs -r docker rm -f >/dev/null 2>&1
 		direct network ls -q --filter "label=$label=$agent" | xargs -r docker network rm >/dev/null 2>&1
 	done
-	direct rm -f ygca-agent-ana ygca-agent-nogroup >/dev/null 2>&1
+	direct rm -f ygca-agent-ana ygca-agent-nogroup ygca-proxy >/dev/null 2>&1
+	direct network rm ygca-egress ygca-out >/dev/null 2>&1
 	[ -n "${gate:-}" ] && kill "$gate" 2>/dev/null
 }
 trap cleanup EXIT
@@ -38,6 +41,8 @@ for agent in ygca-ana ygca-bob; do
 	printf '{"owner": {"label": "%s", "value": "%s"}, "prefixes": ["%s-", "%s_"], "images": ["agents/%s/"]}\n' \
 		"$label" "$agent" "$agent" "$agent" "$agent" > "$dir/scopes/$agent.json"
 done
+# Eve: no way out but the proxy on the shared internal network ygca-egress (ygca-out has one)
+printf '{"owner": {"label": "%s", "value": "ygca-eve"}, "prefixes": ["ygca-eve-", "ygca-eve_"], "networks": {"ygca-egress": {}, "ygca-out": {}}, "egress": "none"}\n' "$label" > "$dir/scopes/ygca-eve.json"
 chmod 600 "$dir/scopes/"*.json
 
 cat > "$dir/yorvogate.yaml" <<EOF
@@ -54,7 +59,7 @@ without_lsm "$dir/yorvogate.yaml"
 ${YORVOGATE:-/yorvogate/yorvogate} serve --config "$dir/yorvogate.yaml" 2> "$dir/yorvogate.log" &
 gate=$!
 for _ in $(seq 20); do
-	[ -S "$sockets/ygca-ana.sock" ] && [ -S "$sockets/ygca-bob.sock" ] && break
+	[ -S "$sockets/ygca-ana.sock" ] && [ -S "$sockets/ygca-bob.sock" ] && [ -S "$sockets/ygca-eve.sock" ] && break
 	sleep 0.5
 done
 
@@ -98,6 +103,26 @@ refused "remove bob's container" "No such container" ana docker rm ygca-bob-web
 ana docker rm -f ygca-bob-web >/dev/null 2>&1
 if [ "$(direct inspect -f '{{.State.Running}}' ygca-bob-web 2>&1)" = true ]; then ok "rm -f of bob's container: still running"; else ko "rm -f of bob's container" "$(direct ps -a --filter name=ygca-bob 2>&1)"; fi
 refused "its own agent container (the host's)" "No such container" ana docker container inspect ygca-agent-ana
+
+say "== An agent kept off the internet (egress: none), its way out a proxy"
+# The orchestrator's: a shared internal network with the proxy on it, the proxy's own way out, and
+# a shared network with one
+direct network create --internal ygca-egress >/dev/null
+direct network create ygca-out >/dev/null
+direct image inspect busybox:1.37 >/dev/null 2>&1 || direct pull -q busybox:1.37 >/dev/null
+direct run -d --name ygca-proxy --network ygca-egress busybox:1.37 sh -c 'mkdir -p /www && echo ok > /www/ok && exec httpd -f -p 8080 -h /www' >/dev/null
+direct network connect bridge ygca-proxy
+if [ "$(direct inspect -f '{{.State.Running}}' ygca-proxy 2>&1)" != true ]; then ko "the orchestrator's proxy runs" "$(direct logs ygca-proxy 2>&1)"; fi
+works "eve: an internal network of its own" eve network create --internal --label "$label=ygca-eve" ygca-eve-net
+refused "eve: a network with a way out" "may create only internal networks (egress: none)" eve network create --label "$label=ygca-eve" ygca-eve-out
+works "eve: a container on its internal network" eve run -d --name ygca-eve-web --label "$label=ygca-eve" --network ygca-eve-net alpine:3.22 sleep 600
+refused "eve: a container on a shared network with a way out" "isn't internal (egress: none)" eve run -d --name ygca-eve-x --label "$label=ygca-eve" --network ygca-out alpine:3.22 sleep 600
+works "eve: it joins the proxy's network" eve network connect ygca-egress ygca-eve-web
+refused "eve: it joins a shared network with a way out" "isn't internal (egress: none)" eve network connect ygca-out ygca-eve-web
+if eve exec ygca-eve-web wget -q -T 3 -O- http://1.1.1.1 >/dev/null 2>&1; then ko "eve: no way out to an outside address"; else ok "eve: no way out to an outside address"; fi
+if eve exec ygca-eve-web timeout 5 nslookup example.com >/dev/null 2>&1; then ko "eve: an outside name doesn't resolve"; else ok "eve: an outside name doesn't resolve"; fi
+if [ "$(eve exec ygca-eve-web wget -q -T 5 -O- http://ygca-proxy:8080/ok 2>&1)" = ok ]; then ok "eve: it reaches the proxy"; else ko "eve: it reaches the proxy" "$(eve exec ygca-eve-web wget -T 5 -O- http://ygca-proxy:8080/ok 2>&1)"; fi
+works "bob: a network with a way out (bob isn't egress-free)" bob network create --label "$label=ygca-bob" ygca-bob-out
 
 say "== The socket is the agent's only"
 direct run -d --name ygca-agent-nogroup --user 1000:1000 -e HOME=/tmp \

@@ -111,7 +111,7 @@ The agent's user must not be in the `docker` group, nor able to read `/var/run/d
 
 ## What it doesn't cover
 
-- **The network.** An agent's containers reach whatever its networks reach, the internet included. Limiting that is planned (egress per scope); until then, give its containers `internal` networks or `none` yourself.
+- **The network, unless you say so.** An agent's containers reach whatever its networks reach, the internet included. Give its scope `"egress": "none"` (or its listener `containers.egress: none`): its containers and builders then join only internal networks ([egress](configuration.md#egress)). For a way out, run a proxy on a shared internal network its scope names (`"networks": {"agent-egress-ana": {}}`) and on a network of its own: the agent reaches only the proxy, and **the proxy's allowlist is the agent's egress policy**. Its Compose file names that network as external, and its own networks as `internal: true`. Its builder, if it has one, fetches through the proxy too (BuildKit's `HTTP_PROXY`). Turning `egress: none` on for an agent that's running means disconnecting or recreating its containers, which `yorvogate check --docker` lists.
 - **Builds.** A scope has no `docker build` on Docker's own builder. An agent that builds needs a [builder](configuration.md#builders) of its own.
 - **The agent itself.** YorvoGate limits what the agent can ask of Docker, not what it can do with what it's allowed: run code in its containers, use their network, fill its memory limits. See the [threat model](threat-model.md).
 

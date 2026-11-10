@@ -53,6 +53,10 @@ type Scope struct {
 	// Subnets, when set, are where its networks' addresses must be: each network it creates names
 	// its subnet, inside one of these.
 	Subnets []string `json:"subnets,omitempty"`
+	// Egress "none" keeps its containers off every network with a way out: each network they join,
+	// its own or shared, must be internal, and so must its builders'. Its listener may require it of
+	// every scope (containers.egress).
+	Egress string `json:"egress,omitempty"`
 
 	subnets []netip.Prefix
 	// Every scope's claims, on every listener, as the registry resolved them with it: the names,
@@ -362,6 +366,8 @@ func (s *Scope) check(tokenless bool) error {
 		return errors.New("owner.value: only letters, digits, _ . and - are allowed in it")
 	case len(s.Prefixes) == 0:
 		return errors.New("prefixes: at least one")
+	case s.Egress != "" && s.Egress != "none":
+		return fmt.Errorf("egress: %q isn't one (only none, or leave it out)", s.Egress)
 	}
 
 	for _, i := range s.Images {

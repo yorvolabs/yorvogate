@@ -112,6 +112,7 @@ func TestTheSchemasRefuseMistakes(t *testing.T) {
 		"an unknown pulls key":   strings.Replace(base, "scopes: /etc/s", "scopes: /etc/s, pulls: {mirrors: [x]}", 1),
 		"pulls on trusted":       strings.Replace(base, "mode: scoped, scopes: /etc/s", "mode: trusted, allow: {system: read}, pulls: {registries: [ghcr.io]}", 1),
 		"an unknown daemon key":  "daemon: {seccomp: off}\n" + base,
+		"a listener's egress":    strings.Replace(base, "scopes: /etc/s", "scopes: /etc/s, containers: {egress: all}", 1),
 		"without_lsm not a bool": "daemon: {without_lsm: yes please}\n" + base,
 	} {
 		if cs.Validate(asJSON(t, content)) == nil {
@@ -136,6 +137,7 @@ func TestTheSchemasRefuseMistakes(t *testing.T) {
 		"an image not a prefix":   strings.Replace(jane, `"prefixes"`, `"images": ["quire-sites/jane"], "prefixes"`, 1),
 		"an address not one":      strings.Replace(jane, `"prefixes"`, `"networks": {"link": {"addresses": ["10.0.0.0/8"]}}, "prefixes"`, 1),
 		"a network key unknown":   strings.Replace(jane, `"prefixes"`, `"networks": {"link": {"mac": "x"}}, "prefixes"`, 1),
+		"an egress not none":      strings.Replace(jane, `"prefixes"`, `"egress": "proxy", "prefixes"`, 1),
 	} {
 		if ss.Validate(asJSON(t, content)) == nil {
 			t.Errorf("scope, %s: accepted", name)

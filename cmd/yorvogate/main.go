@@ -207,6 +207,10 @@ func check(path string, docker bool, stdout io.Writer) error {
 		for _, n := range notes {
 			fmt.Fprintf(stdout, "  notice: %s\n", n)
 		}
+
+		for _, warn := range egressLeaks(c, registry) {
+			fmt.Fprintf(stdout, "  warning: %s\n", warn)
+		}
 	}
 
 	if len(refused) == 1 {
@@ -216,6 +220,42 @@ func check(path string, docker bool, stdout io.Writer) error {
 	}
 
 	return nil
+}
+
+// egressLeaks names, for each egress-free scope, its running containers on a network that isn't
+// internal: they keep their way out until they're disconnected or recreated.
+func egressLeaks(c *config.Config, registry *scope.Registry) []string {
+	docker := gate.NewDocker(c.UpstreamSocket())
+
+	var warnings []string
+
+	for _, l := range c.Listeners {
+		if l.Mode != config.Scoped {
+			continue
+		}
+
+		store := registry.Store(l.Name)
+		names, _, err := store.Scopes()
+		if err != nil {
+			continue
+		}
+
+		for _, name := range names {
+			s, err := store.Get(name)
+			if err != nil || s == nil || (s.Egress != "none" && l.Containers.Egress != "none") {
+				continue
+			}
+
+			leaks, err := gate.EgressLeaks(context.Background(), docker, config.Lowest.String(), s.Owner.Key, s.Owner.Value)
+			if err != nil {
+				warnings = append(warnings, fmt.Sprintf("scope %s (egress: none): its running containers couldn't be checked: %v", name, err))
+			} else if len(leaks) > 0 {
+				warnings = append(warnings, fmt.Sprintf("scope %s (egress: none) has running containers on a network that isn't internal: %s; disconnect or recreate them", name, strings.Join(leaks, ", ")))
+			}
+		}
+	}
+
+	return warnings
 }
 
 // unlistedRegistries names each scope whose image namespaces are on a registry its listener's pulls
@@ -304,7 +344,8 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	}
 
 	reported := map[string]string{}
-	report(c, registry, reported, log)
+	docker := gate.NewDocker(c.UpstreamSocket())
+	report(c, registry, reported, docker, log)
 
 	// SIGHUP rescans the scope folders; it's taken before any socket is made, so it never stops the
 	// process.
@@ -403,12 +444,12 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		case err := <-failed:
 			return err
 		case <-hup:
-			scan(registry, bound, tokens, reported, c, log)
+			scan(registry, bound, tokens, reported, docker, c, log)
 		case <-ticker.C:
-			scan(registry, bound, tokens, reported, c, log)
+			scan(registry, bound, tokens, reported, docker, c, log)
 		case <-registry.Requests():
 			// A scope-status request waits for a scope file just written or removed
-			scan(registry, bound, tokens, reported, c, log)
+			scan(registry, bound, tokens, reported, docker, c, log)
 		}
 
 		for _, s := range bound {
@@ -425,12 +466,12 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 // brings each socket-bound listener's sockets in line with the files, then publishes the snapshot to
 // the scope-status read. What fails is logged and tried again at the next scan: one scope's socket
 // doesn't stop the others'.
-func scan(registry *scope.Registry, bound []*gate.Sockets, tokens []*gate.Gate, reported map[string]string, c *config.Config, log *slog.Logger) {
+func scan(registry *scope.Registry, bound []*gate.Sockets, tokens []*gate.Gate, reported map[string]string, docker *gate.Docker, c *config.Config, log *slog.Logger) {
 	if err := registry.Reload(); err != nil {
 		log.Error("scope files", "error", err)
 	}
 
-	report(c, registry, reported, log)
+	report(c, registry, reported, docker, log)
 
 	for _, g := range tokens {
 		g.Revoke()
@@ -447,8 +488,45 @@ func scan(registry *scope.Registry, bound []*gate.Sockets, tokens []*gate.Gate, 
 
 // report logs, once each, what the last reload refused on token listeners (socket-bound listeners
 // log theirs as they close the sockets) and what isn't held across a restart.
-func report(c *config.Config, registry *scope.Registry, reported map[string]string, log *slog.Logger) {
+func report(c *config.Config, registry *scope.Registry, reported map[string]string, docker *gate.Docker, log *slog.Logger) {
 	now := map[string]string{}
+
+	// A scope that has just become egress-free: its running containers on a network that isn't
+	// internal keep their way out until they're disconnected or recreated.
+	for _, l := range c.Listeners {
+		if l.Mode != config.Scoped {
+			continue
+		}
+
+		store := registry.Store(l.Name)
+		names, _, err := store.Scopes()
+		if err != nil {
+			continue
+		}
+
+		for _, name := range names {
+			s, err := store.Get(name)
+			if err != nil || s == nil || (s.Egress != "none" && l.Containers.Egress != "none") {
+				continue
+			}
+
+			key := "egress/" + l.Name + "/" + name
+			now[key] = "none"
+
+			if reported[key] == "none" || docker == nil {
+				continue
+			}
+
+			leaks, err := gate.EgressLeaks(context.Background(), docker, config.Lowest.String(), s.Owner.Key, s.Owner.Value)
+			if err != nil {
+				log.Warn("egress: none", "listener", l.Name, "scope", name, "warning", "its running containers couldn't be checked: "+err.Error())
+			}
+
+			for _, leak := range leaks {
+				log.Warn("egress: none", "listener", l.Name, "scope", name, "warning", "a running container is on a network that isn't internal, and keeps its way out until it's disconnected or recreated", "container", leak)
+			}
+		}
+	}
 
 	for _, l := range c.Listeners {
 		if l.Mode != config.Scoped || l.SocketBound() {
@@ -478,7 +556,7 @@ func report(c *config.Config, registry *scope.Registry, reported map[string]stri
 	}
 
 	for key, why := range now {
-		if reported[key] == why {
+		if reported[key] == why || strings.HasPrefix(key, "egress/") {
 			continue
 		}
 
