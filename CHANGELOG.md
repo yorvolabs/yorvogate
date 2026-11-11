@@ -13,6 +13,10 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 - **A trusted mTLS listener answers an expired client certificate with 401 only**, whatever the request asks for, before reading its path.
 
+### Fixed
+
+- **`docker attach` over a WebSocket works through a scoped listener.** Its handshake's `Sec-WebSocket-Key`, `Sec-WebSocket-Version` and `Sec-WebSocket-Protocol` are forwarded on `container.attach-websocket` (and only there); without them Docker refused the handshake. Found by the differential suite's run against a real Docker.
+
 ## [0.3.0-rc.2] - 2026-11-11
 
 A second release candidate of 0.3.0: rc.1 with TLS and mTLS listeners, built with Go 1.27.4. Use it instead of rc.1: rc.1's Go has a flaw by which a client can crash the gate's HTTP server (GO-2026-6859). It isn't for production: 0.3.0 still adds several tokens per scope with expiry, peer credentials on unix listeners, a tool for new Docker API versions, CodeQL with a parser-differential suite, and agent escape scenarios in CI. A TCP listener off loopback now needs mTLS: check your configuration with `yorvogate check --docker` before you try it.
