@@ -34,6 +34,7 @@ docker compose -f compose.dev.yaml run --rm go make build && test/conformance/ru
 - **Fail-closed.** What isn't named is refused, at every level: an endpoint, a field, a value.
 - **A refusal that says why**, as a client will read it: `yorvogate: <endpoint>: <what> isn't allowed (<why>)`.
 - **The docs** (`docs/configuration.md`, `docs/threat-model.md`, the README) when what YorvoGate allows, refuses or reads changes.
+- **CodeQL's findings answered.** A pull request's CodeQL job fails on a finding at error severity: fix it. An alert that isn't a defect may be dismissed, but only with its reason written in the dismissal (why it can't happen, or what makes it safe), and never by the author of the pull request that raised it.
 
 ## A new Docker API version
 

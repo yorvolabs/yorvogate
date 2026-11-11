@@ -1,0 +1,67 @@
+---
+name: CodeQL
+
+# CodeQL's security-extended queries over YorvoGate's Go, on every pull request, on main, and weekly
+# (new queries come without a change). It builds what "make build" builds, with the Go of go.mod. A
+# finding at error severity fails the job; the others are alerts to read.
+on:
+  push:
+    branches:
+      - main
+  pull_request: ~
+  schedule:
+    - cron: '41 4 * * 1'
+  workflow_dispatch: ~
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: CodeQL (Go)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go (go.mod's)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: go
+          build-mode: manual
+          queries: security-extended
+
+      - name: Build
+        run: CGO_ENABLED=0 go build -trimpath ./...
+
+      - name: Analyze
+        id: analyze
+        uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:go
+          output: sarif
+
+      - name: No finding at error severity
+        run: |
+          errors=$(jq '[.runs[].results[] | select(.level == "error")] | length' sarif/*.sarif)
+          jq -r '.runs[].results[] | select(.level == "error") | "\(.ruleId): \(.message.text) (\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine))"' sarif/*.sarif
+          if [ "$errors" -ne 0 ]; then
+            echo "::error title=CodeQL::$errors finding(s) at error severity"
+            exit 1
+          fi
