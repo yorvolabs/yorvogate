@@ -4,6 +4,12 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
+## [Unreleased]
+
+### Changed
+
+- **Built with Go 1.27.4.**
+
 ## [0.3.0-rc.1] - 2026-11-10
 
 A release candidate of 0.3.0, to try its release workflow end to end and the 0.3 changes so far. It isn't for production: 0.3.0 still adds TLS and several tokens per scope, a tool for new Docker API versions, CodeQL with a parser-differential suite, and agent escape scenarios in CI. Several changes below are breaking: check your configuration with `yorvogate check --docker` before you try it.
