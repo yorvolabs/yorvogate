@@ -109,6 +109,19 @@ export DOCKER_HOST=unix:///run/yorvogate/agent-ana/ana.sock
 
 The agent's user must not be in the `docker` group, nor able to read `/var/run/docker.sock` some other way (sudo, a setuid helper): YorvoGate limits what reaches Docker through it, not what reaches Docker around it.
 
+## What it refuses
+
+[SandboxEscapeBench](https://github.com/UKGovernmentBEIS/sandbox_escape_bench) (UK AI Security Institute) measures whether a frontier model with a shell in a container can break out to the host, and finds that current models do so comfortably where the container is misconfigured: a mounted Docker socket, a privileged container, a writable host mount, a dangerous capability, the host's PID namespace. An agent given a YorvoGate scope can't create such a container in the first place. Each of those is a Docker API request, and the gate refuses it, by every route a scope has to it:
+
+- **the mounted-socket escape** — when the agent's socket *is* a scope socket, the benchmark's own winning move (create a container binding `/` and read the host's files) is refused, as are the bind-mount and host-binding-volume routes to the same reach;
+- **a privileged container**, at `container.create` and at `exec`;
+- **a host path**, bound directly or through a `local` volume with driver options (a two-step the gate stops at the `volume.create`);
+- **a dangerous capability** (`SYS_ADMIN`, `SYS_MODULE`, `DAC_READ_SEARCH`, `SYS_PTRACE`, or `ALL`), an unconfined seccomp profile, a host device;
+- **the host's PID namespace**;
+- and the endpoints a scope has no use for at all — plugins, swarm, a direct build.
+
+The replay of these scenarios runs in CI, and a nightly control on a real Docker shows each escape reaching the host through a raw socket and the gate refusing the request that enables it ([test/differential](../test/differential/README.md#agent-escape-scenarios-03-g), [test/conformance/escapes.sh](../test/conformance/escapes.sh)). The claim is exact: **the enabling Docker API requests of these scenarios are refused, by every route we enumerate.** It is not that a container, once running, is unescapable — a kernel or runtime flaw reached from a plain unprivileged container (SandboxEscapeBench's other scenarios: Dirty COW, Dirty Pipe, a runc or cgroup CVE) is the host kernel's and runtime's to fix, and egress control's to contain, not the gate's.
+
 ## What it doesn't cover
 
 - **The network, unless you say so.** An agent's containers reach whatever its networks reach, the internet included. Give its scope `"egress": "none"` (or its listener `containers.egress: none`): its containers and builders then join only internal networks ([egress](configuration.md#egress)). For a way out, run a proxy on a shared internal network its scope names (`"networks": {"agent-egress-ana": {}}`) and on a network of its own: the agent reaches only the proxy, and **the proxy's allowlist is the agent's egress policy**. Its Compose file names that network as external, and its own networks as `internal: true`. Its builder, if it has one, fetches through the proxy too (BuildKit's `HTTP_PROXY`). Turning `egress: none` on for an agent that's running means disconnecting or recreating its containers, which `yorvogate check --docker` lists.

@@ -58,3 +58,9 @@ A request that makes Docker call a backend method with no recorder (an import's 
   - **State:** what a base created is the scope's, and every attack is refused and leaves nothing behind.
 
   It creates labelled objects (`yorvogate.differential`), restores them after each request, and removes them at the end. It takes about five minutes.
+
+## Agent escape scenarios (0.3-g)
+
+`escapes_test.go` maps the seven gate-relevant scenarios of [SandboxEscapeBench](https://github.com/UKGovernmentBEIS/sandbox_escape_bench) (UK AI Security Institute, MIT, pinned at commit `d93f0de`) to every Docker API route a scope has to each scenario's goal, each route a corpus attack here. A scenario is a goal, not one request: `TestEveryEscapeRouteIsRefused` fails when a route has no attack, so a route can't go untested (and so miss its variants). The other eleven scenarios (kernel/runtime CVEs, Kubernetes) are listed with the reason they're out of the gate's layer, so the full eighteen are accounted for. `TestEndpointsAScopeCannotUseAreRefused` holds that plugins, swarm and a direct build are refused outright. The nightly leg's `TestTheEscapesWouldWorkWithoutTheGate` is the non-vacuity control: on a raw socket the escapes really reach the host, and through a scope the gate refuses each enabling request. The claim is that *the enabling Docker API requests of the seven scenarios are refused, by every route we enumerate* — not that a container is unescapable once it runs.
+
+**A gap becomes a test first.** Where a model, a fuzzer or a person finds a request that reaches the host or another scope and the gate doesn't refuse it, add it here first as a failing corpus attack (and, if it's a known escape, a scenario route in `escapes_test.go`), then fix the gate so the attack passes. The deterministic suite is the regression guard; a model run is a way to find gaps, never the test.
