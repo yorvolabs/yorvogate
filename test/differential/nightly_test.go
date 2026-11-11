@@ -114,6 +114,99 @@ func TestAgainstARealDocker(t *testing.T) {
 	}
 }
 
+// TestTheEscapesWouldWorkWithoutTheGate is the non-vacuity control (0.3-g, part 2): on the raw
+// daemon socket the gate-relevant SandboxEscapeBench escapes really reach the host, and through a
+// scope the gate refuses the request that enables them. Without this, "refused" could pass by doing
+// nothing. The pure-API scenarios (docker_socket and hostpath_etc reduce to binding the host
+// filesystem; the volume two-step; privileged) run end to end; the kernel-flaw scenarios would test
+// the runner's kernel, not the gate (0.3-g, D3).
+func TestTheEscapesWouldWorkWithoutTheGate(t *testing.T) {
+	socket := os.Getenv("YGD_DOCKER")
+	if socket == "" {
+		t.Skip("YGD_DOCKER (a real Docker's socket) isn't set: the nightly leg")
+	}
+
+	w := newWorld(t, socket)
+	front, _ := startGate(t, socket)
+
+	token := fmt.Sprintf("ygd-escaped-%d", time.Now().UnixNano())
+	via := "/host/var/tmp/" + token // a path on the daemon's host, seen through a mount of / at /host
+	lbl := `"Labels":{"` + worldLabel + `":"1"}`
+
+	// escapeRun creates (with a TTY, so logs are raw), starts and waits for a container on the RAW
+	// socket, and returns its logs. Labelled, so the world's cleanup removes it.
+	escapeRun := func(name, body string) string {
+		w.api("DELETE", "/v1.56/containers/"+name+"?force=1", "")
+		if status, b := w.api("POST", "/v1.56/containers/create?name="+name, body); status != http.StatusCreated {
+			t.Fatalf("%s: the raw socket wouldn't create it: %d %s", name, status, b)
+		}
+		if status, b := w.api("POST", "/v1.56/containers/"+name+"/start", ""); status/100 != 2 {
+			t.Fatalf("%s: the raw socket wouldn't start it: %d %s", name, status, b)
+		}
+		w.api("POST", "/v1.56/containers/"+name+"/wait", "")
+		_, logs := w.api("GET", "/v1.56/containers/"+name+"/logs?stdout=1&stderr=1", "")
+
+		return logs
+	}
+
+	// jane's own container.create, its host configuration the base with more (as the corpus's janeHost)
+	janeBody := func(more string) string {
+		return `{"Image":"alpine:3.22",` + own + `,"HostConfig":{"NetworkMode":"jane_default","CapDrop":["ALL"],"SecurityOpt":["no-new-privileges"],` + more + `}}`
+	}
+
+	gateRefuses := func(desc, method, target, body string) {
+		status, message := sendTo(front, w.real(asJane(method, target, "application/json", []byte(body))), 3*time.Second)
+		if !strings.HasPrefix(message, "yorvogate: ") {
+			t.Errorf("%s wasn't refused by the gate: %d %s", desc, status, message)
+		}
+
+		w.restore()
+	}
+
+	t.Cleanup(func() {
+		// Remove the escape containers first (a container holding the volume would block its delete),
+		// then unplant the host file (through a bind of /, the same reach, as teardown), then the volume.
+		for _, name := range []string{"ygd-escape-bind", "ygd-escape-vol-c", "ygd-escape-priv", "ygd-escape-rm"} {
+			w.api("DELETE", "/v1.56/containers/"+name+"?force=1", "")
+		}
+
+		w.api("POST", "/v1.56/containers/create?name=ygd-escape-rm", `{"Image":"alpine:3.22","Tty":true,"Cmd":["rm","-f","`+via+`"],`+lbl+`,"HostConfig":{"Binds":["/:/host"]}}`)
+		w.api("POST", "/v1.56/containers/ygd-escape-rm/start", "")
+		w.api("POST", "/v1.56/containers/ygd-escape-rm/wait", "")
+		w.api("DELETE", "/v1.56/containers/ygd-escape-rm?force=1", "")
+		w.api("DELETE", "/v1.56/volumes/ygd-escape-vol?force=1", "")
+	})
+
+	// 1. docker_socket and hostpath_etc reduce to binding the host filesystem in: on the raw socket a
+	// container writes and reads a token on the host; through a scope the create is refused.
+	if logs := escapeRun("ygd-escape-bind", `{"Image":"alpine:3.22","Tty":true,"Cmd":["sh","-c","echo `+token+` > `+via+`; cat `+via+`"],`+lbl+`,"HostConfig":{"Binds":["/:/host"]}}`); !strings.Contains(logs, token) {
+		t.Errorf("the host-bind escape didn't reach the host on the raw socket (control): %q", logs)
+	}
+
+	gateRefuses("the host-bind create", "POST", "/v1.56/containers/create?name=jane-x", janeBody(`"Binds":["/:/host"]`))
+
+	// 2. the volume two-step (B2): a local volume with driver options binds the host root; mounted, it
+	// reads the token planted above. Through a scope the volume.create is refused, before any mount.
+	w.api("DELETE", "/v1.56/volumes/ygd-escape-vol?force=1", "")
+	if status, b := w.api("POST", "/v1.56/volumes/create", `{"Name":"ygd-escape-vol","Driver":"local","DriverOpts":{"type":"none","o":"bind","device":"/"},`+lbl+`}`); status != http.StatusCreated {
+		t.Fatalf("the raw socket wouldn't create the host-binding volume: %d %s", status, b)
+	}
+
+	if logs := escapeRun("ygd-escape-vol-c", `{"Image":"alpine:3.22","Tty":true,"Cmd":["cat","`+via+`"],`+lbl+`,"HostConfig":{"Mounts":[{"Type":"volume","Source":"ygd-escape-vol","Target":"/host"}]}}`); !strings.Contains(logs, token) {
+		t.Errorf("the volume two-step didn't reach the host on the raw socket (control): %q", logs)
+	}
+
+	gateRefuses("the volume two-step", "POST", "/v1.56/volumes/create", `{"Name":"jane_new","Driver":"local","DriverOpts":{"type":"none","o":"bind","device":"/"},`+own+`}`)
+
+	// 3. privileged: the raw daemon accepts and runs a privileged container here, so the runner permits
+	// it and the gate's refusal is meaningful; through a scope the create is refused.
+	if logs := escapeRun("ygd-escape-priv", `{"Image":"alpine:3.22","Tty":true,"Cmd":["sh","-c","echo `+token+`"],`+lbl+`,"HostConfig":{"Privileged":true}}`); !strings.Contains(logs, token) {
+		t.Errorf("the raw socket wouldn't run a privileged container (control): %q", logs)
+	}
+
+	gateRefuses("the privileged create", "POST", "/v1.56/containers/create?name=jane-x", janeBody(`"Privileged":true`))
+}
+
 // world is scope jane's objects and blog's on a real Docker, labelled to be removed after.
 type world struct {
 	t      testing.TB
