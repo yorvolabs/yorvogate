@@ -421,6 +421,23 @@ func TestARefusalSaysWhy(t *testing.T) {
 	}
 }
 
+// Of a scope's colliding claims, the refusal names the first in the claims' kind order (builders,
+// owner, prefixes, images, aliases), whatever their keys: here the owner label's key sorts after the
+// prefix's, and the owner is still the one named.
+func TestARefusalNamesItsClaimsInKindOrder(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "jane", scopeFile("shared", "a", "quire-sites/jane/"))
+	write(t, dir, "zed", scopeFile("shared", "a", "quire-sites/zed/"))
+
+	for range 20 {
+		store := testStore(t, dir, false)
+
+		if _, err := store.Get("jane"); err == nil || !strings.Contains(err.Error(), "owner: com.docker.compose.project=shared is also scope zed's") {
+			t.Fatalf("jane: %v", err)
+		}
+	}
+}
+
 // A state file's record that isn't valid is dropped, and said; the others are kept.
 func TestAStateRecordNotValid(t *testing.T) {
 	dir := t.TempDir()
