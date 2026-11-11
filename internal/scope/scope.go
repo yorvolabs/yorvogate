@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 	"unicode/utf8"
 )
 
@@ -34,6 +35,12 @@ type Scope struct {
 	// TokenSHA256 is the SHA-256 (hex) of the token the client sends. A scope with a socket of its
 	// own needs none: whoever can open the socket is the scope.
 	TokenSHA256 string `json:"token_sha256"`
+	// Tokens are more tokens, besides token_sha256, each with an optional expiry: two are valid
+	// during a rotation, and one past its expiry is refused like a wrong one.
+	Tokens []Token `json:"tokens,omitempty"`
+	// PeerUIDs (a listener on a unix address): when listed, a request is the scope only over a
+	// connection from one of these users (the socket's peer, as the kernel says).
+	PeerUIDs []uint32 `json:"peer_uids,omitempty"`
 	// Owner marks what the scope owns: every container, network and volume it creates carries this
 	// label with this value, and only objects with it are its own.
 	Owner Label `json:"owner"`
@@ -138,6 +145,64 @@ var (
 	recreated = regexp.MustCompile(`^[0-9a-f]{12}_(.+)$`)
 )
 
+// Token is a token's SHA-256 (hex), and when it stops being one (RFC 3339; never when unset).
+type Token struct {
+	SHA256  string `json:"sha256"`
+	Expires string `json:"expires,omitempty"`
+
+	expires time.Time // parsed; zero: never
+}
+
+// MaxTokens is how many tokens a scope may have, token_sha256 included.
+const MaxTokens = 8
+
+// tokens is every token of the scope, token_sha256 first.
+func (s *Scope) tokens() []Token {
+	all := make([]Token, 0, len(s.Tokens)+1)
+	if s.TokenSHA256 != "" {
+		all = append(all, Token{SHA256: s.TokenSHA256})
+	}
+
+	return append(all, s.Tokens...)
+}
+
+// expired tells whether a token has stopped being one at a time.
+func (t Token) expired(now time.Time) bool {
+	return !t.expires.IsZero() && !now.Before(t.expires)
+}
+
+// TokenCurrent tells whether a token's digest (hex) is still one of the scope's, and not expired.
+// A stream allowed with a token goes on while it is.
+func (s *Scope) TokenCurrent(digest string, now time.Time) bool {
+	for _, t := range s.tokens() {
+		if t.SHA256 == digest && !t.expired(now) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// Expiring is the scope's tokens that have expired at a time, and those that will within a while:
+// each named by the first 12 digits of its digest.
+func (s *Scope) Expiring(now time.Time, within time.Duration) (expired, soon []string) {
+	for _, t := range s.Tokens {
+		switch {
+		case t.expired(now):
+			expired = append(expired, t.SHA256[:12])
+		case t.expired(now.Add(within)):
+			soon = append(soon, t.SHA256[:12])
+		}
+	}
+
+	return expired, soon
+}
+
+// PeerAllowed tells whether a connection's peer user may be the scope: any when it lists none.
+func (s *Scope) PeerAllowed(uid uint32, known bool) bool {
+	return len(s.PeerUIDs) == 0 || known && slices.Contains(s.PeerUIDs, uid)
+}
+
 // Pin is a certificate's public key: the SHA-256 (hex) of its SubjectPublicKeyInfo.
 type Pin struct {
 	SHA256 string `json:"sha256"`
@@ -174,6 +239,9 @@ var ErrUnknown = errors.New("no such scope, or not its token")
 // compareTokens compares a token's digest with a scope's, in constant time (a test counts its calls).
 var compareTokens = subtle.ConstantTimeCompare
 
+// clock is the time tokens expire by (a test sets it).
+var clock = time.Now
+
 // Store is one scoped listener's scopes: its folder, as the registry's snapshot has it. It reads
 // no file: Registry.Reload does.
 type Store struct {
@@ -181,9 +249,12 @@ type Store struct {
 	folder   int
 }
 
-// Authenticate returns the scope a request names, if its token is the scope's. A missing scope, one
-// whose file isn't valid and a wrong token all give ErrUnknown, in the same time, so a client can't
-// tell which scopes exist. A file that isn't valid is said why in what's wrapped (for the log only).
+// Authenticate returns the scope a request names, if its token is one of the scope's and hasn't
+// expired. A missing scope, one whose file isn't valid, a wrong token and an expired one all give
+// ErrUnknown, in the same time: the token is compared with MaxTokens digests whatever the scope has
+// (random ones in place of those it doesn't), so a client can tell neither which scopes exist, nor
+// how many tokens one has, nor which matched. A file that isn't valid is said why in what's wrapped
+// (for the log only).
 func (s *Store) Authenticate(name, token string) (*Scope, error) {
 	if !validName.MatchString(name) || token == "" {
 		return nil, ErrUnknown
@@ -192,7 +263,6 @@ func (s *Store) Authenticate(name, token string) (*Scope, error) {
 	// The token is hashed and compared whether or not the scope has one: a scope that isn't there
 	// takes as long to refuse as a wrong token.
 	got := sha256.Sum256([]byte(token))
-	digest := noToken
 
 	var (
 		scope   *Scope
@@ -210,17 +280,39 @@ func (s *Store) Authenticate(name, token string) (*Scope, error) {
 		}
 	}
 
-	if err == nil && scope.TokenSHA256 != "" {
-		digest = scope.TokenSHA256
+	// The scope's tokens in MaxTokens slots, the rest random: filled without allocating, so a scope
+	// that's there allocates as one that isn't
+	var slots [MaxTokens]Token
+
+	n := 0
+	if err == nil {
+		if scope.TokenSHA256 != "" {
+			slots[0], n = Token{SHA256: scope.TokenSHA256}, 1
+		}
+
+		n += copy(slots[n:], scope.Tokens)
 	}
 
-	want, _ := hex.DecodeString(digest)
-	matches := compareTokens(want, got[:]) == 1
+	// Every slot is compared, and which matched is kept without a branch on it
+	now, matches := clock(), 0
+
+	for i := range MaxTokens {
+		digest, current := noToken, 0
+		if i < n {
+			digest = slots[i].SHA256
+			if !slots[i].expired(now) {
+				current = 1
+			}
+		}
+
+		want, _ := hex.DecodeString(digest)
+		matches |= compareTokens(want, got[:]) & current
+	}
 
 	switch {
 	case err != nil:
 		return nil, unknown
-	case !matches || scope.TokenSHA256 == "":
+	case matches != 1:
 		return nil, ErrUnknown
 	}
 
@@ -384,6 +476,71 @@ func parse(path string, content []byte, info os.FileInfo, f Folder) (*Scope, err
 	return &scope, nil
 }
 
+// checkTokens: at most MaxTokens, token_sha256 included, each a digest listed once. One that has
+// expired is kept, and refused when sent: check names it.
+func (s *Scope) checkTokens() error {
+	if len(s.tokens()) > MaxTokens {
+		return fmt.Errorf("tokens: at most %d, token_sha256 included", MaxTokens)
+	}
+
+	for i, t := range s.Tokens {
+		if t.Expires == "" {
+			continue
+		}
+
+		expires, err := time.Parse(time.RFC3339, t.Expires)
+		if err != nil {
+			return fmt.Errorf("tokens: expires %q must be a time in RFC 3339 (2026-12-01T00:00:00Z)", t.Expires)
+		}
+
+		s.Tokens[i].expires = expires
+	}
+
+	seen := map[string]bool{}
+
+	for _, t := range s.tokens() {
+		if !validDigest.MatchString(t.SHA256) {
+			return fmt.Errorf("tokens: %q must be a token's SHA-256, as 64 lowercase hex digits", t.SHA256)
+		}
+
+		if seen[t.SHA256] {
+			return fmt.Errorf("tokens: %s is listed twice (token_sha256 included)", t.SHA256)
+		}
+
+		seen[t.SHA256] = true
+	}
+
+	return nil
+}
+
+// MaxPeerUIDs is how many users a scope may list.
+const MaxPeerUIDs = 32
+
+// checkPeers: peer_uids only where every listener of the folder is on a unix address, each listed
+// once; and on a listener that requires them, at least one.
+func (s *Scope) checkPeers(f Folder) error {
+	switch {
+	case len(s.PeerUIDs) > 0 && !f.PeerUIDs:
+		return fmt.Errorf("peer_uids: only a scope whose listeners are all on a unix address has them (listener %s, or another serving its folder, is on TCP or scope_sockets)", f.Listener)
+	case len(s.PeerUIDs) == 0 && f.RequirePeerUIDs:
+		return fmt.Errorf("peer_uids: listener %s requires them (require_peer_uids)", f.Listener)
+	case len(s.PeerUIDs) > MaxPeerUIDs:
+		return fmt.Errorf("peer_uids: at most %d", MaxPeerUIDs)
+	}
+
+	seen := map[uint32]bool{}
+
+	for _, uid := range s.PeerUIDs {
+		if seen[uid] {
+			return fmt.Errorf("peer_uids: %d is listed twice", uid)
+		}
+
+		seen[uid] = true
+	}
+
+	return nil
+}
+
 // formatVersion is the scope files' format (config.FormatVersion: the two move together).
 const formatVersion = 1
 
@@ -395,8 +552,9 @@ func (s *Scope) check(f Folder) error {
 	}
 
 	switch {
-	case !validDigest.MatchString(s.TokenSHA256) && (s.TokenSHA256 != "" || !tokenless):
-		return errors.New("token_sha256: the token's SHA-256, as 64 lowercase hex digits")
+	case s.TokenSHA256 != "" && !validDigest.MatchString(s.TokenSHA256),
+		s.TokenSHA256 == "" && len(s.Tokens) == 0 && !tokenless:
+		return errors.New("token_sha256: the token's SHA-256, as 64 lowercase hex digits (or tokens)")
 	case !validLabel.MatchString(s.Owner.Key):
 		return errors.New("owner.label: a Docker label's name")
 	case !validValue.MatchString(s.Owner.Value):
@@ -405,6 +563,14 @@ func (s *Scope) check(f Folder) error {
 		return errors.New("prefixes: at least one")
 	case s.Egress != "" && s.Egress != "none":
 		return fmt.Errorf("egress: %q isn't one (only none, or leave it out)", s.Egress)
+	}
+
+	if err := s.checkTokens(); err != nil {
+		return err
+	}
+
+	if err := s.checkPeers(f); err != nil {
+		return err
 	}
 
 	if len(s.Certificates) > 0 && !f.Certificates {

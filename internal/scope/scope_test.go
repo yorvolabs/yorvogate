@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -179,13 +180,14 @@ func TestScopeFilesAreChecked(t *testing.T) {
 	}
 }
 
-// Every token is compared with a digest, once, whether its scope is there, valid, tokenless or not:
-// which it is takes no other time to tell.
-func TestEveryTokenIsComparedOnce(t *testing.T) {
+// Every token is compared with MaxTokens digests, whether its scope is there, valid, tokenless or
+// not, and whatever tokens it has: which it is takes no other time to tell.
+func TestEveryTokenIsComparedWithEverySlot(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "jane", jane())
 	write(t, dir, "broken", "{")
 	write(t, dir, "free", `{"owner": {"label": "com.docker.compose.project", "value": "free"}, "prefixes": ["free-"]}`)
+	write(t, dir, "rotating", rotating(time.Now().Add(-time.Hour)))
 
 	calls := 0
 	compare := compareTokens
@@ -205,13 +207,146 @@ func TestEveryTokenIsComparedOnce(t *testing.T) {
 	for _, c := range []struct {
 		store       reloading
 		name, token string
-	}{{store, "jane", token}, {store, "jane", "wrong"}, {store, "nobody", token}, {store, "broken", token}, {store, "free", token}, {tokenless, "free", token}} {
+	}{
+		{store, "jane", token}, {store, "jane", "wrong"}, {store, "nobody", token}, {store, "broken", token}, {store, "free", token}, {tokenless, "free", token},
+		{store, "rotating", tok("old")}, {store, "rotating", tok("new")}, {store, "rotating", tok("expired")},
+	} {
 		calls = 0
 		_, _ = c.store.Authenticate(c.name, c.token)
 
-		if calls != 1 {
-			t.Errorf("%s: compared %d times", c.name, calls)
+		if calls != MaxTokens {
+			t.Errorf("%s with %q: compared %d times", c.name, c.token, calls)
 		}
+	}
+}
+
+// tok is a token named for a test, as long as the others (a shorter one allocates less to hash).
+func tok(name string) string {
+	return name + strings.Repeat("-", len(token)-len(name))
+}
+
+// rotating is a scope with token_sha256 "old", a token "new", and a token "expired" that expires at
+// a time.
+func rotating(expires time.Time) string {
+	return `{"token_sha256": "` + digest(tok("old")) + `", "tokens": [{"sha256": "` + digest(tok("new")) + `"}, {"sha256": "` + digest(tok("expired")) + `", "expires": "` + expires.UTC().Format(time.RFC3339) + `"}], "owner": {"label": "com.docker.compose.project", "value": "rotating"}, "prefixes": ["rotating-"]}`
+}
+
+// During a rotation each of a scope's tokens is the scope; one past its expiry is refused like a
+// wrong one, and stops being current for a stream.
+func TestAScopesTokensDuringARotation(t *testing.T) {
+	dir := t.TempDir()
+	// To the second, as the file has it: at its expiry is exactly then
+	expires := time.Now().Add(time.Hour).Truncate(time.Second)
+	write(t, dir, "rotating", rotating(expires))
+	store := testStore(t, dir, false)
+
+	for _, name := range []string{"old", "new", "expired"} {
+		if _, err := store.Authenticate("rotating", tok(name)); err != nil {
+			t.Errorf("%s, before it expires: %v", name, err)
+		}
+	}
+
+	t.Cleanup(func() { clock = time.Now })
+	clock = func() time.Time { return expires }
+
+	if _, err := store.Authenticate("rotating", tok("expired")); !errors.Is(err, ErrUnknown) {
+		t.Errorf("expired, at its expiry: %v", err)
+	}
+
+	if _, err := store.Authenticate("rotating", tok("new")); err != nil {
+		t.Errorf("new, still: %v", err)
+	}
+
+	s, err := store.Get("rotating")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if s.TokenCurrent(digest(tok("expired")), expires) || !s.TokenCurrent(digest(tok("expired")), expires.Add(-time.Second)) || !s.TokenCurrent(digest(tok("old")), expires) || s.TokenCurrent(digest("wrong"), expires.Add(-time.Hour)) {
+		t.Error("TokenCurrent")
+	}
+
+	expired, soon := s.Expiring(expires.Add(-time.Hour), 7*24*time.Hour)
+	if len(expired) != 0 || len(soon) != 1 || soon[0] != digest(tok("expired"))[:12] {
+		t.Errorf("before: expired %v, soon %v", expired, soon)
+	}
+
+	if expired, soon = s.Expiring(expires, 7*24*time.Hour); len(expired) != 1 || len(soon) != 0 {
+		t.Errorf("at its expiry: expired %v, soon %v", expired, soon)
+	}
+
+	if expired, soon = s.Expiring(expires.Add(-8*24*time.Hour), 7*24*time.Hour); len(expired) != 0 || len(soon) != 0 {
+		t.Errorf("eight days before: expired %v, soon %v", expired, soon)
+	}
+}
+
+// What a scope file's tokens and peer users may be.
+func TestAScopesTokensAndPeers(t *testing.T) {
+	owner := `"owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]`
+	entries := func(n int) string {
+		var e []string
+		for i := range n {
+			e = append(e, `{"sha256": "`+digest(fmt.Sprint(i))+`"}`)
+		}
+
+		return `[` + strings.Join(e, ", ") + `]`
+	}
+	unix := Folder{Listener: "sites", PeerUIDs: true}
+
+	for _, c := range []struct {
+		name, file string
+		folder     Folder
+		want       string // "" when valid
+	}{
+		{"tokens alone", `{"tokens": ` + entries(2) + `, ` + owner + `}`, Folder{Listener: "sites"}, ""},
+		{"eight with token_sha256", `{"token_sha256": "` + digest(token) + `", "tokens": ` + entries(7) + `, ` + owner + `}`, Folder{Listener: "sites"}, ""},
+		{"nine with token_sha256", `{"token_sha256": "` + digest(token) + `", "tokens": ` + entries(8) + `, ` + owner + `}`, Folder{Listener: "sites"}, "tokens: at most 8, token_sha256 included"},
+		{"nine tokens", `{"tokens": ` + entries(9) + `, ` + owner + `}`, Folder{Listener: "sites"}, "tokens: at most 8"},
+		{"a token twice", `{"tokens": [{"sha256": "` + digest("a") + `"}, {"sha256": "` + digest("a") + `"}], ` + owner + `}`, Folder{Listener: "sites"}, "is listed twice"},
+		{"token_sha256 in tokens too", `{"token_sha256": "` + digest("a") + `", "tokens": [{"sha256": "` + digest("a") + `"}], ` + owner + `}`, Folder{Listener: "sites"}, "is listed twice (token_sha256 included)"},
+		{"not a digest", `{"tokens": [{"sha256": "abc"}], ` + owner + `}`, Folder{Listener: "sites"}, `tokens: "abc" must be`},
+		{"no token", `{` + owner + `}`, Folder{Listener: "sites"}, "token_sha256: the token's SHA-256"},
+		{"already expired", `{"tokens": [{"sha256": "` + digest("a") + `", "expires": "2020-01-01T00:00:00Z"}], ` + owner + `}`, Folder{Listener: "sites"}, ""},
+		{"an expiry that isn't RFC 3339", `{"tokens": [{"sha256": "` + digest("a") + `", "expires": "tomorrow"}], ` + owner + `}`, Folder{Listener: "sites"}, "expires"},
+		{"peer users on a unix address", `{"token_sha256": "` + digest(token) + `", "peer_uids": [1000, 0], ` + owner + `}`, unix, ""},
+		{"peer users elsewhere", `{"token_sha256": "` + digest(token) + `", "peer_uids": [1000], ` + owner + `}`, Folder{Listener: "sites"}, "peer_uids: only a scope whose listeners are all on a unix address"},
+		{"peer users required", `{"token_sha256": "` + digest(token) + `", ` + owner + `}`, Folder{Listener: "sites", PeerUIDs: true, RequirePeerUIDs: true}, "peer_uids: listener sites requires them"},
+		{"a peer user twice", `{"token_sha256": "` + digest(token) + `", "peer_uids": [1000, 1000], ` + owner + `}`, unix, "peer_uids: 1000 is listed twice"},
+		{"a negative peer user", `{"token_sha256": "` + digest(token) + `", "peer_uids": [-1], ` + owner + `}`, unix, "peer_uids"},
+	} {
+		dir := t.TempDir()
+		write(t, dir, "jane", c.file)
+		c.folder.Dir = dir
+		store := reloading{t, NewRegistry([]Folder{c.folder}, "").Store("sites")}
+
+		_, err := store.Get("jane")
+		if (c.want == "") != (err == nil) || err != nil && !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+
+	// Past the limit, by count
+	var uids []string
+	for i := range MaxPeerUIDs + 1 {
+		uids = append(uids, fmt.Sprint(i))
+	}
+
+	dir := t.TempDir()
+	write(t, dir, "jane", `{"token_sha256": "`+digest(token)+`", "peer_uids": [`+strings.Join(uids, ",")+`], `+owner+`}`)
+	if _, err := (reloading{t, NewRegistry([]Folder{{Listener: "sites", Dir: dir, PeerUIDs: true}}, "").Store("sites")}).Get("jane"); err == nil || !strings.Contains(err.Error(), "peer_uids: at most 32") {
+		t.Errorf("33 peer users: %v", err)
+	}
+}
+
+// A scope with peer users is the scope only from one of them; one without, from anyone.
+func TestPeerAllowed(t *testing.T) {
+	s := &Scope{PeerUIDs: []uint32{1000, 0}}
+	if !s.PeerAllowed(1000, true) || !s.PeerAllowed(0, true) || s.PeerAllowed(1001, true) || s.PeerAllowed(1000, false) {
+		t.Error("with peer_uids")
+	}
+
+	if !(&Scope{}).PeerAllowed(1001, true) || !(&Scope{}).PeerAllowed(0, false) {
+		t.Error("without")
 	}
 }
 
@@ -559,6 +694,7 @@ func TestEveryRefusalAllocatesAlike(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "jane", jane())
 	write(t, dir, "broken", "{")
+	write(t, dir, "rotating", rotating(time.Now().Add(-time.Hour)))
 
 	reloaded := testStore(t, dir, false)
 	if _, err := reloaded.Get("jane"); err != nil {
@@ -571,9 +707,11 @@ func TestEveryRefusalAllocatesAlike(t *testing.T) {
 	counts := map[string]float64{}
 
 	for name, ask := range map[string][2]string{
-		"missing":     {"nobody", token},
-		"wrong token": {"jane", wrong},
-		"not valid":   {"broken", token},
+		"missing":           {"nobody", token},
+		"wrong token":       {"jane", wrong},
+		"not valid":         {"broken", token},
+		"expired":           {"rotating", tok("expired")},
+		"wrong, of several": {"rotating", wrong},
 	} {
 		if _, err := store.Authenticate(ask[0], ask[1]); !errors.Is(err, ErrUnknown) {
 			t.Fatalf("%s: %v", name, err)
@@ -582,7 +720,7 @@ func TestEveryRefusalAllocatesAlike(t *testing.T) {
 		counts[name] = testing.AllocsPerRun(1000, func() { _, _ = store.Authenticate(ask[0], ask[1]) })
 	}
 
-	if counts["missing"] != counts["wrong token"] || counts["not valid"] != counts["wrong token"] {
+	if counts["missing"] != counts["wrong token"] || counts["not valid"] != counts["wrong token"] || counts["expired"] != counts["wrong token"] || counts["wrong, of several"] != counts["wrong token"] {
 		t.Errorf("allocations: %v", counts)
 	}
 

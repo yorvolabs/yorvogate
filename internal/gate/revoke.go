@@ -23,7 +23,10 @@ type streams struct {
 
 type stream struct {
 	scope string // "" on a trusted listener
-	token string
+	token string // the digest of the token it was allowed with
+	// Its connection's peer user, when it came over a unix socket
+	uid      uint32
+	uidKnown bool
 	// A client certificate's stream (an mTLS listener): what it was taken with
 	cert *credential
 	end  context.CancelFunc
@@ -31,12 +34,13 @@ type stream struct {
 
 // track gives the request to forward, ended at once if its allowance goes, and what to call once
 // it's answered. allowed is its scope, nil on a trusted listener.
-func (s *streams) track(store *scope.Store, files *TLSFiles, allowed *scope.Scope, r *http.Request) (*http.Request, func()) {
+func (s *streams) track(store *scope.Store, files *TLSFiles, allowed *scope.Scope, token string, r *http.Request) (*http.Request, func()) {
 	ctx, cancel := context.WithCancel(r.Context())
-	st := &stream{end: cancel}
+	st := &stream{end: cancel, token: token}
+	st.uid, st.uidKnown = peerOf(r.Context())
 
 	if allowed != nil {
-		st.scope, st.token = allowed.Name, allowed.TokenSHA256
+		st.scope = allowed.Name
 	}
 
 	if c, ok := credentialOf(r.TLS); ok {
@@ -101,7 +105,7 @@ func (st *stream) current(store *scope.Store, files *TLSFiles) bool {
 		return files.admits(*st.cert, now)
 	}
 
-	return now.TokenSHA256 == st.token
+	return now.TokenCurrent(st.token, clock()) && now.PeerAllowed(st.uid, st.uidKnown)
 }
 
 // clock is the time streams' credentials expire by (a test sets it).

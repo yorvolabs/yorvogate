@@ -19,9 +19,11 @@ import (
 // names are looked up first; the request then names the object by the full ID that was checked, so
 // what Docker acts on is what was checked, whatever the name meant by then.
 type scoped struct {
-	ctx    context.Context
-	req    route.Request
-	scope  *scope.Scope
+	ctx   context.Context
+	req   route.Request
+	scope *scope.Scope
+	// The digest of the token it was allowed with (a token listener's)
+	token  string
 	policy config.Containers
 	// The registries and platforms its pulls may reach
 	pulls config.Pulls

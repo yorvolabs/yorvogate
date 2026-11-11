@@ -144,6 +144,37 @@ func tlsWarnings(l config.Listener, certificates *gate.TLS, store *scope.Store, 
 	return w
 }
 
+// TokensExpireSoon is how long before a scope's token expires it's warned about.
+const TokensExpireSoon = 7 * 24 * time.Hour
+
+// tokenWarnings names, on a token listener, the scopes' tokens that have expired (kept in the file,
+// and refused) and those expiring within TokensExpireSoon: each by the first digits of its digest.
+func tokenWarnings(l config.Listener, store *scope.Store, names []string) []string {
+	if store == nil || l.SocketBound() || l.MutualTLS() {
+		return nil
+	}
+
+	var w []string
+
+	for _, name := range names {
+		s, err := store.Get(name)
+		if err != nil {
+			continue
+		}
+
+		expired, soon := s.Expiring(time.Now(), TokensExpireSoon)
+		if len(expired) > 0 {
+			w = append(w, fmt.Sprintf("scope %s: tokens expired, and refused (%s): remove them from its file", name, strings.Join(expired, ", ")))
+		}
+
+		if len(soon) > 0 {
+			w = append(w, fmt.Sprintf("scope %s: tokens expiring within 7 days (%s): give its client another", name, strings.Join(soon, ", ")))
+		}
+	}
+
+	return w
+}
+
 // check reads the configuration, and every scope file of its scoped listeners, as a gate starting
 // now would (it reads the state file, and never writes it). It names every scope file refused.
 func check(path string, docker bool, stdout io.Writer) error {
@@ -199,7 +230,8 @@ func check(path string, docker bool, stdout io.Writer) error {
 			fmt.Fprintf(stdout, "%s (%s, %s): %d scopes, %d refused\n", l.Name, l.Mode, address, len(names), len(invalid))
 		}
 
-		for _, warn := range append(listenerWarnings(l), tlsWarnings(l, certificates, registry.Store(l.Name), names)...) {
+		warnings := append(listenerWarnings(l), tlsWarnings(l, certificates, registry.Store(l.Name), names)...)
+		for _, warn := range append(warnings, tokenWarnings(l, registry.Store(l.Name), names)...) {
 			fmt.Fprintf(stdout, "  warning: %s\n", warn)
 		}
 
@@ -589,6 +621,12 @@ func report(c *config.Config, registry *scope.Registry, reported map[string]stri
 			if old := registry.Store(l.Name).Unversioned(); len(old) > 0 {
 				now["unversioned/"+l.Name] = unversioned(old)
 			}
+
+			if names, _, err := registry.Store(l.Name).Scopes(); err == nil {
+				if w := tokenWarnings(l, registry.Store(l.Name), names); len(w) > 0 {
+					now["tokens/"+l.Name] = strings.Join(w, "; ")
+				}
+			}
 		}
 	}
 
@@ -605,6 +643,8 @@ func report(c *config.Config, registry *scope.Registry, reported map[string]stri
 			log.Error("state file", "reason", why)
 		} else if listener, ok := strings.CutPrefix(key, "unversioned/"); ok {
 			log.Warn("scope files", "listener", listener, "warning", why)
+		} else if listener, ok := strings.CutPrefix(key, "tokens/"); ok {
+			log.Warn("scope tokens", "listener", listener, "warning", why)
 		} else {
 			listener, name, _ := strings.Cut(key, "/")
 			log.Warn("scope file isn't valid", "listener", listener, "scope", name, "reason", why)

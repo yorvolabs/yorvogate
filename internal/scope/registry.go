@@ -26,6 +26,11 @@ type Folder struct {
 	Tokenless bool
 	// Certificates: an mTLS listener serves the folder, so a scope may pin its certificates.
 	Certificates bool
+	// PeerUIDs: every listener serving the folder is on a unix address, so a scope may list the
+	// users its connections must come from.
+	PeerUIDs bool
+	// RequirePeerUIDs: a listener serving the folder requires every scope to list them.
+	RequirePeerUIDs bool
 }
 
 // Registry holds the scopes of every scoped listener in front of one Docker, as one immutable

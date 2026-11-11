@@ -116,6 +116,9 @@ type Listener struct {
 	// Clients (a trusted listener with client_ca): when set, only certificates with these public
 	// keys may connect.
 	Clients []Pin `yaml:"clients"`
+	// RequirePeerUIDs (a scoped listener on a unix address): every scope on it must list the user
+	// IDs whose connections may be it (peer_uids).
+	RequirePeerUIDs bool `yaml:"require_peer_uids"`
 }
 
 // TLS is a TCP listener's TLS: files, read again when they change.
@@ -393,12 +396,20 @@ func (l *Listener) check() error {
 		if err := l.Pulls.check(); err != nil {
 			return fmt.Errorf("pulls: %w", err)
 		}
+
+		if l.RequirePeerUIDs && !l.PeerCredentials() {
+			return errors.New("require_peer_uids: only a scoped listener on a unix address has it (a TCP connection has no peer user; on scope_sockets, a socket's permissions decide who connects)")
+		}
 	default:
 		return fmt.Errorf("mode: %q must be trusted or scoped", l.Mode)
 	}
 
 	if l.Mode == Trusted && (!l.Containers.empty() || len(l.BuilderAppArmorProfiles) > 0 || l.AllowPrivilegedBuilders || !l.Pulls.empty()) {
 		return errors.New("containers, builder_apparmor_profiles, allow_privileged_builders and pulls: only a scoped listener has them")
+	}
+
+	if l.Mode == Trusted && l.RequirePeerUIDs {
+		return errors.New("require_peer_uids: only a scoped listener on a unix address has it")
 	}
 
 	return nil
@@ -578,6 +589,12 @@ func (l *Listener) MutualTLS() bool {
 // Unix tells whether the listener's clients connect over unix sockets.
 func (l *Listener) Unix() bool {
 	return l.ScopeSockets != "" || strings.HasPrefix(l.Address, "unix://")
+}
+
+// PeerCredentials tells whether a scoped listener's connections have a peer user its scopes can be
+// bound to: a unix address, where a token names the scope (not scope_sockets, nor TCP).
+func (l *Listener) PeerCredentials() bool {
+	return l.Mode == Scoped && strings.HasPrefix(l.Address, "unix://")
 }
 
 // SocketBound tells whether each scope has its own socket, rather than a token sent with each request.

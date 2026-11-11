@@ -824,7 +824,17 @@ func TestACertificateIsCheckedAfterItsHandshake(t *testing.T) {
 					t.Errorf("after, on the connection kept alive: %d", status)
 				}
 
-				if len(reused) != 2 || !reused[1] {
+				// On a trusted listener, whatever it asks for: a path no endpoint has gets the same, not
+				// a 403 (a scoped listener maps the path first, as it does for a token)
+				wantReused := 2
+				if level == "trusted" {
+					path, wantReused = "/v1.56/no/such/endpoint", 3
+					if status := send(); status != http.StatusUnauthorized {
+						t.Errorf("after, a path no endpoint has: %d", status)
+					}
+				}
+
+				if len(reused) != wantReused || !reused[len(reused)-1] {
 					t.Errorf("the connection wasn't kept alive: %v", reused)
 				}
 

@@ -2,13 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yorvolabs/yorvogate/schemas/yorvogate-scope.v1.schema.json",
   "title": "YorvoGate scope file, format 1",
-  "description": "<scopes>/<name>.json (docs/configuration.md#scope-files-scoped-listeners). token_sha256 is optional only on a listener with scope sockets or mTLS (tls.client_ca), where the client certificate is the scope; certificates (its public keys) only on an mTLS listener. YorvoGate also refuses a scope that shares an owner label, prefix, image namespace or builder with another: run yorvogate check. Without version, a file is read as version 1 until YorvoGate 0.4, which requires it.",
+  "description": "<scopes>/<name>.json (docs/configuration.md#scope-files-scoped-listeners). token_sha256 (or tokens: at most 8 with token_sha256, each listed once) is optional only on a listener with scope sockets or mTLS (tls.client_ca), where the client certificate is the scope; peer_uids only where every listener of the folder is on a unix address; certificates (its public keys) only on an mTLS listener. YorvoGate also refuses a scope that shares an owner label, prefix, image namespace or builder with another: run yorvogate check. Without version, a file is read as version 1 until YorvoGate 0.4, which requires it.",
   "type": "object",
   "additionalProperties": false,
   "required": ["owner", "prefixes"],
   "properties": {
     "version": {"const": 1},
     "token_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "tokens": {"type": "array", "maxItems": 8, "items": {"type": "object", "additionalProperties": false, "required": ["sha256"], "properties": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "expires": {"type": "string", "format": "date-time"}}}},
+    "peer_uids": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"type": "integer", "minimum": 0, "maximum": 4294967295}},
     "owner": {
       "type": "object",
       "additionalProperties": false,

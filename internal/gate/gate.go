@@ -6,6 +6,8 @@ package gate
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,17 +58,26 @@ type Gate struct {
 func Registry(c *config.Config) *scope.Registry {
 	var folders []scope.Folder
 
-	// A folder an mTLS listener serves may pin certificates, whichever of its listeners reads it
-	certified := map[string]bool{}
+	// A folder an mTLS listener serves may pin certificates, whichever of its listeners reads it. One
+	// whose listeners are all on a unix address may list peer users; one a listener requires them of
+	// must, on each.
+	certified, peerless, peersRequired := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, l := range c.Listeners {
-		if l.Mode == config.Scoped && l.MutualTLS() {
-			certified[l.Scopes] = true
+		if l.Mode != config.Scoped {
+			continue
 		}
+
+		certified[l.Scopes] = certified[l.Scopes] || l.MutualTLS()
+		peerless[l.Scopes] = peerless[l.Scopes] || !l.PeerCredentials()
+		peersRequired[l.Scopes] = peersRequired[l.Scopes] || l.RequirePeerUIDs
 	}
 
 	for _, l := range c.Listeners {
 		if l.Mode == config.Scoped {
-			folders = append(folders, scope.Folder{Listener: l.Name, Dir: l.Scopes, Tokenless: l.SocketBound() || l.MutualTLS(), Certificates: certified[l.Scopes]})
+			folders = append(folders, scope.Folder{
+				Listener: l.Name, Dir: l.Scopes, Tokenless: l.SocketBound() || l.MutualTLS(), Certificates: certified[l.Scopes],
+				PeerUIDs: !peerless[l.Scopes], RequirePeerUIDs: peersRequired[l.Scopes],
+			})
 		}
 	}
 
@@ -135,12 +146,12 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case decision != nil && !g.listener.SocketBound():
 		var answered func()
 
-		forward, answered = g.streams.track(g.scopes, g.tls, decision.scope, forward)
+		forward, answered = g.streams.track(g.scopes, g.tls, decision.scope, decision.token, forward)
 		defer answered()
 	case g.listener.Mode == config.Trusted && g.listener.MutualTLS():
 		var answered func()
 
-		forward, answered = g.streams.track(nil, g.tls, nil, forward)
+		forward, answered = g.streams.track(nil, g.tls, nil, "", forward)
 		defer answered()
 	}
 
@@ -161,6 +172,13 @@ func (g *Gate) undecided(err error) *refusal {
 // decided returns the request to forward (with what YorvoGate checked as its body) and, on a scoped
 // listener, the decision (what to do once it's forwarded); or why not.
 func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *scoped, error) {
+	// A trusted client's certificate first: an expired one gets nothing but this, whatever it asks
+	if g.listener.Mode == config.Trusted && g.listener.MutualTLS() {
+		if c, ok := credentialOf(r.TLS); !ok || !g.tls.admits(c, nil) {
+			return nil, nil, refuse(http.StatusUnauthorized, "the client certificate has expired, or its CA is no longer this listener's: connect again with a current one")
+		}
+	}
+
 	lowest, highest := g.config.Versions()
 
 	req, err := route.Parse(r.Method, r.URL.EscapedPath(), lowest, highest)
@@ -174,12 +192,6 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 
 	switch g.listener.Mode {
 	case config.Trusted:
-		if g.listener.MutualTLS() {
-			if c, ok := credentialOf(r.TLS); !ok || !g.tls.admits(c, nil) {
-				return nil, nil, refuse(http.StatusUnauthorized, "the client certificate has expired, or its CA is no longer this listener's: connect again with a current one")
-			}
-		}
-
 		if !g.listener.Allows(req.Endpoint) {
 			return nil, nil, refuse(http.StatusForbidden, "%s isn't allowed on this listener", req.Endpoint.Name)
 		}
@@ -221,7 +233,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 
 		ctx, found := lookingUp(r.Context())
 		decision := &scoped{
-			ctx: ctx, req: req, scope: s, policy: g.listener.Containers, pulls: g.listener.Pulls, daemon: daemon, docker: g.docker,
+			ctx: ctx, req: req, scope: s, token: tokenDigest(g.listener, r), policy: g.listener.Containers, pulls: g.listener.Pulls, daemon: daemon, docker: g.docker,
 			builderProfiles: g.listener.BuilderAppArmorProfiles, anyBuilder: g.listener.AllowPrivilegedBuilders,
 			path: r.URL.EscapedPath(), query: r.URL.Query(), upgrading: upgrading(r),
 			stream: r.Body, hasBody: r.ContentLength != 0, loadLimit: g.config.LoadLimit, loads: g.loads,
@@ -310,7 +322,20 @@ func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 			return nil, refuse(http.StatusUnauthorized, "no such scope, or not its token")
 		}
 
-		return s, err
+		if err != nil {
+			return nil, err
+		}
+
+		// Its token proved, the connection's user must be one the scope lists, when it lists any
+		if uid, known := peerOf(r.Context()); !s.PeerAllowed(uid, known) {
+			if !known {
+				return nil, refuse(http.StatusForbidden, "scope %s takes only connections from its peer_uids, and this connection's user isn't known", s.Name)
+			}
+
+			return nil, refuse(http.StatusForbidden, "this connection's user (UID %d) isn't one of scope %s's peer_uids", uid, s.Name)
+		}
+
+		return s, nil
 	}
 
 	name, ok := r.Context().Value(boundKey{}).(string)
@@ -328,6 +353,17 @@ func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 	}
 
 	return s, nil
+}
+
+// tokenDigest is the digest of the token a request on a token listener sent ("" on any other).
+func tokenDigest(l config.Listener, r *http.Request) string {
+	if l.SocketBound() || l.MutualTLS() {
+		return ""
+	}
+
+	sum := sha256.Sum256([]byte(r.Header.Get(TokenHeader)))
+
+	return hex.EncodeToString(sum[:])
 }
 
 // certified is the scope a request's client certificate names, on an mTLS listener: the certificate

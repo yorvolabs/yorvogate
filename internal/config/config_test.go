@@ -273,3 +273,21 @@ func TestTLSIsChecked(t *testing.T) {
 		t.Errorf("a unix socket: %v", err)
 	}
 }
+
+// require_peer_uids is for a scoped listener on a unix address only: a TCP connection has no peer
+// user, and on scope sockets the socket's permissions decide who connects.
+func TestRequirePeerUIDsIsForAUnixAddress(t *testing.T) {
+	for _, c := range []struct {
+		name, listener, want string
+	}{
+		{"a unix address", "{name: a, address: 'unix:///run/a.sock', mode: scoped, scopes: /etc/a, require_peer_uids: true}", ""},
+		{"TCP", "{name: a, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: /etc/a, require_peer_uids: true}", "require_peer_uids: only a scoped listener on a unix address has it"},
+		{"scope sockets", "{name: a, scope_sockets: /run/a, mode: scoped, scopes: /etc/a, require_peer_uids: true}", "require_peer_uids: only a scoped listener on a unix address has it"},
+		{"trusted", "{name: a, address: 'unix:///run/a.sock', mode: trusted, allow: {system: read}, require_peer_uids: true}", "require_peer_uids: only a scoped listener on a unix address has it"},
+	} {
+		c2, err := Parse([]byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - " + c.listener + "\n"))
+		if c.want == "" && (err != nil || !c2.Listeners[0].RequirePeerUIDs || !c2.Listeners[0].PeerCredentials()) || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
+			t.Errorf("%s: %v", c.name, err)
+		}
+	}
+}
