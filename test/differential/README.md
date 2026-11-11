@@ -16,9 +16,24 @@ It's a module of its own, so moby's daemon and its dependencies never enter Yorv
 
 - **Every base is read.** Each endpoint a scope may send has a base request in `corpus_test.go`. The gate allows it, forwards it, and Docker reads it, at API 1.56 and 1.44 (`TestEveryBaseIsAllowedAndRead`). A new endpoint without a base fails `TestEveryEndpointHasABaseAndAnAttack`.
 - **Every attack is refused.** Each rule that refuses has attack requests. The gate refuses them, and nothing reaches Docker. An endpoint whose rule refuses nothing says why in `noAttack`.
-- **The differential property.** Every base and every attack is written in many other ways (`variants_test.go`): form bodies (C-1), repeated parameters, a key's or a bool's spelling, JSON keys in another case or given twice, unknown fields, content after the value, padding, Content-Type and encoding, chunked and mismatched lengths, versions, path forms, and an upgrade on what doesn't stream. A variant of a base is refused by the gate, or Docker reads exactly what it read of the base (deep-equal over the method and every argument), or Docker refuses it before any backend (counted per class: a class that's mostly that is one the gate should refuse itself). A variant of an attack is refused by the gate, with nothing forwarded. No variant makes Docker fetch an import: every smuggled `fromSrc` points at a server the test runs, which counts fetches. None changes what the gate holds of its scopes.
+- **The differential property.** Every base and every attack is written in many other ways (`variants_test.go`): form bodies (C-1), repeated parameters, a key's or a bool's spelling, JSON keys in another case or given twice, unknown fields, content after the value, padding, Content-Type and encoding, chunked and mismatched lengths, versions, path forms, and an upgrade on what doesn't stream. A variant of a base is refused by the gate, or Docker reads exactly what it read of the base (deep-equal over the method and every argument). A variant the gate forwards and Docker then refuses before any backend fails too: the gate should have refused it itself, as it read it differently or not at all. The only exceptions are those listed in `forwardedJunk`, each with why it's harmless, and the list is empty today. Each class's tally is logged. A variant of an attack is refused by the gate, with nothing forwarded. No variant makes Docker fetch an import: every smuggled `fromSrc` points at a server the test runs, which counts fetches. None changes what the gate holds of its scopes.
 - **Docker makes the scope's own.** On the bases that create or name something, Docker's reading carries the scope's name, owner label or image namespace (`TestDockerMakesTheScopesOwn`).
 - **Named readings** (`regressions_test.go`): `containers%2Fcreate` served as `containers/create`, `v01.56` served as 1.56, a lower-case `privileged` given last winning, and a form body's `fromImage` beating the query's. Each is Docker 29.9.2's own reading, and each must be refused by the gate. A moby bump that changes one fails by name.
+
+## What each class guards
+
+Each class was shown to catch the gate defence it's there for, by undoing that defence in a copy:
+
+| Class | The defence undone | What the suite reported |
+|---|---|---|
+| form body | 0.2-a's three: `notAForm`, the gate's own Content-Type, `image.create` taking no body | Docker pulls `quire-sites/blog/app:9` where the gate checked jane's; the assessment's body reaches `ImportImage`; the named regression fails |
+| parameters | a parameter given twice let through, the gate reading the last value | Docker read another scope's name (it reads the first) |
+| version | the version range check | forwarded, and refused by Docker |
+| path | percent-encoding let through | an attack forwarded |
+| Content-Type | the client's Content-Type forwarded | forwarded, and refused by Docker |
+| JSON | a gate decoding differently from Docker (`encoding/json/v2`'s defaults: keys case-sensitive, unknown keys ignored), forwarding the client's body | Docker read `Binds: ["/:/host"]` and `Privileged` from a lower-case `hostconfig` given last, which the gate never saw, and every other key given twice with another's value last |
+
+The gate's real defence against the JSON class is that it decodes as Docker does and forwards what it re-encoded. Forwarding the client's raw body, with the same decoder, is read alike, so that one change alone shows nothing. The class is there for a decoder that differs.
 
 ## The stand-ins
 

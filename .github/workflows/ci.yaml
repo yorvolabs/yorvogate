@@ -41,6 +41,11 @@ jobs:
         run: |
           docker compose -f compose.dev.yaml run --rm go go mod tidy
           git diff --exit-code go.mod go.sum
+      # The differential suite's own module, its moby pin included (test/differential/README.md)
+      - name: The differential suite's module is tidy
+        run: |
+          docker compose -f compose.dev.yaml run --rm -w /src/test/differential -e CGO_ENABLED=0 go go mod tidy
+          git diff --exit-code test/differential/go.mod test/differential/go.sum
 
   fuzz:
     name: Fuzzing
