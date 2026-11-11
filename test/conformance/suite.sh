@@ -515,6 +515,50 @@ kill -HUP "$gate"
 sleep 1
 works "blog's file back: blog works again" as blog docker ps
 
+if [ "$listener" = tokens ]; then
+	say "== A token rotation (two tokens, then the old one gone; one expired)"
+	digest() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
+	# rewrite TOKENS: jane's file with these tokens in place of its token_sha256, renamed into place
+	rewrite() {
+		sed "s/\"token_sha256\":\"[0-9a-f]*\"/$1/" "$dir/jane.json.before" > "$dir/jane.json.new"
+		chmod 600 "$dir/jane.json.new"
+		mv "$dir/jane.json.new" "$dir/scopes/jane.json"
+		kill -HUP "$gate"
+		sleep 1
+	}
+	old=$(cat "$dir/jane.token")
+	new=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
+	mkdir -p "$dir/jane-new"
+	printf '{"HttpHeaders":{"X-YorvoGate-Scope":"jane","X-YorvoGate-Token":"%s"}}\n' "$new" > "$dir/jane-new/config.json"
+	cp "$dir/scopes/jane.json" "$dir/jane.json.before"
+
+	rewrite "\"token_sha256\":\"$(digest "$old")\",\"tokens\":[{\"sha256\":\"$(digest "$new")\"}]"
+	works "jane's old token, during the rotation" as jane docker ps
+	works "jane's new token, during the rotation" env DOCKER_HOST=tcp://127.0.0.1:2376 DOCKER_CONFIG="$dir/jane-new" docker ps
+	sleep 60 | as jane docker exec -i "$janes" cat >/dev/null 2>&1 &
+	oldstream=$!
+	sleep 60 | env DOCKER_HOST=tcp://127.0.0.1:2376 DOCKER_CONFIG="$dir/jane-new" docker exec -i "$janes" cat >/dev/null 2>&1 &
+	newstream=$!
+	sleep 2
+	if alive "$oldstream" && alive "$newstream"; then ok "an exec streams with each token"; else ko "an exec streams with each token"; fi
+
+	rewrite "\"tokens\":[{\"sha256\":\"$(digest "$new")\"}]"
+	if gone "$oldstream"; then ok "the old token's stream ends when it's removed"; else ko "the old token's stream ends when it's removed"; fi
+	if alive "$newstream"; then ok "the new token's stream goes on"; else ko "the new token's stream goes on"; fi
+	refused "jane's old token, once removed" "no such scope, or not its token" as jane docker ps
+	works "jane's new token, after the rotation" env DOCKER_HOST=tcp://127.0.0.1:2376 DOCKER_CONFIG="$dir/jane-new" docker ps
+
+	rewrite "\"tokens\":[{\"sha256\":\"$(digest "$new")\",\"expires\":\"$(date -u -d "@$(($(date +%s) - 60))" +%Y-%m-%dT%H:%M:%SZ)\"}]"
+	if gone "$newstream"; then ok "an expired token's stream ends"; else ko "an expired token's stream ends"; fi
+	refused "an expired token" "no such scope, or not its token" env DOCKER_HOST=tcp://127.0.0.1:2376 DOCKER_CONFIG="$dir/jane-new" docker ps
+	kill "$oldstream" "$newstream" 2>/dev/null
+
+	mv "$dir/jane.json.before" "$dir/scopes/jane.json"
+	kill -HUP "$gate"
+	sleep 1
+	works "jane's file back: its token works again" as jane docker ps
+fi
+
 say "== Nothing was left behind"
 if [ "$(direct ps -aq --filter label=com.docker.compose.project=ygc-jane | wc -l)" = 1 ]; then ok "jane has its one container"; else ko "jane's containers" "$(direct ps -a --filter label=com.docker.compose.project=ygc-jane --format '{{.Names}}')"; fi
 if direct image inspect alpine:yorvogate-hijack >/dev/null 2>&1; then ko "a shared name was retagged"; else ok "no shared name retagged"; fi
