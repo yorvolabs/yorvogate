@@ -134,6 +134,8 @@ func TestWhatReachesTheHostOrAnotherScopeIsRefused(t *testing.T) {
 		{"another container's network", "NetworkMode container:blog-php-1 isn't one of its own", set(set(compose(), "HostConfig.NetworkMode", "container:blog-php-1"), "NetworkingConfig", nil)},
 		{"another's alias on a shared network", `the alias "blog.example.quire.internal"`, set(compose(), "NetworkingConfig.EndpointsConfig.quire-link-jane", map[string]any{"Aliases": []any{"blog.example.quire.internal"}})},
 		{"another's address on a shared network", "the address 10.213.0.9 on the shared network", set(compose(), "NetworkingConfig.EndpointsConfig.quire-link-jane", map[string]any{"IPAMConfig": map[string]any{"IPv4Address": "10.213.0.9"}})},
+		{"another's IPv6 address on a shared network", "the address fd00::9 on the shared network", set(compose(), "NetworkingConfig.EndpointsConfig.quire-link-jane", map[string]any{"IPAMConfig": map[string]any{"IPv6Address": "fd00::9"}})},
+		{"another's link-local address on a shared network", "the address 169.254.0.9 on the shared network", set(compose(), "NetworkingConfig.EndpointsConfig.quire-link-jane", map[string]any{"IPAMConfig": map[string]any{"LinkLocalIPs": []any{"169.254.0.9"}}})},
 		{"driver options on a shared network", "on the shared network quire-link-jane, DriverOpts isn't allowed", set(compose(), "NetworkingConfig.EndpointsConfig.quire-link-jane", map[string]any{"DriverOpts": map[string]any{"com.docker.network.endpoint.sysctls": "net.ipv4.conf.IFNAME.proxy_arp=1"}})},
 		{"a MAC address on a shared network", "MacAddress isn't allowed", set(compose(), "NetworkingConfig.EndpointsConfig.quire-link-jane", map[string]any{"MacAddress": "02:42:ac:11:00:02"})},
 		{"the host's PIDs", "the host's namespaces aren't allowed", set(compose(), "HostConfig.PidMode", "host")},
@@ -362,6 +364,7 @@ func TestExecsAreInItsOwnContainersAndNeverPrivileged(t *testing.T) {
 		{"POST", "/v1.56/exec/exec-blog/start", `{"Detach":true}`, "No such exec instance"},
 		{"GET", "/v1.56/exec/exec-blog/json", "", "No such exec instance"},
 		{"POST", "/v1.56/exec/nothing/start", `{"Detach":true}`, "No such exec instance"},
+		{"POST", "/v1.56/exec/exec-jane/start", `{"Detach":false}`, "an attached exec is allowed only as an HTTP upgrade"},
 	} {
 		if status, answer := send(t, server, c[0], c[1], c[2], asJane); status/100 != 4 || !strings.Contains(message(t, answer), c[3]) {
 			t.Errorf("%s %s: %d %s", c[0], c[1], status, answer)
@@ -393,6 +396,9 @@ func TestJoiningANetwork(t *testing.T) {
 
 	for _, c := range [][3]string{
 		{"/v1.56/networks/quire-link-jane/connect", `{"Container":"jane-php-1","EndpointConfig":{"Aliases":["blog.example.quire.internal"]}}`, "isn't one of its own"},
+		{"/v1.56/networks/quire-link-jane/connect", `{"Container":"jane-php-1","EndpointConfig":{"IPAMConfig":{"IPv4Address":"10.213.0.9"}}}`, "the address 10.213.0.9 on the shared network"},
+		{"/v1.56/networks/quire-link-jane/connect", `{"Container":"jane-php-1","EndpointConfig":{"IPAMConfig":{"IPv6Address":"fd00::9"}}}`, "the address fd00::9 on the shared network"},
+		{"/v1.56/networks/quire-link-jane/connect", `{"Container":"jane-php-1","EndpointConfig":{"IPAMConfig":{"LinkLocalIPs":["169.254.0.9"]}}}`, "the address 169.254.0.9 on the shared network"},
 		{"/v1.56/networks/blog_default/connect", `{"Container":"jane-php-1"}`, "not found"},
 		{"/v1.56/networks/jane_default/connect", `{"Container":"blog-php-1"}`, "No such container"},
 		{"/v1.56/networks/blog_default/disconnect", `{"Container":"blog-php-1","Force":true}`, "not found"},

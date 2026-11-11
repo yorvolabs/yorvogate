@@ -39,6 +39,11 @@ docker compose -f compose.dev.yaml run --rm go make build && test/conformance/ru
 
 ## A new Docker API version
 
-1. Update `github.com/moby/moby/api` and `config.Highest`.
-2. Compare the API's changes (its `swagger.yaml`, and `docs/api/version-history.md` in moby): new endpoints go into `internal/route/endpoints.go` (and get a rule, or stay refused on scoped listeners); new fields of a checked body are refused until a rule allows them, so look at each.
-3. Run the checks.
+1. **List what changed:** `go run ./tools/apidiff <old> <new>` (versions of `github.com/moby/moby/api`, e.g. `v1.55.0 v1.56.1`). It lists every endpoint, query parameter, header and request-body field added, removed or changed, with YorvoGate's decision on each, and exits 1 while any is **UNDECIDED**. `-propose` adds what to ask a model of each undecided row: a model may propose, a maintainer decides. See [tools/apidiff](tools/apidiff/README.md).
+2. **Update `github.com/moby/moby/api`**, and decide on every row:
+   - A body field gets a decision in `internal/gate/fields.go`: free, checked (by the rule that reads it), or refused, each with its reason. A refused list or map also says whether `[]` asks for something. `TestEveryFieldIsDecidedOn` fails until every field of every struct a body reaches has one.
+   - A checked field needs a refusal you can see: an attack in `test/differential/corpus_test.go` that sets it (named in `attackFields`), or the `internal/gate` test that refuses it (`refusedElsewhere`).
+   - A query parameter goes into its endpoint's descriptor (`internal/gate/endpoints.go`), and a new endpoint into `internal/route/endpoints.go` (with a rule, or refused on scoped listeners).
+3. **Rewrite the list of fields:** `go test ./internal/gate -run TestTheFieldsAreTheListedOnes -update`. Review its diff as the change of decisions it is. CI never rewrites it.
+4. **Move `config.Highest`**, and the differential suite's moby pin with the Engine CI installs ([test/differential](test/differential/README.md)).
+5. Run the checks.

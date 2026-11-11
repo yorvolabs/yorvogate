@@ -10,15 +10,6 @@ import (
 	"github.com/moby/moby/api/types/volume"
 )
 
-// The fields of a network a scope may set: its own bridge, with its name and labels, IPv4 and IPv6,
-// internal or not, and its subnets (checked). The rest asks for a driver's powers, the swarm's, or
-// another network's configuration.
-var (
-	networkFields = fields("Name", "Driver", "Scope", "EnableIPv4", "EnableIPv6", "IPAM", "Internal", "Labels")
-	ipamFields    = fields("Driver", "Config")
-	volumeFields  = fields("Name", "Driver", "Labels")
-)
-
 // createNetwork checks a network a scope creates: a bridge of its own, with its name and label, and
 // within its subnets when it has some.
 func (s *scoped) createNetwork(body []byte) ([]byte, error) {
@@ -30,7 +21,7 @@ func (s *scoped) createNetwork(body []byte) ([]byte, error) {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 
-	for _, f := range unset(req, networkFields) {
+	for _, f := range unset(req, networkCreate) {
 		add("%s isn't allowed", f)
 	}
 
@@ -54,7 +45,7 @@ func (s *scoped) createNetwork(body []byte) ([]byte, error) {
 
 	var configs []network.IPAMConfig
 	if req.IPAM != nil {
-		for _, f := range unset(req.IPAM, ipamFields) {
+		for _, f := range unset(req.IPAM, ipam) {
 			add("IPAM.%s isn't allowed", f)
 		}
 
@@ -70,6 +61,10 @@ func (s *scoped) createNetwork(body []byte) ([]byte, error) {
 	}
 
 	for _, c := range configs {
+		for _, f := range unset(c, ipamConfig) {
+			add("IPAM.Config.%s isn't allowed", f)
+		}
+
 		if !c.Subnet.IsValid() && s.scope.HasSubnets() {
 			add("each IPAM config names its subnet")
 
@@ -117,7 +112,7 @@ func (s *scoped) createVolume(body []byte) ([]byte, error) {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 
-	for _, f := range unset(req, volumeFields) {
+	for _, f := range unset(req, volumeCreate) {
 		add("%s isn't allowed", f)
 	}
 

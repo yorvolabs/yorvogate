@@ -1,0 +1,292 @@
+# Every field of every body the gate reads, and its decision. Written by
+# go test ./internal/gate -run TestTheFieldsAreTheListedOnes -update; a change here is a change of decisions.
+container.create ArgsEscaped bool [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create AttachStderr bool [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create AttachStdin bool [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create AttachStdout bool [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create Cmd []string [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create Domainname string [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create Entrypoint []string [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create Env []string [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create ExposedPorts map[network.Port]struct {} [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create Healthcheck *v1.HealthcheckConfig [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create Healthcheck.Interval time.Duration [HealthcheckConfig] free: a command in the container's own namespaces, and its timing
+container.create Healthcheck.Retries int [HealthcheckConfig] free: a command in the container's own namespaces, and its timing
+container.create Healthcheck.StartInterval time.Duration [HealthcheckConfig] free: a command in the container's own namespaces, and its timing
+container.create Healthcheck.StartPeriod time.Duration [HealthcheckConfig] free: a command in the container's own namespaces, and its timing
+container.create Healthcheck.Test []string [HealthcheckConfig] free: a command in the container's own namespaces, and its timing
+container.create Healthcheck.Timeout time.Duration [HealthcheckConfig] free: a command in the container's own namespaces, and its timing
+container.create HostConfig *container.HostConfig [container.CreateRequest] checked: createContainer
+container.create HostConfig.Annotations map[string]string [HostConfig] refused: read by runtimes, which may act on them
+container.create HostConfig.AutoRemove bool [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.Binds []string [HostConfig] checked: host
+container.create HostConfig.BlkioDeviceReadBps []*blkiodev.ThrottleDevice [HostConfig] refused: reaches the host's devices or block devices
+container.create HostConfig.BlkioDeviceReadIOps []*blkiodev.ThrottleDevice [HostConfig] refused: reaches the host's devices or block devices
+container.create HostConfig.BlkioDeviceWriteBps []*blkiodev.ThrottleDevice [HostConfig] refused: reaches the host's devices or block devices
+container.create HostConfig.BlkioDeviceWriteIOps []*blkiodev.ThrottleDevice [HostConfig] refused: reaches the host's devices or block devices
+container.create HostConfig.BlkioWeight uint16 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.BlkioWeightDevice []*blkiodev.WeightDevice [HostConfig] refused: reaches the host's devices or block devices
+container.create HostConfig.CapAdd []string [HostConfig] checked: host
+container.create HostConfig.CapDrop []string [HostConfig] checked: host
+container.create HostConfig.Cgroup container.CgroupSpec [HostConfig] refused: the cgroup of another container
+container.create HostConfig.CgroupParent string [HostConfig] refused: its cgroup's place is the daemon's to choose
+container.create HostConfig.CgroupnsMode container.CgroupnsMode [HostConfig] checked: host
+container.create HostConfig.ConsoleSize [2]uint [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.ContainerIDFile string [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.CpuCount int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.CpuPercent int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.CpuPeriod int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.CpuQuota int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.CpuRealtimePeriod int64 [HostConfig] refused: the host's real-time scheduler
+container.create HostConfig.CpuRealtimeRuntime int64 [HostConfig] refused: the host's real-time scheduler
+container.create HostConfig.CpuShares int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.CpusetCpus string [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.CpusetMems string [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.DeviceCgroupRules []string [HostConfig] refused: reaches the host's devices or block devices
+container.create HostConfig.DeviceRequests []container.DeviceRequest [HostConfig] refused: reaches the host's devices or block devices
+container.create HostConfig.Devices []container.DeviceMapping [HostConfig] refused: reaches the host's devices or block devices
+container.create HostConfig.Dns []netip.Addr [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.DnsOptions []string [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.DnsSearch []string [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.ExtraHosts []string [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.GroupAdd []string [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.IOMaximumBandwidth uint64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.IOMaximumIOps uint64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.Init *bool [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.IpcMode container.IpcMode [HostConfig] checked: host
+container.create HostConfig.Isolation container.Isolation [HostConfig] checked: host
+container.create HostConfig.Links []string [HostConfig] refused: legacy links reach other containers' addresses and environments
+container.create HostConfig.LogConfig container.LogConfig [HostConfig] checked: host, logOptions
+container.create HostConfig.LogConfig.Config map[string]string [LogConfig] checked: host, logOptions
+container.create HostConfig.LogConfig.Type string [LogConfig] checked: host, logOptions
+container.create HostConfig.MaskedPaths []string [HostConfig] refused ([] asks): what Docker masks or makes read-only in /proc: [] is none, /proc unmasked
+container.create HostConfig.Memory int64 [HostConfig] checked: resources (the listener's limits)
+container.create HostConfig.MemoryReservation int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.MemorySwap int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.MemorySwappiness *int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.Mounts []mount.Mount [HostConfig] checked: host, mount
+container.create HostConfig.Mounts[].BindOptions *mount.BindOptions [Mount] refused: a bind mount reaches the host's files
+container.create HostConfig.Mounts[].ClusterOptions *mount.ClusterOptions [Mount] refused: the swarm's
+container.create HostConfig.Mounts[].Consistency mount.Consistency [Mount] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.Mounts[].ImageOptions *mount.ImageOptions [Mount] refused: an image mount reads an image the scope's rules don't check
+container.create HostConfig.Mounts[].ReadOnly bool [Mount] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.Mounts[].Source string [Mount] checked: mount, volumeSource
+container.create HostConfig.Mounts[].Target string [Mount] checked: mount (an absolute, clean path)
+container.create HostConfig.Mounts[].TmpfsOptions *mount.TmpfsOptions [Mount] free: a memory-backed mount of the container's own, counted in its memory limit
+container.create HostConfig.Mounts[].TmpfsOptions.Mode fs.FileMode [TmpfsOptions] free: a memory-backed mount of the container's own, counted in its memory limit
+container.create HostConfig.Mounts[].TmpfsOptions.Options [][]string [TmpfsOptions] free: a memory-backed mount of the container's own, counted in its memory limit
+container.create HostConfig.Mounts[].TmpfsOptions.SizeBytes int64 [TmpfsOptions] free: a memory-backed mount of the container's own, counted in its memory limit
+container.create HostConfig.Mounts[].Type mount.Type [Mount] checked: mount (volumes and tmpfs only)
+container.create HostConfig.Mounts[].VolumeOptions *mount.VolumeOptions [Mount] checked: mount
+container.create HostConfig.Mounts[].VolumeOptions.DriverConfig *mount.Driver [VolumeOptions] checked: mount, plainLocal
+container.create HostConfig.Mounts[].VolumeOptions.DriverConfig.Name string [Driver] checked: mount, plainLocal
+container.create HostConfig.Mounts[].VolumeOptions.DriverConfig.Options map[string]string [Driver] checked: mount, plainLocal
+container.create HostConfig.Mounts[].VolumeOptions.Labels map[string]string [VolumeOptions] checked: mount (another scope's owner label)
+container.create HostConfig.Mounts[].VolumeOptions.NoCopy bool [VolumeOptions] free: whether Docker copies the image's files into a new volume of the scope's
+container.create HostConfig.Mounts[].VolumeOptions.Subpath string [VolumeOptions] checked: mount (inside the volume)
+container.create HostConfig.NanoCpus int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.NetworkMode container.NetworkMode [HostConfig] checked: networking
+container.create HostConfig.OomKillDisable *bool [HostConfig] checked: resources (the listener's limits)
+container.create HostConfig.OomScoreAdj int [HostConfig] checked: host
+container.create HostConfig.PidMode container.PidMode [HostConfig] checked: host
+container.create HostConfig.PidsLimit *int64 [HostConfig] checked: resources (the listener's limits)
+container.create HostConfig.PortBindings map[network.Port][]network.PortBinding [HostConfig] refused: publishes the host's ports
+container.create HostConfig.Privileged bool [HostConfig] refused: every power over the host
+container.create HostConfig.PublishAllPorts bool [HostConfig] refused: publishes the host's ports
+container.create HostConfig.ReadonlyPaths []string [HostConfig] refused ([] asks): what Docker masks or makes read-only in /proc: [] is none, /proc unmasked
+container.create HostConfig.ReadonlyRootfs bool [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.RestartPolicy container.RestartPolicy [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.RestartPolicy.MaximumRetryCount int [RestartPolicy] free: when Docker restarts the scope's own container
+container.create HostConfig.RestartPolicy.Name container.RestartPolicyMode [RestartPolicy] free: when Docker restarts the scope's own container
+container.create HostConfig.Runtime string [HostConfig] checked: host
+container.create HostConfig.SecurityOpt []string [HostConfig] checked: host
+container.create HostConfig.ShmSize int64 [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.StorageOpt map[string]string [HostConfig] refused: the storage driver's options, on the host's disk
+container.create HostConfig.Sysctls map[string]string [HostConfig] refused: kernel parameters
+container.create HostConfig.Tmpfs map[string]string [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.UTSMode container.UTSMode [HostConfig] checked: host
+container.create HostConfig.Ulimits []*units.Ulimit [HostConfig] checked: resources (the listener's ulimits)
+container.create HostConfig.Ulimits[].Hard int64 [Ulimit] free: a limit on the scope's own processes, of a kind the listener allows
+container.create HostConfig.Ulimits[].Name string [Ulimit] checked: resources (the listener's ulimits)
+container.create HostConfig.Ulimits[].Soft int64 [Ulimit] free: a limit on the scope's own processes, of a kind the listener allows
+container.create HostConfig.Umask *uint32 [HostConfig] free: the scope's own container's setting, on its own namespaces and files
+container.create HostConfig.UsernsMode container.UsernsMode [HostConfig] checked: host
+container.create HostConfig.VolumeDriver string [HostConfig] checked: host
+container.create HostConfig.VolumesFrom []string [HostConfig] checked: host
+container.create Hostname string [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create Image string [Config] checked: image, readsImage
+container.create Labels map[string]string [Config] checked: ownLabels
+container.create NetworkDisabled bool [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create NetworkingConfig *network.NetworkingConfig [container.CreateRequest] checked: createContainer, networking
+container.create NetworkingConfig.EndpointsConfig map[string]*network.EndpointSettings [NetworkingConfig] checked: networking, endpoint
+container.create NetworkingConfig.EndpointsConfig{}.Aliases []string [EndpointSettings (a shared network)] checked: endpoint (the scope's aliases there)
+container.create NetworkingConfig.EndpointsConfig{}.Aliases []string [EndpointSettings (its own network)] free: on the scope's own network
+container.create NetworkingConfig.EndpointsConfig{}.DNSNames []string [EndpointSettings (a shared network)] refused: names in Docker's DNS beyond its aliases
+container.create NetworkingConfig.EndpointsConfig{}.DNSNames []string [EndpointSettings (its own network)] refused: names in Docker's DNS beyond its aliases
+container.create NetworkingConfig.EndpointsConfig{}.DriverOpts map[string]string [EndpointSettings (a shared network)] refused: the network driver's options
+container.create NetworkingConfig.EndpointsConfig{}.DriverOpts map[string]string [EndpointSettings (its own network)] refused: the network driver's options
+container.create NetworkingConfig.EndpointsConfig{}.EndpointID string [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.EndpointID string [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.Gateway netip.Addr [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.Gateway netip.Addr [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.GlobalIPv6Address netip.Addr [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.GlobalIPv6Address netip.Addr [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.GlobalIPv6PrefixLen int [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.GlobalIPv6PrefixLen int [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.GwPriority int [EndpointSettings (a shared network)] free: which of its networks routes by default: its own container's
+container.create NetworkingConfig.EndpointsConfig{}.GwPriority int [EndpointSettings (its own network)] free: on the scope's own network
+container.create NetworkingConfig.EndpointsConfig{}.IPAMConfig *network.EndpointIPAMConfig [EndpointSettings (a shared network)] checked: endpoint
+container.create NetworkingConfig.EndpointsConfig{}.IPAMConfig *network.EndpointIPAMConfig [EndpointSettings (its own network)] free: on the scope's own network
+container.create NetworkingConfig.EndpointsConfig{}.IPAMConfig.IPv4Address netip.Addr [EndpointIPAMConfig (a shared network)] checked: endpoint (the scope's addresses there)
+container.create NetworkingConfig.EndpointsConfig{}.IPAMConfig.IPv4Address netip.Addr [EndpointIPAMConfig (its own network)] free: an address on the scope's own network
+container.create NetworkingConfig.EndpointsConfig{}.IPAMConfig.IPv6Address netip.Addr [EndpointIPAMConfig (a shared network)] checked: endpoint (the scope's addresses there)
+container.create NetworkingConfig.EndpointsConfig{}.IPAMConfig.IPv6Address netip.Addr [EndpointIPAMConfig (its own network)] free: an address on the scope's own network
+container.create NetworkingConfig.EndpointsConfig{}.IPAMConfig.LinkLocalIPs []netip.Addr [EndpointIPAMConfig (a shared network)] checked: endpoint (the scope's addresses there)
+container.create NetworkingConfig.EndpointsConfig{}.IPAMConfig.LinkLocalIPs []netip.Addr [EndpointIPAMConfig (its own network)] free: an address on the scope's own network
+container.create NetworkingConfig.EndpointsConfig{}.IPAddress netip.Addr [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.IPAddress netip.Addr [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.IPPrefixLen int [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.IPPrefixLen int [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.IPv6Gateway netip.Addr [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.IPv6Gateway netip.Addr [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.Links []string [EndpointSettings (a shared network)] refused: legacy links reach other containers' addresses and environments
+container.create NetworkingConfig.EndpointsConfig{}.Links []string [EndpointSettings (its own network)] refused: legacy links reach other containers' addresses and environments
+container.create NetworkingConfig.EndpointsConfig{}.MacAddress network.HardwareAddr [EndpointSettings (a shared network)] refused: another container's address on a network others share
+container.create NetworkingConfig.EndpointsConfig{}.MacAddress network.HardwareAddr [EndpointSettings (its own network)] free: on the scope's own network
+container.create NetworkingConfig.EndpointsConfig{}.NetworkID string [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+container.create NetworkingConfig.EndpointsConfig{}.NetworkID string [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+container.create OnBuild []string [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create OpenStdin bool [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create Shell []string [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create StdinOnce bool [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create StopSignal string [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create StopTimeout *int [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create Tty bool [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create User string [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create Volumes map[string]struct {} [Config] free: the scope's own container's setting, on its own namespaces and files
+container.create WorkingDir string [Config] free: the scope's own container's setting, on its own namespaces and files
+container.update BlkioDeviceReadBps []*blkiodev.ThrottleDevice [container.UpdateConfig] refused: reaches the host's devices or block devices
+container.update BlkioDeviceReadIOps []*blkiodev.ThrottleDevice [container.UpdateConfig] refused: reaches the host's devices or block devices
+container.update BlkioDeviceWriteBps []*blkiodev.ThrottleDevice [container.UpdateConfig] refused: reaches the host's devices or block devices
+container.update BlkioDeviceWriteIOps []*blkiodev.ThrottleDevice [container.UpdateConfig] refused: reaches the host's devices or block devices
+container.update BlkioWeight uint16 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update BlkioWeightDevice []*blkiodev.WeightDevice [container.UpdateConfig] refused: reaches the host's devices or block devices
+container.update CgroupParent string [container.UpdateConfig] refused: its cgroup's place is the daemon's to choose
+container.update CpuCount int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update CpuPercent int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update CpuPeriod int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update CpuQuota int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update CpuRealtimePeriod int64 [container.UpdateConfig] refused: the host's real-time scheduler
+container.update CpuRealtimeRuntime int64 [container.UpdateConfig] refused: the host's real-time scheduler
+container.update CpuShares int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update CpusetCpus string [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update CpusetMems string [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update DeviceCgroupRules []string [container.UpdateConfig] refused: reaches the host's devices or block devices
+container.update DeviceRequests []container.DeviceRequest [container.UpdateConfig] refused: reaches the host's devices or block devices
+container.update Devices []container.DeviceMapping [container.UpdateConfig] refused: reaches the host's devices or block devices
+container.update IOMaximumBandwidth uint64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update IOMaximumIOps uint64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update Memory int64 [container.UpdateConfig] checked: updateContainer (the listener's limits)
+container.update MemoryReservation int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update MemorySwap int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update MemorySwappiness *int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update NanoCpus int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update OomKillDisable *bool [container.UpdateConfig] checked: updateContainer (the listener's limits)
+container.update PidsLimit *int64 [container.UpdateConfig] checked: updateContainer (the listener's limits)
+container.update RestartPolicy container.RestartPolicy [container.UpdateConfig] free: the scope's own container's setting, on its own namespaces and files
+container.update RestartPolicy.MaximumRetryCount int [RestartPolicy] free: when Docker restarts the scope's own container
+container.update RestartPolicy.Name container.RestartPolicyMode [RestartPolicy] free: when Docker restarts the scope's own container
+container.update Ulimits []*units.Ulimit [container.UpdateConfig] checked: updateContainer (the listener's ulimits)
+container.update Ulimits[].Hard int64 [Ulimit] free: a limit on the scope's own processes, of a kind the listener allows
+container.update Ulimits[].Name string [Ulimit] checked: resources (the listener's ulimits)
+container.update Ulimits[].Soft int64 [Ulimit] free: a limit on the scope's own processes, of a kind the listener allows
+exec.create AttachStderr bool [container.ExecCreateRequest (a builder)] free: what docker exec -i sends: the stream's ends
+exec.create AttachStderr bool [container.ExecCreateRequest (its own container)] free: a command in the scope's own container, as its own user
+exec.create AttachStdin bool [container.ExecCreateRequest (a builder)] free: what docker exec -i sends: the stream's ends
+exec.create AttachStdin bool [container.ExecCreateRequest (its own container)] free: a command in the scope's own container, as its own user
+exec.create AttachStdout bool [container.ExecCreateRequest (a builder)] free: what docker exec -i sends: the stream's ends
+exec.create AttachStdout bool [container.ExecCreateRequest (its own container)] free: a command in the scope's own container, as its own user
+exec.create Cmd []string [container.ExecCreateRequest (a builder)] checked: createDialStdio (buildctl dial-stdio exactly)
+exec.create Cmd []string [container.ExecCreateRequest (its own container)] free: a command in the scope's own container, as its own user
+exec.create ConsoleSize *[2]uint [container.ExecCreateRequest (a builder)] free: what docker exec -i sends: the stream's ends
+exec.create ConsoleSize *[2]uint [container.ExecCreateRequest (its own container)] free: a command in the scope's own container, as its own user
+exec.create DetachKeys string [container.ExecCreateRequest (a builder)] free: what docker exec -i sends: the stream's ends
+exec.create DetachKeys string [container.ExecCreateRequest (its own container)] free: a command in the scope's own container, as its own user
+exec.create Env []string [container.ExecCreateRequest (a builder)] refused: a builder runs only dial-stdio, as its own user
+exec.create Env []string [container.ExecCreateRequest (its own container)] free: a command in the scope's own container, as its own user
+exec.create Privileged bool [container.ExecCreateRequest (a builder)] refused: a builder runs only dial-stdio, as its own user
+exec.create Privileged bool [container.ExecCreateRequest (its own container)] refused: every power over the host
+exec.create Tty bool [container.ExecCreateRequest (a builder)] refused: a builder runs only dial-stdio, as its own user
+exec.create Tty bool [container.ExecCreateRequest (its own container)] free: a command in the scope's own container, as its own user
+exec.create User string [container.ExecCreateRequest (a builder)] refused: a builder runs only dial-stdio, as its own user
+exec.create User string [container.ExecCreateRequest (its own container)] free: a command in the scope's own container, as its own user
+exec.create WorkingDir string [container.ExecCreateRequest (a builder)] refused: a builder runs only dial-stdio, as its own user
+exec.create WorkingDir string [container.ExecCreateRequest (its own container)] free: a command in the scope's own container, as its own user
+exec.start ConsoleSize *[2]uint [container.ExecStartRequest] free: the terminal of an exec of its own
+exec.start Detach bool [container.ExecStartRequest] checked: startExec (attached only as an upgrade)
+exec.start Tty bool [container.ExecStartRequest] free: the terminal of an exec of its own
+network.connect Container string [network.ConnectRequest] checked: connect (one of its containers)
+network.connect EndpointConfig *network.EndpointSettings [network.ConnectRequest] checked: connect, endpoint
+network.connect EndpointConfig.Aliases []string [EndpointSettings (a shared network)] checked: endpoint (the scope's aliases there)
+network.connect EndpointConfig.Aliases []string [EndpointSettings (its own network)] free: on the scope's own network
+network.connect EndpointConfig.DNSNames []string [EndpointSettings (a shared network)] refused: names in Docker's DNS beyond its aliases
+network.connect EndpointConfig.DNSNames []string [EndpointSettings (its own network)] refused: names in Docker's DNS beyond its aliases
+network.connect EndpointConfig.DriverOpts map[string]string [EndpointSettings (a shared network)] refused: the network driver's options
+network.connect EndpointConfig.DriverOpts map[string]string [EndpointSettings (its own network)] refused: the network driver's options
+network.connect EndpointConfig.EndpointID string [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.EndpointID string [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.Gateway netip.Addr [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.Gateway netip.Addr [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.GlobalIPv6Address netip.Addr [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.GlobalIPv6Address netip.Addr [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.GlobalIPv6PrefixLen int [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.GlobalIPv6PrefixLen int [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.GwPriority int [EndpointSettings (a shared network)] free: which of its networks routes by default: its own container's
+network.connect EndpointConfig.GwPriority int [EndpointSettings (its own network)] free: on the scope's own network
+network.connect EndpointConfig.IPAMConfig *network.EndpointIPAMConfig [EndpointSettings (a shared network)] checked: endpoint
+network.connect EndpointConfig.IPAMConfig *network.EndpointIPAMConfig [EndpointSettings (its own network)] free: on the scope's own network
+network.connect EndpointConfig.IPAMConfig.IPv4Address netip.Addr [EndpointIPAMConfig (a shared network)] checked: endpoint (the scope's addresses there)
+network.connect EndpointConfig.IPAMConfig.IPv4Address netip.Addr [EndpointIPAMConfig (its own network)] free: an address on the scope's own network
+network.connect EndpointConfig.IPAMConfig.IPv6Address netip.Addr [EndpointIPAMConfig (a shared network)] checked: endpoint (the scope's addresses there)
+network.connect EndpointConfig.IPAMConfig.IPv6Address netip.Addr [EndpointIPAMConfig (its own network)] free: an address on the scope's own network
+network.connect EndpointConfig.IPAMConfig.LinkLocalIPs []netip.Addr [EndpointIPAMConfig (a shared network)] checked: endpoint (the scope's addresses there)
+network.connect EndpointConfig.IPAMConfig.LinkLocalIPs []netip.Addr [EndpointIPAMConfig (its own network)] free: an address on the scope's own network
+network.connect EndpointConfig.IPAddress netip.Addr [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.IPAddress netip.Addr [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.IPPrefixLen int [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.IPPrefixLen int [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.IPv6Gateway netip.Addr [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.IPv6Gateway netip.Addr [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.Links []string [EndpointSettings (a shared network)] refused: legacy links reach other containers' addresses and environments
+network.connect EndpointConfig.Links []string [EndpointSettings (its own network)] refused: legacy links reach other containers' addresses and environments
+network.connect EndpointConfig.MacAddress network.HardwareAddr [EndpointSettings (a shared network)] refused: another container's address on a network others share
+network.connect EndpointConfig.MacAddress network.HardwareAddr [EndpointSettings (its own network)] free: on the scope's own network
+network.connect EndpointConfig.NetworkID string [EndpointSettings (a shared network)] refused: what Docker reports, never what a client asks
+network.connect EndpointConfig.NetworkID string [EndpointSettings (its own network)] refused: what Docker reports, never what a client asks
+network.create Attachable bool [network.CreateRequest] refused: the swarm's
+network.create ConfigFrom *network.ConfigReference [network.CreateRequest] refused: the swarm's
+network.create ConfigOnly bool [network.CreateRequest] refused: the swarm's
+network.create Driver string [network.CreateRequest] checked: createNetwork (bridge only)
+network.create EnableIPv4 *bool [network.CreateRequest] free: which addresses the scope's own bridge has
+network.create EnableIPv6 *bool [network.CreateRequest] free: which addresses the scope's own bridge has
+network.create IPAM *network.IPAM [network.CreateRequest] checked: createNetwork
+network.create IPAM.Config []network.IPAMConfig [IPAM] checked: createNetwork
+network.create IPAM.Config[].AuxiliaryAddresses map[string]netip.Addr [IPAMConfig] free: addresses within the subnet, which is checked: Docker refuses one outside it ("parent subnet … doesn't contain"; the nightly leg checks it)
+network.create IPAM.Config[].Gateway netip.Addr [IPAMConfig] free: addresses within the subnet, which is checked: Docker refuses one outside it ("parent subnet … doesn't contain"; the nightly leg checks it)
+network.create IPAM.Config[].IPRange netip.Prefix [IPAMConfig] free: addresses within the subnet, which is checked: Docker refuses one outside it ("parent subnet … doesn't contain"; the nightly leg checks it)
+network.create IPAM.Config[].Subnet netip.Prefix [IPAMConfig] checked: createNetwork (inside the scope's subnets)
+network.create IPAM.Driver string [IPAM] checked: createNetwork (the default driver)
+network.create IPAM.Options map[string]string [IPAM] refused: an IPAM driver's options
+network.create Ingress bool [network.CreateRequest] refused: the swarm's
+network.create Internal bool [network.CreateRequest] checked: createNetwork (egress: none)
+network.create Labels map[string]string [network.CreateRequest] checked: createNetwork, ownLabels
+network.create Name string [network.CreateRequest] checked: createNetwork (its names)
+network.create Options map[string]string [network.CreateRequest] refused: the network driver's options
+network.create Scope string [network.CreateRequest] checked: createNetwork (local only)
+network.disconnect Container string [network.DisconnectRequest] checked: disconnect (one of its containers)
+network.disconnect Force bool [network.DisconnectRequest] free: whether Docker disconnects a container of its own that's running
+volume.create ClusterVolumeSpec *volume.ClusterVolumeSpec [volume.CreateRequest] refused: the swarm's
+volume.create Driver string [volume.CreateRequest] checked: createVolume, plainLocal
+volume.create DriverOpts map[string]string [volume.CreateRequest] refused: with them, a local volume mounts any host path
+volume.create Labels map[string]string [volume.CreateRequest] checked: createVolume, ownLabels
+volume.create Name string [volume.CreateRequest] checked: createVolume (its names)

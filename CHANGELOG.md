@@ -11,6 +11,8 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 - **A parser-differential suite, and CodeQL.** The gate runs in front of Docker's own API server code (moby's routers, mux and decoders, at the Engine version CI installs), whose backends record what they're handed: for every endpoint a scope may send, written in thousands of other ways (form bodies, repeated parameters, keys' case and duplicates, padding, framing, versions, path forms), what Docker reads of what the gate forwards must be what the gate decided on, and every attack must be refused before Docker sees it. It runs in `make check` (a few seconds), and every night against a real Docker. It finds the assessment's C-1 when 0.2.0's fix is reverted. CodeQL's security-extended queries run on every pull request. See [test/differential](test/differential/README.md).
 
+- **A tool for each new Docker API version.** `go run ./tools/apidiff <old> <new>` lists what changed between two versions of Docker's API (endpoints, parameters, headers, request-body fields) and YorvoGate's decision on each, failing while any is undecided. Every field of every request body the gate reads now has a recorded decision (free, checked by a named rule, or refused, with its reason), and a test fails when Docker adds one without a decision, when a field changes type, or when a field marked checked has no request that shows it refused. See [CONTRIBUTING](CONTRIBUTING.md#a-new-docker-api-version).
+
 ### Changed
 
 - **A trusted mTLS listener answers an expired client certificate with 401 only**, whatever the request asks for, before reading its path.

@@ -167,3 +167,31 @@ func (d descriptor) parameters(endpoint string, query map[string][]string) error
 func ScopeEndpoints() []string {
 	return slices.Sorted(maps.Keys(forScopes))
 }
+
+// ParameterDecision is how a scope's endpoint decides on a query parameter: "free", "checked",
+// "refused" (Docker reads it, and a scope may not give it), or "" when its descriptor doesn't name
+// it (refused too, undecided). For apidiff.
+func ParameterDecision(endpoint, name string) string {
+	d, ok := forScopes[endpoint]
+	switch {
+	case !ok:
+		return ""
+	case d.query[name] == free:
+		return "free"
+	case d.query[name] == checked:
+		return "checked"
+	}
+
+	if _, refused := d.refused[name]; refused {
+		return "refused"
+	}
+
+	return ""
+}
+
+// HeaderForwarded tells whether a scope's request to an endpoint has a header forwarded. For apidiff.
+func HeaderForwarded(endpoint, name string) bool {
+	h, ok := forwardedHeaders[http.CanonicalHeaderKey(name)]
+
+	return ok && (h.endpoints == nil || slices.Contains(h.endpoints, endpoint))
+}

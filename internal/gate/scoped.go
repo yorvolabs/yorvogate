@@ -298,6 +298,10 @@ func (s *scoped) connect(body []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	if f := unset(req, networkConnect); len(f) > 0 {
+		return nil, refuse(http.StatusForbidden, "network.connect: %s isn't allowed", strings.Join(f, ", "))
+	}
+
 	name, err := s.network()
 	if err != nil {
 		return nil, err
@@ -328,6 +332,10 @@ func (s *scoped) disconnect(body []byte) ([]byte, error) {
 	var req network.DisconnectRequest
 	if err := decode(body, &req); err != nil {
 		return nil, err
+	}
+
+	if f := unset(req, networkDisconnect); len(f) > 0 {
+		return nil, refuse(http.StatusForbidden, "network.disconnect: %s isn't allowed", strings.Join(f, ", "))
 	}
 
 	if _, err := s.network(); err != nil {

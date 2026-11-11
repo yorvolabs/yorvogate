@@ -168,6 +168,47 @@ var attacks = []attack{
 	{"volume.inspect", "another scope's", get("/v1.56/volumes/blog_data")},
 	{"volume.delete", "another scope's", del("/v1.56/volumes/blog_data")},
 	{"distribution.inspect", "another scope's", get("/v1.56/distribution/quire-sites/blog/app:1/json")},
+
+	// A refused value of each checked field (fields_test.go), on the suite's listener
+	{"container.create", "another scope's network", postJSON("/v1.56/containers/create?name=jane-x", `{"Image":"alpine:3.22",`+own+`,"HostConfig":{"NetworkMode":"jane_default","CapDrop":["ALL"],"SecurityOpt":["no-new-privileges"]},"NetworkingConfig":{"EndpointsConfig":{"blog_default":{}}}}`)},
+	{"container.create", "a capability added", janeHost(`"CapAdd":["SYS_ADMIN"]`)},
+	{"container.create", "not every capability dropped", postJSON("/v1.56/containers/create?name=jane-x", `{"Image":"alpine:3.22",`+own+`,"HostConfig":{"NetworkMode":"jane_default","CapDrop":["NET_RAW"],"SecurityOpt":["no-new-privileges"]}}`)},
+	{"container.create", "the host's cgroup namespace", janeHost(`"CgroupnsMode":"host"`)},
+	{"container.create", "the host's IPC namespace", janeHost(`"IpcMode":"host"`)},
+	{"container.create", "the host's PID namespace", janeHost(`"PidMode":"host"`)},
+	{"container.create", "the host's UTS namespace", janeHost(`"UTSMode":"host"`)},
+	{"container.create", "the host's user namespace", janeHost(`"UsernsMode":"host"`)},
+	{"container.create", "another isolation", janeHost(`"Isolation":"hyperv"`)},
+	{"container.create", "a log driver not allowed", janeHost(`"LogConfig":{"Type":"syslog"}`)},
+	{"container.create", "a log option not the driver's", janeHost(`"LogConfig":{"Type":"json-file","Config":{"syslog-address":"tcp://192.0.2.1:514"}}`)},
+	{"container.create", "a bind mount", janeHost(`"Mounts":[{"Type":"bind","Source":"/","Target":"/host"}]`)},
+	{"container.create", "another scope's volume mounted", janeHost(`"Mounts":[{"Type":"volume","Source":"blog_data","Target":"/data"}]`)},
+	{"container.create", "a mount's relative target", janeHost(`"Mounts":[{"Type":"volume","Source":"jane_x","Target":"data"}]`)},
+	{"container.create", "a mount's volume labelled another's", janeHost(`"Mounts":[{"Type":"volume","Source":"jane_x","Target":"/data","VolumeOptions":{"Labels":{"com.docker.compose.project":"blog"}}}]`)},
+	{"container.create", "a mount's subpath out of the volume", janeHost(`"Mounts":[{"Type":"volume","Source":"jane_x","Target":"/data","VolumeOptions":{"Subpath":"../etc"}}]`)},
+	{"container.create", "a mount's volume driver", janeHost(`"Mounts":[{"Type":"volume","Source":"jane_x","Target":"/data","VolumeOptions":{"DriverConfig":{"Name":"nfs"}}}]`)},
+	{"container.create", "a mount's volume driver options", janeHost(`"Mounts":[{"Type":"volume","Source":"jane_x","Target":"/data","VolumeOptions":{"DriverConfig":{"Name":"local","Options":{"type":"none","o":"bind","device":"/"}}}}]`)},
+	{"container.create", "the OOM killer disabled", janeHost(`"OomKillDisable":true`)},
+	{"container.create", "an OOM score below 0", janeHost(`"OomScoreAdj":-1000`)},
+	{"container.create", "a runtime not allowed", janeHost(`"Runtime":"runsc"`)},
+	{"container.create", "a security option not allowed", postJSON("/v1.56/containers/create?name=jane-x", `{"Image":"alpine:3.22",`+own+`,"HostConfig":{"NetworkMode":"jane_default","CapDrop":["ALL"],"SecurityOpt":["no-new-privileges","apparmor=unconfined"]}}`)},
+	{"container.create", "a ulimit not allowed", janeHost(`"Ulimits":[{"Name":"nofile","Soft":1048576,"Hard":1048576}]`)},
+	{"container.create", "a volume driver", janeHost(`"VolumeDriver":"nfs"`)},
+	{"container.create", "another scope's volumes", janeHost(`"VolumesFrom":["blog-php-1"]`)},
+	{"container.update", "the OOM killer disabled", postJSON("/v1.56/containers/jane-php-1/update", `{"OomKillDisable":true}`)},
+	{"container.update", "a ulimit not allowed", postJSON("/v1.56/containers/jane-php-1/update", `{"Ulimits":[{"Name":"nofile","Soft":1048576,"Hard":1048576}]}`)},
+	{"network.connect", "an endpoint's legacy links", postJSON("/v1.56/networks/jane_default/connect", `{"Container":"jane-php-1","EndpointConfig":{"Links":["blog-php-1:db"]}}`)},
+	{"network.create", "a driver not allowed", postJSON("/v1.56/networks/create", `{"Name":"jane_new","Driver":"macvlan",`+own+`}`)},
+	{"network.create", "the swarm's scope", postJSON("/v1.56/networks/create", `{"Name":"jane_new","Scope":"swarm",`+own+`}`)},
+	{"network.create", "another scope's label", postJSON("/v1.56/networks/create", `{"Name":"jane_new","Labels":{"com.docker.compose.project":"blog"}}`)},
+	{"network.create", "an IPAM plugin", postJSON("/v1.56/networks/create", `{"Name":"jane_new",`+own+`,"IPAM":{"Driver":"weave"}}`)},
+	{"volume.create", "a driver not allowed", postJSON("/v1.56/volumes/create", `{"Name":"jane_new","Driver":"nfs",`+own+`}`)},
+	{"volume.create", "another scope's label", postJSON("/v1.56/volumes/create", `{"Name":"jane_new","Labels":{"com.docker.compose.project":"blog"}}`)},
+}
+
+// janeHost is a container.create of jane's, its host configuration the suite's base with more.
+func janeHost(more string) func(testing.TB) request {
+	return postJSON("/v1.56/containers/create?name=jane-x", `{"Image":"alpine:3.22",`+own+`,"HostConfig":{"NetworkMode":"jane_default","CapDrop":["ALL"],"SecurityOpt":["no-new-privileges"],`+more+`}}`)
 }
 
 // The endpoints whose rule refuses nothing for a request's target: they filter or rewrite what
