@@ -10,10 +10,11 @@ if [ ! -x bin/yorvogate ]; then
 	exit 1
 fi
 
-# Three times: scopes by token (in a header), each on its own socket, and each by its client certificate (mTLS)
+# Three times: scopes by token (in a header), each on its own socket, and each by its client certificate
+# (mTLS, with a whole build on rootless BuildKit: YGC_APPARMOR as for quire.sh)
 status=0
 for listener in tokens sockets mtls; do
-	docker run --rm -e GITHUB_ACTIONS -e YGC_LISTENER=$listener \
+	docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR -e YGC_LISTENER=$listener \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v "$PWD/bin:/yorvogate:ro" \
 		-v "$PWD/test/conformance:/conformance:ro" \

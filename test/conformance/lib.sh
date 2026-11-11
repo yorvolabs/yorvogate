@@ -17,6 +17,10 @@ ko() {
 	fi
 }
 
+# Rootless BuildKit, as builders run it (quire.sh, and suite.sh's mTLS leg)
+# shellcheck disable=SC2034 # used by the scripts that source this
+buildkit=moby/buildkit:v0.34.0-rootless@sha256:65eca3c01cd1180c8f64565c4e3c5983af5145818b0e6fa863385d099eb73855
+
 # The real Docker, straight (to set up and to check what exists)
 direct() { env -u DOCKER_HOST -u DOCKER_CONFIG docker "$@"; }
 

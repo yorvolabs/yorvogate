@@ -14,6 +14,7 @@ set -u
 
 dir=/tmp/conformance
 listener=${YGC_LISTENER:-tokens}
+apparmor=${YGC_APPARMOR:-}
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$(dirname "$0")/lib.sh"
 
@@ -64,8 +65,10 @@ cleanup() {
 		direct network ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker network rm >/dev/null 2>&1
 		direct volume ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker volume rm >/dev/null 2>&1
 	done
-	direct rmi ygc-jane/app:1 ygc-blog/app:1 ygc-blog/only:1 ygc-jane/hello:1 ygc-jane/built:1 ygc-jane/attested:1 hello-world:linux >/dev/null 2>&1
-	direct rm -f ygc-builder-privileged ygc-builder-rootless ygc-builder-nnp >/dev/null 2>&1
+	direct rmi ygc-jane/app:1 ygc-blog/app:1 ygc-blog/only:1 ygc-jane/hello:1 ygc-jane/built:1 ygc-jane/attested:1 ygc-jane/mtls-built:1 hello-world:linux >/dev/null 2>&1
+	direct rm -f ygc-builder-privileged ygc-builder-rootless ygc-builder-nnp ygc-buildkit-mtls >/dev/null 2>&1
+	direct volume rm ygc-buildkit-mtls-state >/dev/null 2>&1
+	env -u DOCKER_HOST DOCKER_CONFIG="$dir/mtls-context" docker buildx rm ygc-mtls-builder >/dev/null 2>&1
 	[ -n "${gate:-}" ] && kill "$gate" 2>/dev/null
 }
 trap cleanup EXIT
@@ -106,7 +109,7 @@ for scope in jane blog; do
 	mkdir -p "$dir/$scope"
 	printf '{"HttpHeaders":{"X-YorvoGate-Scope":"%s","X-YorvoGate-Token":"%s"}}\n' "$scope" "$token" > "$dir/$scope/config.json"
 	builders='[]'
-	[ "$scope" = jane ] && builders='["ygc-builder-privileged","ygc-builder-rootless","ygc-builder-nnp"]'
+	[ "$scope" = jane ] && builders='["ygc-builder-privileged","ygc-builder-rootless","ygc-builder-nnp","ygc-buildkit-mtls"]'
 	[ "$listener" = mtls ] && [ "$scope" = jane ] && builders="$builders,\"certificates\":[{\"sha256\":\"$(pin "$dir/certs/jane/cert.pem")\"}]"
 	printf '{"token_sha256":"%s","owner":{"label":"com.docker.compose.project","value":"ygc-%s"},"prefixes":["ygc-%s-","ygc-%s_"],"images":["ygc-%s/"],"builders":%s}\n' \
 		"$(printf '%s' "$token" | sha256sum | cut -d' ' -f1)" "$scope" "$scope" "$scope" "$scope" "$builders" > "$dir/scopes/$scope.json"
@@ -165,7 +168,8 @@ if [ "$listener" = mtls ]; then
     mode: scoped
     scopes: $dir/scopes
     tls: {certificate: $dir/certs/gate/cert.pem, key: $dir/certs/gate/key.pem, client_ca: $dir/certs/scopes-ca.pem}
-    containers:
+${apparmor:+    builder_apparmor_profiles: [$apparmor]
+}    containers:
       capabilities: [NET_BIND_SERVICE]
       drop_all_capabilities: true
       no_new_privileges: true
@@ -600,18 +604,41 @@ if [ "$listener" = mtls ]; then
 	if output=$(DOCKER_HOST=tcp://127.0.0.1:2378 DOCKER_CONFIG="$dir/bare" docker ps 2>&1); then ko "no TLS at all was allowed" "$output"; else ok "no TLS at all"; fi
 	works "blog: its own containers, with its certificate" as blog docker ps
 
-	# buildx's own connections, through a Docker context with jane's certificate: its dial-stdio gets
-	# past YorvoGate to the builder, as jane (alpine has no buildctl, so buildx then waits in vain)
-	DOCKER_CONFIG="$dir/bare" docker context create ygc-mtls-jane --docker "host=tcp://127.0.0.1:2378,ca=$dir/certs/jane/ca.pem,cert=$dir/certs/jane/cert.pem,key=$dir/certs/jane/key.pem" >/dev/null
+	# A whole build over mTLS: jane's rootless BuildKit, as an orchestrator runs it, registered with
+	# buildx's remote driver through a Docker context with jane's certificate, which is also the
+	# current endpoint, so --load sends the result through jane's scope too
+	set -- --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt no-new-privileges=false
+	[ -n "$apparmor" ] && set -- "$@" --security-opt "apparmor=$apparmor"
+	direct image inspect "$buildkit" >/dev/null 2>&1 || direct pull -q "$buildkit" >/dev/null
+	direct run -d --name ygc-buildkit-mtls "$@" -v ygc-buildkit-mtls-state:/home/user/.local/share/buildkit "$buildkit" >/dev/null
+	# mtlsctx COMMAND…: a command whose current context is jane's mTLS one (without DOCKER_HOST, which
+	# the CLI's image sets, and which would win over the context)
+	mtlsctx() { env -u DOCKER_HOST DOCKER_CONFIG="$dir/mtls-context" "$@"; }
+	mkdir -p "$dir/mtls-context" "$dir/mtls-build"
+	mtlsctx docker context create ygc-mtls-jane --docker "host=tcp://127.0.0.1:2378,ca=$dir/certs/jane/ca.pem,cert=$dir/certs/jane/cert.pem,key=$dir/certs/jane/key.pem" >/dev/null
+	mtlsctx docker context use ygc-mtls-jane >/dev/null
 	# (a builder can't take a context's name: buildx counts contexts as builders)
-	works "buildx create --driver remote, over the mTLS context" env DOCKER_CONFIG="$dir/bare" docker buildx create --name ygc-mtls-builder --driver remote 'docker-container://ygc-builder-rootless?context=ygc-mtls-jane'
-	DOCKER_CONFIG="$dir/bare" timeout 20 docker buildx inspect --bootstrap ygc-mtls-builder >/dev/null 2>&1
-	if grep '"listener":"tenant-mtls"' "$dir/yorvogate.log" | grep '"msg":"allowed"' | grep '"scope":"ygc-jane"\|"scope":"jane"' | grep -q '"endpoint":"exec.start"'; then
-		ok "buildx over the mTLS context dials the builder, as jane"
-	else
-		ko "buildx over the mTLS context dials the builder, as jane" "$(grep '"listener":"tenant-mtls"' "$dir/yorvogate.log" | grep exec | tail -3)"
-	fi
-	DOCKER_CONFIG="$dir/bare" docker buildx rm ygc-mtls-builder >/dev/null 2>&1
+	works "buildx create --driver remote, over the mTLS context" mtlsctx docker buildx create --name ygc-mtls-builder --driver remote 'docker-container://ygc-buildkit-mtls?context=ygc-mtls-jane'
+	for _ in $(seq 30); do
+		mtlsctx timeout 10 docker buildx inspect --bootstrap ygc-mtls-builder >/dev/null 2>&1 && break
+		sleep 1
+	done
+	printf 'built over mTLS\n' > "$dir/mtls-build/hello.txt"
+	printf 'FROM scratch\nCOPY hello.txt /hello.txt\n' > "$dir/mtls-build/Dockerfile"
+	# what the gate logs from here on is the build's
+	mark=$(wc -l < "$dir/yorvogate.log")
+	works "buildx build --load (FROM scratch + COPY), over the mTLS context" mtlsctx timeout 120 docker buildx build -q --builder ygc-mtls-builder --load -t ygc-jane/mtls-built:1 "$dir/mtls-build"
+	works "jane: the image built over mTLS is there" tlsas jane docker image inspect ygc-jane/mtls-built:1
+	for endpoint in exec.start image.load; do
+		if tail -n "+$((mark + 1))" "$dir/yorvogate.log" | grep '"listener":"tenant-mtls"' | grep '"msg":"allowed"' | grep '"scope":"jane"' | grep -q "\"endpoint\":\"$endpoint\""; then
+			ok "the build's $endpoint went through the mTLS listener, as jane"
+		else
+			ko "the build's $endpoint went through the mTLS listener, as jane" "$(tail -n "+$((mark + 1))" "$dir/yorvogate.log" | tail -3)"
+		fi
+	done
+	mtlsctx docker buildx rm ygc-mtls-builder >/dev/null 2>&1
+	direct rm -f ygc-buildkit-mtls >/dev/null 2>&1
+	direct volume rm ygc-buildkit-mtls-state >/dev/null 2>&1
 
 	# A scope no longer pinning a certificate: it's refused at once, and its stream ends
 	tlsas jane docker run -d --name ygc-jane-mtls --label com.docker.compose.project=ygc-jane --network none --cap-drop ALL --security-opt no-new-privileges --memory 64m --pids-limit 64 alpine:3.22 sleep 600 >/dev/null
