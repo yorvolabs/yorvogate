@@ -41,6 +41,11 @@ jobs:
         run: |
           docker compose -f compose.dev.yaml run --rm go go mod tidy
           git diff --exit-code go.mod go.sum
+      # The differential suite's own module, its moby pin included (test/differential/README.md)
+      - name: The differential suite's module is tidy
+        run: |
+          docker compose -f compose.dev.yaml run --rm -w /src/test/differential -e CGO_ENABLED=0 go go mod tidy
+          git diff --exit-code test/differential/go.mod test/differential/go.sum
 
   fuzz:
     name: Fuzzing
@@ -219,3 +224,44 @@ jobs:
           echo "HOST_GID=$(id -g)" >> "$GITHUB_ENV"
       - name: Each package's tests kill at least 90% of their mutants
         run: docker compose -f compose.dev.yaml run --rm go make mutation
+
+  differential-nightly:
+    name: The differential suite against a real Docker
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    env:
+      # The Engine whose code the suite's recorder is (test/differential/go.mod pins moby at its
+      # commit): the two move together
+      DOCKER_VERSION: 29.9.2
+      DOCKER_API: '1.56'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Docker Engine ${{ env.DOCKER_VERSION }}
+        run: |
+          curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o docker.asc
+          gpg --show-keys --with-colons docker.asc | grep -q '^fpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:$'
+          sudo install -m 0755 -d /etc/apt/keyrings
+          sudo install -m 0644 docker.asc /etc/apt/keyrings/docker.asc
+          . /etc/os-release
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $VERSION_CODENAME stable" | sudo tee /etc/apt/sources.list.d/docker.list
+          sudo apt-get update -q
+          version="5:$DOCKER_VERSION-1~ubuntu.$VERSION_ID~$VERSION_CODENAME"
+          sudo apt-get install -y -q --allow-downgrades "docker-ce=$version" "docker-ce-cli=$version" containerd.io
+          sudo systemctl reset-failed docker.service docker.socket || true
+          sudo systemctl restart docker || { sudo journalctl -u docker.service --no-pager -n 50; exit 1; }
+          [ "$(docker version --format '{{.Server.Version}} {{.Server.APIVersion}}')" = "$DOCKER_VERSION $DOCKER_API" ]
+      - name: Set up Go (go.mod's)
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: The same variants, through the same gate, to the real Docker
+        working-directory: test/differential
+        env:
+          CGO_ENABLED: '0'
+          YGD_DOCKER: /var/run/docker.sock
+        run: go test -count=1 -timeout 40m -run TestAgainstARealDocker -v ./

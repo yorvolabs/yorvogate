@@ -34,6 +34,11 @@ var forwardedHeaders = map[string]header{
 	// The HTTP upgrade of a stream both ways, forwarded only when the request upgrades. Connection
 	// is YorvoGate's own (see forwarded).
 	"Upgrade": {max: 64, endpoints: upgrades},
+	// A WebSocket's handshake (container.attach-websocket): Docker's server (golang.org/x/net
+	// websocket, hybi.go) needs the key and the version, and takes a subprotocol
+	"Sec-Websocket-Key":      {max: 64, endpoints: []string{"container.attach-websocket"}},
+	"Sec-Websocket-Version":  {max: 8, endpoints: []string{"container.attach-websocket"}},
+	"Sec-Websocket-Protocol": {max: 256, endpoints: []string{"container.attach-websocket"}},
 }
 
 // The endpoints that switch protocols (exec.start when it attaches)

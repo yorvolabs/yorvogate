@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -103,6 +104,27 @@ func TestAClientsConnectionHeaderNamesNothing(t *testing.T) {
 	got := d.last().header
 	if got.Get("Connection") != "" || got.Get("Upgrade") != "" || got.Get("Content-Type") != "application/json" || got.Get("Accept") != "application/json" {
 		t.Errorf("detached: Docker got %v", got)
+	}
+}
+
+// A WebSocket's handshake reaches Docker on the endpoint that takes one, and only there: without
+// its key and version, Docker answers 400 and the attach never starts.
+func TestAWebSocketsHandshakeIsForwarded(t *testing.T) {
+	given := http.Header{"Upgrade": {"websocket"}, "Connection": {"Upgrade"}, "Sec-Websocket-Key": {"dGhlIHNhbXBsZSBub25jZQ=="}, "Sec-Websocket-Version": {"13"}, "Sec-Websocket-Protocol": {"chat"}}
+
+	out, _, err := forwarded(given, "container.attach-websocket", true)
+	if err != nil || out.Get("Sec-Websocket-Key") != "dGhlIHNhbXBsZSBub25jZQ==" || out.Get("Sec-Websocket-Version") != "13" || out.Get("Sec-Websocket-Protocol") != "chat" {
+		t.Errorf("attach-websocket: %v %v", out, err)
+	}
+
+	out, dropped, err := forwarded(given, "container.attach", true)
+	if err != nil || out.Get("Sec-Websocket-Key") != "" || !slices.Contains(dropped, "Sec-Websocket-Key") {
+		t.Errorf("attach (not a WebSocket): %v %v %v", out, dropped, err)
+	}
+
+	given["Sec-Websocket-Key"] = []string{strings.Repeat("k", 65)}
+	if _, _, err := forwarded(given, "container.attach-websocket", true); err == nil {
+		t.Error("a key longer than 64 bytes")
 	}
 }
 
