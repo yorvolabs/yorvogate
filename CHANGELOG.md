@@ -4,14 +4,18 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
+## [0.3.0-rc.2] - 2026-11-11
+
+A second release candidate of 0.3.0: rc.1 with TLS and mTLS listeners, built with Go 1.27.4. Use it instead of rc.1: rc.1's Go has a flaw by which a client can crash the gate's HTTP server (GO-2026-6859). It isn't for production: 0.3.0 still adds several tokens per scope with expiry, peer credentials on unix listeners, a tool for new Docker API versions, CodeQL with a parser-differential suite, and agent escape scenarios in CI. A TCP listener off loopback now needs mTLS: check your configuration with `yorvogate check --docker` before you try it.
+
 ### Added
 
-- **TLS and mTLS listeners.** A TCP listener takes `tls` (its certificate and key, TLS 1.3 only), read again when the files change, keeping the last good ones when they don't load. With `tls.client_ca`, clients must present a certificate from that CA alone, for client authentication. On a scoped listener the certificate is the scope: its one common name is the scope's name, no token is needed (and one sent is refused), and a scope file's `certificates` can pin its keys, for revocation and rotation. A certificate is checked on every request, on a connection kept alive too: one no longer pinned, expired, or whose CA was removed is refused, and ends its streams. On a trusted listener, a client certificate must be issued directly by a CA in `client_ca`, is held to the same, and `clients` can pin which certificates connect. A trusted listener's CA can't be a scoped listener's, nor sit above or below one. buildx's own connections carry the certificate, unlike a token: its `remote` driver reaches a scope's builder as the scope. See [TLS and client certificates](docs/configuration.md#tls-and-client-certificates).
+- **TLS and mTLS listeners.** A TCP listener takes `tls` (its certificate and key, TLS 1.3 only), read again when the files change, keeping the last good ones when they don't load. With `tls.client_ca`, clients must present a certificate from that CA alone, for client authentication. On a scoped listener the certificate is the scope: its one common name is the scope's name, no token is needed (and one sent is refused), and a scope file's `certificates` can pin its keys, for revocation and rotation. A certificate is checked on every request, on a connection kept alive too: one no longer pinned, expired, or whose CA was removed is refused, and ends its streams. On a trusted listener, a client certificate must be issued directly by a CA in `client_ca`, is held to the same, and `clients` can pin which certificates connect. A trusted listener's CA can't be a scoped listener's, nor sit above or below one. buildx's own connections carry the certificate, unlike a token: its `remote` driver reaches a scope's builder as the scope. See [TLS and client certificates](https://github.com/yorvolabs/yorvogate/blob/v0.3.0-rc.2/docs/configuration.md#tls-and-client-certificates).
 
 ### Changed
 
 - **Breaking: a TCP listener off loopback needs mTLS** (`tls` with `client_ca`), whatever its mode, or `plaintext: i-understand` to accept cleartext. Only a loopback IP address counts as loopback, not a host name (`localhost` included). `yorvogate check` warns about a listener with `plaintext`.
-- **Built with Go 1.27.4.**
+- **Built with Go 1.27.4,** whose `net/http` fixes a server crash a client can cause (GO-2026-6859). rc.1 was built with Go 1.27.3.
 
 ## [0.3.0-rc.1] - 2026-11-10
 
@@ -170,7 +174,8 @@ The first release.
 - **Every decision logged** as JSON; every refusal a Docker-style error that says why.
 - **Releases:** an image for x86_64 and arm64 (static, on distroless, as a user without privileges), with its SBOM and build provenance; reproducible binaries with signed checksums. The image of this release isn't signed: image signatures start with 0.2.0.
 
-[Unreleased]: https://github.com/yorvolabs/yorvogate/compare/v0.3.0-rc.1...HEAD
+[Unreleased]: https://github.com/yorvolabs/yorvogate/compare/v0.3.0-rc.2...HEAD
+[0.3.0-rc.2]: https://github.com/yorvolabs/yorvogate/compare/v0.3.0-rc.1...v0.3.0-rc.2
 [0.3.0-rc.1]: https://github.com/yorvolabs/yorvogate/compare/v0.2.2...v0.3.0-rc.1
 [0.2.2]: https://github.com/yorvolabs/yorvogate/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/yorvolabs/yorvogate/compare/v0.2.0...v0.2.1
