@@ -21,8 +21,11 @@ type Folder struct {
 	Listener string
 	// Dir is the folder.
 	Dir string
-	// Tokenless: each scope has its own socket, so a token is optional.
+	// Tokenless: each scope has its own socket, or its client certificate is the scope (mTLS), so a
+	// token is optional.
 	Tokenless bool
+	// Certificates: an mTLS listener serves the folder, so a scope may pin its certificates.
+	Certificates bool
 }
 
 // Registry holds the scopes of every scoped listener in front of one Docker, as one immutable
@@ -274,7 +277,7 @@ func scanFolder(f Folder, loaded map[string]entry) (bool, error) {
 
 		var scope *Scope
 		if err == nil {
-			scope, err = parse(path, content, info, f.Tokenless)
+			scope, err = parse(path, content, info, f)
 		}
 
 		if scope != nil {

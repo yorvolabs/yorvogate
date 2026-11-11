@@ -26,6 +26,7 @@
   "$defs": {
     "apiVersion": {"type": "string", "pattern": "^[1-9][0-9]*\\.(0|[1-9][0-9]*)$"},
     "absolute": {"type": "string", "pattern": "^/"},
+    "pin": {"type": "object", "additionalProperties": false, "required": ["sha256"], "properties": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
     "listener": {
       "type": "object",
       "additionalProperties": false,
@@ -46,7 +47,19 @@
         "containers": {"$ref": "#/$defs/containers"},
         "builder_apparmor_profiles": {"type": "array", "items": {"type": "string", "pattern": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$"}},
         "allow_privileged_builders": {"type": "boolean"},
-        "pulls": {"$ref": "#/$defs/pulls"}
+        "pulls": {"$ref": "#/$defs/pulls"},
+        "tls": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["certificate", "key"],
+          "properties": {
+            "certificate": {"$ref": "#/$defs/absolute"},
+            "key": {"$ref": "#/$defs/absolute"},
+            "client_ca": {"$ref": "#/$defs/absolute"}
+          }
+        },
+        "plaintext": {"const": "i-understand"},
+        "clients": {"type": "array", "items": {"$ref": "#/$defs/pin"}}
       },
       "oneOf": [
         {"required": ["address"], "not": {"required": ["scope_sockets"]}},
@@ -57,7 +70,7 @@
         "required": ["allow"],
         "not": {"anyOf": [{"required": ["scopes"]}, {"required": ["containers"]}, {"required": ["builder_apparmor_profiles"]}, {"required": ["allow_privileged_builders"]}, {"required": ["pulls"]}]}
       },
-      "else": {"required": ["scopes"], "not": {"required": ["allow"]}}
+      "else": {"required": ["scopes"], "not": {"anyOf": [{"required": ["allow"]}, {"required": ["clients"]}]}}
     },
     "containers": {
       "type": "object",

@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -88,25 +89,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 func listenerWarnings(l config.Listener) []string {
 	var w []string
 
-	tcpOpen := false
-	if hostPort, ok := strings.CutPrefix(l.Address, "tcp://"); ok {
-		if host, _, err := net.SplitHostPort(hostPort); err == nil {
-			ip := net.ParseIP(host)
-			tcpOpen = host != "localhost" && (host == "" || ip == nil || !ip.IsLoopback())
-		}
-	}
-
-	if tcpOpen && l.Mode == config.Scoped && !l.SocketBound() {
-		w = append(w, "a scoped TCP listener on a non-loopback address sends scope tokens in cleartext (there's no TLS): bind it to loopback or a unix socket, or put TLS in front")
-	}
-
-	if tcpOpen && l.Mode == config.Trusted {
-		for _, access := range l.Allow {
-			if access == "write" {
-				w = append(w, "a trusted listener with write access on a non-loopback address is full control of Docker, in cleartext")
-
-				break
-			}
+	if l.Plaintext != "" {
+		switch {
+		case l.Mode == config.Scoped && l.TLS == nil:
+			w = append(w, "plaintext: scope tokens travel off loopback in cleartext, where anyone on the way can read and replay them: use tls with client_ca, or a unix socket")
+		case l.Mode == config.Scoped:
+			w = append(w, "plaintext: scope tokens travel off loopback, where whatever ends the TLS connection can replay them: use tls.client_ca, so the certificate is the scope")
+		default:
+			w = append(w, "plaintext: a trusted listener off loopback without client certificates lets anyone who reaches it in: use tls with client_ca")
 		}
 	}
 
@@ -116,6 +106,39 @@ func listenerWarnings(l config.Listener) []string {
 
 	if l.AllowPrivilegedBuilders {
 		w = append(w, "allow_privileged_builders is on: a scope's builder is accepted whatever its configuration, so the scope can become root on the host")
+	}
+
+	return w
+}
+
+// tlsWarnings: a listener's certificate expiring soon, and on an mTLS listener, the scopes that pin
+// no certificate (any its CA issues with their name is theirs).
+func tlsWarnings(l config.Listener, certificates *gate.TLS, store *scope.Store, names []string) []string {
+	files := certificates.For(l.Name)
+	if files == nil {
+		return nil
+	}
+
+	var w []string
+
+	if expires := files.Expires(); time.Until(expires) < gate.ExpiresSoon {
+		w = append(w, fmt.Sprintf("tls.certificate expires %s: renew it (it's read again when it changes)", expires.UTC().Format(time.RFC3339)))
+	}
+
+	if store == nil || !l.MutualTLS() {
+		return w
+	}
+
+	var unpinned []string
+
+	for _, name := range names {
+		if s, err := store.Get(name); err == nil && len(s.Certificates) == 0 {
+			unpinned = append(unpinned, name)
+		}
+	}
+
+	if len(unpinned) > 0 {
+		w = append(w, fmt.Sprintf("scopes without certificates (%s): any certificate the listener's CA issues with one of their names is that scope, and one can't be revoked without changing the CA; pin their public keys", strings.Join(unpinned, ", ")))
 	}
 
 	return w
@@ -134,6 +157,11 @@ func check(path string, docker bool, stdout io.Writer) error {
 		return err
 	}
 
+	certificates, err := gate.LoadTLS(c, slog.New(slog.DiscardHandler))
+	if err != nil {
+		return err
+	}
+
 	for _, d := range c.Deprecations() {
 		fmt.Fprintf(stdout, "warning: %s\n", d)
 	}
@@ -146,7 +174,7 @@ func check(path string, docker bool, stdout io.Writer) error {
 	for _, l := range c.Listeners {
 		if l.Mode != config.Scoped {
 			fmt.Fprintf(stdout, "%s (%s, %s): ok\n", l.Name, l.Mode, l.Address)
-			for _, warn := range listenerWarnings(l) {
+			for _, warn := range append(listenerWarnings(l), tlsWarnings(l, certificates, nil, nil)...) {
 				fmt.Fprintf(stdout, "  warning: %s\n", warn)
 			}
 
@@ -171,7 +199,7 @@ func check(path string, docker bool, stdout io.Writer) error {
 			fmt.Fprintf(stdout, "%s (%s, %s): %d scopes, %d refused\n", l.Name, l.Mode, address, len(names), len(invalid))
 		}
 
-		for _, warn := range listenerWarnings(l) {
+		for _, warn := range append(listenerWarnings(l), tlsWarnings(l, certificates, registry.Store(l.Name), names)...) {
 			fmt.Fprintf(stdout, "  warning: %s\n", warn)
 		}
 
@@ -335,6 +363,11 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		return err
 	}
 
+	certificates, err := gate.LoadTLS(c, log)
+	if err != nil {
+		return err
+	}
+
 	for _, warn := range stateWarnings(c, registry, false) {
 		log.Warn("scopes", "warning", warn)
 	}
@@ -370,7 +403,7 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 
 	servers := make([]*http.Server, 0, len(c.Listeners))
 	bound := []*gate.Sockets{}
-	// Token listeners' gates: each ends the requests of a scope whose allowance goes
+	// Gates of scoped and mTLS listeners with an address: each ends the requests whose allowance goes
 	tokens := []*gate.Gate{}
 	failed := make(chan error, len(c.Listeners))
 
@@ -413,14 +446,20 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 			return fmt.Errorf("listener %s: %w", l.Name, err)
 		}
 
-		if l.Mode == config.Scoped {
+		listener = gate.LimitListener(listener, gate.MaxConnections)
+		if files := certificates.For(l.Name); files != nil {
+			listener = tls.NewListener(listener, files.Config())
+			g.UseTLS(files)
+		}
+
+		if l.Mode == config.Scoped || l.MutualTLS() {
 			tokens = append(tokens, g)
 		}
 
 		server := gate.NewServer(g)
+		// What the server itself says (a TLS handshake that failed: another CA, no certificate)
+		server.ErrorLog = slog.NewLogLogger(log.With("listener", l.Name).Handler(), slog.LevelInfo)
 		servers = append(servers, server)
-
-		listener = gate.LimitListener(listener, gate.MaxConnections)
 
 		go func() {
 			if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
@@ -444,12 +483,12 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		case err := <-failed:
 			return err
 		case <-hup:
-			scan(registry, bound, tokens, reported, docker, c, log)
+			scan(registry, certificates, bound, tokens, reported, docker, c, log)
 		case <-ticker.C:
-			scan(registry, bound, tokens, reported, docker, c, log)
+			scan(registry, certificates, bound, tokens, reported, docker, c, log)
 		case <-registry.Requests():
 			// A scope-status request waits for a scope file just written or removed
-			scan(registry, bound, tokens, reported, docker, c, log)
+			scan(registry, certificates, bound, tokens, reported, docker, c, log)
 		}
 
 		for _, s := range bound {
@@ -466,10 +505,12 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 // brings each socket-bound listener's sockets in line with the files, then publishes the snapshot to
 // the scope-status read. What fails is logged and tried again at the next scan: one scope's socket
 // doesn't stop the others'.
-func scan(registry *scope.Registry, bound []*gate.Sockets, tokens []*gate.Gate, reported map[string]string, docker *gate.Docker, c *config.Config, log *slog.Logger) {
+func scan(registry *scope.Registry, certificates *gate.TLS, bound []*gate.Sockets, tokens []*gate.Gate, reported map[string]string, docker *gate.Docker, c *config.Config, log *slog.Logger) {
 	if err := registry.Reload(); err != nil {
 		log.Error("scope files", "error", err)
 	}
+
+	certificates.Reload()
 
 	report(c, registry, reported, docker, log)
 

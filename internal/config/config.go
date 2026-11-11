@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -105,7 +106,37 @@ type Listener struct {
 	AllowPrivilegedBuilders bool `yaml:"allow_privileged_builders"`
 	// Pulls (scoped): the registries and platforms its scopes' pulls may reach.
 	Pulls Pulls `yaml:"pulls"`
+	// TLS (a TCP listener): its certificate and key, and with client_ca, the CA its clients'
+	// certificates must come from (mTLS). On a scoped listener with client_ca, a client's
+	// certificate is its scope: the subject's common name is the scope's name, and there's no token.
+	TLS *TLS `yaml:"tls"`
+	// Plaintext "i-understand" lets a TCP listener off loopback go without mTLS: its traffic, and a
+	// scoped listener's tokens, are then readable and replayable on the network.
+	Plaintext string `yaml:"plaintext"`
+	// Clients (a trusted listener with client_ca): when set, only certificates with these public
+	// keys may connect.
+	Clients []Pin `yaml:"clients"`
 }
+
+// TLS is a TCP listener's TLS: files, read again when they change.
+type TLS struct {
+	Certificate string `yaml:"certificate"`
+	Key         string `yaml:"key"`
+	// ClientCA is the PEM file of the CAs whose certificates clients must present (mTLS). Only
+	// this file is trusted, never the system's CAs.
+	ClientCA string `yaml:"client_ca"`
+}
+
+// Pin is a certificate's public key: the SHA-256 (hex) of its SubjectPublicKeyInfo, as
+// "openssl x509 -pubkey -noout | openssl pkey -pubin -outform der | sha256sum" gives it.
+type Pin struct {
+	SHA256 string `yaml:"sha256" json:"sha256"`
+}
+
+// PlaintextAccepted is what plaintext must say to let a listener off loopback go without mTLS.
+const PlaintextAccepted = "i-understand"
+
+var digest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 // Containers is what a scoped listener lets its scopes' containers ask of the host. What isn't listed
 // is refused: a privileged container, host mounts, host namespaces and devices are never allowed.
@@ -315,6 +346,10 @@ func (l *Listener) check() error {
 		return err
 	}
 
+	if err := l.checkTransport(); err != nil {
+		return err
+	}
+
 	if l.SocketGroup != "" {
 		if !l.Unix() {
 			return errors.New("socket_group: only a listener on unix sockets has one")
@@ -460,6 +495,84 @@ func (l *Listener) Network() ([2]string, error) {
 	}
 
 	return [2]string{}, fmt.Errorf("address: %q must be tcp://host:port or unix:///path", l.Address)
+}
+
+// checkTransport checks a listener's TLS, and that off loopback it has mTLS or says plaintext.
+func (l *Listener) checkTransport() error {
+	tcp := strings.HasPrefix(l.Address, "tcp://")
+
+	if l.TLS != nil {
+		if !tcp {
+			return errors.New("tls: only a TCP listener has it (a unix socket's permissions decide who connects)")
+		}
+
+		for _, f := range [][2]string{{"certificate", l.TLS.Certificate}, {"key", l.TLS.Key}} {
+			if !filepath.IsAbs(f[1]) || filepath.Clean(f[1]) != f[1] {
+				return fmt.Errorf("tls.%s: %q must be an absolute file name", f[0], f[1])
+			}
+		}
+
+		if l.TLS.ClientCA != "" && (!filepath.IsAbs(l.TLS.ClientCA) || filepath.Clean(l.TLS.ClientCA) != l.TLS.ClientCA) {
+			return fmt.Errorf("tls.client_ca: %q must be an absolute file name", l.TLS.ClientCA)
+		}
+	}
+
+	if len(l.Clients) > 0 {
+		if l.Mode != Trusted || !l.MutualTLS() {
+			return errors.New("clients: only a trusted listener with tls.client_ca has them (a scope's certificates are in its scope file)")
+		}
+
+		seen := map[string]bool{}
+		for _, c := range l.Clients {
+			if !digest.MatchString(c.SHA256) {
+				return fmt.Errorf("clients: %q must be a public key's SHA-256, as 64 lowercase hex digits", c.SHA256)
+			}
+
+			if seen[c.SHA256] {
+				return fmt.Errorf("clients: %s is listed twice", c.SHA256)
+			}
+
+			seen[c.SHA256] = true
+		}
+	}
+
+	switch {
+	case l.Plaintext != "" && l.Plaintext != PlaintextAccepted:
+		return fmt.Errorf("plaintext: %q isn't it: only %q, or leave it out", l.Plaintext, PlaintextAccepted)
+	case l.Plaintext != "" && !tcp:
+		return errors.New("plaintext: only a TCP listener has it")
+	case l.Plaintext != "" && l.MutualTLS():
+		return errors.New("plaintext: this listener has mTLS (tls.client_ca), so there's nothing to accept")
+	case l.Plaintext != "" && l.Loopback():
+		return errors.New("plaintext: this listener is on loopback, which needs no mTLS, so there's nothing to accept")
+	case tcp && !l.Loopback() && !l.MutualTLS() && l.Plaintext == "":
+		return fmt.Errorf("address: %s isn't loopback: a listener off loopback needs tls with client_ca (mTLS), or plaintext: %s to accept cleartext", l.Address, PlaintextAccepted)
+	}
+
+	return nil
+}
+
+// Loopback tells whether a TCP listener's address is a loopback IP address. A host name isn't one,
+// whatever it resolves to: names aren't resolved.
+func (l *Listener) Loopback() bool {
+	hostPort, ok := strings.CutPrefix(l.Address, "tcp://")
+	if !ok {
+		return false
+	}
+
+	host, _, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		return false
+	}
+
+	ip, err := netip.ParseAddr(host)
+
+	return err == nil && ip.Zone() == "" && ip.Unmap().IsLoopback()
+}
+
+// MutualTLS tells whether clients must present a certificate from the listener's CA.
+func (l *Listener) MutualTLS() bool {
+	return l.TLS != nil && l.TLS.ClientCA != ""
 }
 
 // Unix tells whether the listener's clients connect over unix sockets.

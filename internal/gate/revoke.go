@@ -4,31 +4,44 @@ import (
 	"context"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/yorvolabs/yorvogate/internal/scope"
 )
 
-// streams are a token listener's requests being answered, each with the scope and token it was
-// allowed as. A scope removed, no longer valid, or given another token ends its requests at the
-// next Revoke: streams too (attach, exec, logs that follow), as closing a scope's socket does on a
-// socket listener. Each new request is decided on the scopes as they are, so only those already
-// being answered need ending.
+// streams are a token or mTLS listener's requests being answered, each with the scope and the
+// credential it was allowed with. A scope removed, no longer valid, given another token, or no
+// longer pinning the client certificate, and a client certificate expired or whose CA is no longer
+// the listener's, ends its requests at the next Revoke: streams too (attach, exec, logs that
+// follow), as closing a scope's socket does on a socket listener. A trusted mTLS listener's
+// requests end with their client certificate the same way. Each new request is decided on the
+// scopes and CAs as they are, so only those already being answered need ending.
 type streams struct {
 	mu   sync.Mutex
 	open map[*stream]struct{}
 }
 
 type stream struct {
-	scope string
+	scope string // "" on a trusted listener
 	token string
-	end   context.CancelFunc
+	// A client certificate's stream (an mTLS listener): what it was taken with
+	cert *credential
+	end  context.CancelFunc
 }
 
-// track gives the request to forward, ended at once if the scope's allowance goes, and what to call
-// once it's answered.
-func (s *streams) track(store *scope.Store, allowed *scope.Scope, r *http.Request) (*http.Request, func()) {
+// track gives the request to forward, ended at once if its allowance goes, and what to call once
+// it's answered. allowed is its scope, nil on a trusted listener.
+func (s *streams) track(store *scope.Store, files *TLSFiles, allowed *scope.Scope, r *http.Request) (*http.Request, func()) {
 	ctx, cancel := context.WithCancel(r.Context())
-	st := &stream{scope: allowed.Name, token: allowed.TokenSHA256, end: cancel}
+	st := &stream{end: cancel}
+
+	if allowed != nil {
+		st.scope, st.token = allowed.Name, allowed.TokenSHA256
+	}
+
+	if c, ok := credentialOf(r.TLS); ok {
+		st.cert = &c
+	}
 
 	s.mu.Lock()
 	if s.open == nil {
@@ -39,7 +52,7 @@ func (s *streams) track(store *scope.Store, allowed *scope.Scope, r *http.Reques
 
 	// A reload between the request's decision and here would have missed it: it's checked again,
 	// now that a Revoke after any reload sees it.
-	if !st.current(store) {
+	if !st.current(store, files) {
 		cancel()
 	}
 
@@ -53,14 +66,14 @@ func (s *streams) track(store *scope.Store, allowed *scope.Scope, r *http.Reques
 
 // revoke ends the requests whose scope no longer allows them, and says how many it ended of each
 // scope.
-func (s *streams) revoke(store *scope.Store) map[string]int {
+func (s *streams) revoke(store *scope.Store, files *TLSFiles) map[string]int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	ended := map[string]int{}
 
 	for st := range s.open {
-		if !st.current(store) {
+		if !st.current(store, files) {
 			st.end()
 			delete(s.open, st)
 
@@ -71,23 +84,46 @@ func (s *streams) revoke(store *scope.Store) map[string]int {
 	return ended
 }
 
-// current says whether the scope, as last loaded, still allows the request: valid, with the token
-// it was allowed with.
-func (st *stream) current(store *scope.Store) bool {
-	now, err := store.Get(st.scope)
+// current says whether the request is still allowed: its scope, as last loaded, valid and with the
+// token it was allowed with, or a client certificate the listener still admits (see admits). A
+// trusted listener's request has its client certificate alone.
+func (st *stream) current(store *scope.Store, files *TLSFiles) bool {
+	if st.scope == "" {
+		return st.cert != nil && files.admits(*st.cert, nil)
+	}
 
-	return err == nil && now.TokenSHA256 == st.token
+	now, err := store.Get(st.scope)
+	if err != nil {
+		return false
+	}
+
+	if st.cert != nil {
+		return files.admits(*st.cert, now)
+	}
+
+	return now.TokenSHA256 == st.token
 }
 
-// Revoke ends the requests being answered on a token listener whose scope was removed, isn't valid
-// now, or has a new token: streams included. Call it after each reload; socket listeners do the
-// same by closing the scope's socket.
+// clock is the time streams' credentials expire by (a test sets it).
+var clock = time.Now
+
+// Revoke ends the requests being answered on a token or mTLS listener whose scope was removed, isn't
+// valid now, has a new token, or no longer pins the client certificate, or whose client certificate
+// expired or has a CA no longer the listener's: streams included. On a trusted mTLS listener, those
+// whose client certificate expired or whose CA went. Call it after each reload; socket listeners
+// do the same by closing the scope's socket.
 func (g *Gate) Revoke() {
-	if g.scopes == nil || g.listener.SocketBound() {
+	if g.listener.SocketBound() || g.scopes == nil && !g.listener.MutualTLS() {
 		return
 	}
 
-	for name, n := range g.streams.revoke(g.scopes) {
-		g.log.Info("requests ended: their scope was removed, isn't valid, or has a new token", "scope", name, "requests", n)
+	for name, n := range g.streams.revoke(g.scopes, g.tls) {
+		if name == "" {
+			g.log.Info("requests ended: their client certificate expired, or its CA is no longer the listener's", "requests", n)
+
+			continue
+		}
+
+		g.log.Info("requests ended: their scope was removed, isn't valid, or no longer takes their credential", "scope", name, "requests", n)
 	}
 }

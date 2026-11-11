@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -11,7 +12,7 @@ const valid = `
 upstream: unix:///var/run/docker.sock
 listeners:
   - name: server
-    address: tcp://0.0.0.0:2375
+    address: tcp://127.0.0.1:2375
     mode: trusted
     allow: {system: read, containers: write, exec: write}
   - name: sites
@@ -122,11 +123,11 @@ func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 		"allow on a scoped one":          strings.Replace(valid, "mode: scoped", "mode: scoped\n    allow: {system: read}", 1),
 		"relative scopes":                strings.Replace(valid, "/etc/yorvogate/scopes", "scopes", 1),
 		"scopes not clean":               strings.Replace(valid, "/etc/yorvogate/scopes", "/etc/../scopes", 1),
-		"the same address twice":         strings.Replace(valid, "unix:///run/yorvogate/sites.sock", "tcp://0.0.0.0:2375", 1),
+		"the same address twice":         strings.Replace(valid, "unix:///run/yorvogate/sites.sock", "tcp://127.0.0.1:2375", 1),
 		"the same name twice":            strings.Replace(valid, "name: sites", "name: server", 1),
 		"a name with spaces":             strings.Replace(valid, "name: sites", "name: my sites", 1),
-		"an address without a port":      strings.Replace(valid, "tcp://0.0.0.0:2375", "tcp://0.0.0.0", 1),
-		"an http address":                strings.Replace(valid, "tcp://0.0.0.0:2375", "http://0.0.0.0:2375", 1),
+		"an address without a port":      strings.Replace(valid, "tcp://127.0.0.1:2375", "tcp://127.0.0.1", 1),
+		"an http address":                strings.Replace(valid, "tcp://127.0.0.1:2375", "http://127.0.0.1:2375", 1),
 		"a version newer than known":     valid + "api: {max: '1.57'}\n",
 		"a version older than known":     valid + "api: {min: '1.40'}\n",
 		"min above max":                  valid + "api: {min: '1.50', max: '1.45'}\n",
@@ -187,5 +188,88 @@ func TestTheFormatVersion(t *testing.T) {
 func TestTheLogBuffer(t *testing.T) {
 	if (&Containers{}).LogBuffer() != 4<<20 || (&Containers{MaxLogBuffer: 1 << 20}).LogBuffer() != 1<<20 {
 		t.Error("the log buffer's limit")
+	}
+}
+
+// Off loopback, a TCP listener needs mTLS, or plaintext to say it accepts cleartext; on loopback it
+// needs neither. A host name isn't loopback, whatever it resolves to.
+func TestOffLoopbackNeedsMTLS(t *testing.T) {
+	listener := func(address, extra string) string {
+		return "upstream: unix:///var/run/docker.sock\nlisteners:\n  - name: server\n    address: " + address + "\n    mode: trusted\n    allow: {system: read}\n" + extra
+	}
+	mtls := "    tls: {certificate: /etc/yorvogate/server.pem, key: /etc/yorvogate/server.key, client_ca: /etc/yorvogate/clients.pem}\n"
+	tlsOnly := "    tls: {certificate: /etc/yorvogate/server.pem, key: /etc/yorvogate/server.key}\n"
+	plaintext := "    plaintext: i-understand\n"
+
+	for _, address := range []string{"tcp://0.0.0.0:2375", "tcp://:2375", "tcp://[::]:2375", "tcp://10.0.0.2:2375", "tcp://localhost:2375", "tcp://gate.example:2375", "tcp://[fe80::1%25eth0]:2375"} {
+		_, err := Parse([]byte(listener(address, "")))
+		if err == nil || !strings.Contains(err.Error(), "isn't loopback: a listener off loopback needs tls with client_ca (mTLS), or plaintext: i-understand") {
+			t.Errorf("%s: %v", address, err)
+		}
+
+		if _, err := Parse([]byte(listener(address, tlsOnly))); err == nil {
+			t.Errorf("%s with TLS but no client_ca was allowed", address)
+		}
+
+		for _, extra := range []string{mtls, plaintext, tlsOnly + plaintext} {
+			if _, err := Parse([]byte(listener(address, extra))); err != nil {
+				t.Errorf("%s with %q: %v", address, extra, err)
+			}
+		}
+	}
+
+	for _, address := range []string{"tcp://127.0.0.1:2375", "tcp://127.5.6.7:2375", "tcp://[::1]:2375", "tcp://[::ffff:127.0.0.1]:2375"} {
+		c, err := Parse([]byte(listener(address, "")))
+		if err != nil || !c.Listeners[0].Loopback() || c.Listeners[0].MutualTLS() {
+			t.Errorf("%s: %v", address, err)
+		}
+	}
+
+	c, err := Parse([]byte(listener("tcp://0.0.0.0:2375", mtls)))
+	if err != nil || !c.Listeners[0].MutualTLS() || c.Listeners[0].Loopback() {
+		t.Errorf("mTLS: %v", err)
+	}
+
+	if c, err := Parse([]byte(listener("unix:///run/yorvogate/server.sock", ""))); err != nil || c.Listeners[0].Loopback() {
+		t.Errorf("a unix socket: %v", err)
+	}
+}
+
+func TestTLSIsChecked(t *testing.T) {
+	base := "upstream: unix:///var/run/docker.sock\nlisteners:\n  - name: server\n    address: %s\n    mode: %s\n    %s\n"
+	trusted := "trusted\n    allow: {system: read}"
+	scoped := "scoped\n    scopes: /etc/yorvogate/scopes"
+	pin := strings.Repeat("a", 64)
+	mtls := "tls: {certificate: /etc/yorvogate/server.pem, key: /etc/yorvogate/server.key, client_ca: /etc/yorvogate/clients.pem}"
+
+	cases := map[string][3]string{
+		"tls on a unix socket":       {"unix:///run/yorvogate/server.sock", trusted, mtls},
+		"a relative certificate":     {"tcp://127.0.0.1:2375", trusted, "tls: {certificate: server.pem, key: /etc/yorvogate/server.key}"},
+		"no key":                     {"tcp://127.0.0.1:2375", trusted, "tls: {certificate: /etc/yorvogate/server.pem}"},
+		"an unclean key":             {"tcp://127.0.0.1:2375", trusted, "tls: {certificate: /etc/yorvogate/server.pem, key: /etc/yorvogate/../server.key}"},
+		"a relative client CA":       {"tcp://127.0.0.1:2375", trusted, "tls: {certificate: /etc/yorvogate/server.pem, key: /etc/yorvogate/server.key, client_ca: clients.pem}"},
+		"clients without client_ca":  {"tcp://127.0.0.1:2375", trusted, "tls: {certificate: /etc/yorvogate/server.pem, key: /etc/yorvogate/server.key}\n    clients: [{sha256: " + pin + "}]"},
+		"clients on a scoped one":    {"tcp://127.0.0.1:2375", scoped, mtls + "\n    clients: [{sha256: " + pin + "}]"},
+		"a client that isn't a pin":  {"tcp://127.0.0.1:2375", trusted, mtls + "\n    clients: [{sha256: " + strings.ToUpper(pin) + "}]"},
+		"a client twice":             {"tcp://127.0.0.1:2375", trusted, mtls + "\n    clients: [{sha256: " + pin + "}, {sha256: " + pin + "}]"},
+		"plaintext, misspelt":        {"tcp://0.0.0.0:2375", trusted, "plaintext: yes"},
+		"plaintext on a unix socket": {"unix:///run/yorvogate/server.sock", trusted, "plaintext: i-understand"},
+		"plaintext with mTLS":        {"tcp://0.0.0.0:2375", trusted, mtls + "\n    plaintext: i-understand"},
+		"plaintext on loopback":      {"tcp://127.0.0.1:2375", trusted, "plaintext: i-understand"},
+	}
+
+	for name, c := range cases {
+		if _, err := Parse([]byte(fmt.Sprintf(base, c[0], c[1], c[2]))); err == nil {
+			t.Errorf("%s: allowed", name)
+		}
+	}
+
+	c, err := Parse([]byte(fmt.Sprintf(base, "tcp://0.0.0.0:2375", trusted, mtls+"\n    clients: [{sha256: "+pin+"}]")))
+	if err != nil || len(c.Listeners[0].Clients) != 1 || c.Listeners[0].TLS.ClientCA != "/etc/yorvogate/clients.pem" {
+		t.Errorf("a trusted mTLS listener with a client: %v", err)
+	}
+
+	if _, err := Parse([]byte(fmt.Sprintf(base, "unix:///run/yorvogate/server.sock", trusted, "socket_group: docker"))); err != nil {
+		t.Errorf("a unix socket: %v", err)
 	}
 }

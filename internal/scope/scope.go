@@ -53,6 +53,11 @@ type Scope struct {
 	// Subnets, when set, are where its networks' addresses must be: each network it creates names
 	// its subnet, inside one of these.
 	Subnets []string `json:"subnets,omitempty"`
+	// Certificates (on an mTLS listener) are its client certificates' public keys: when listed, only
+	// a certificate with one of them is the scope, so one is revoked by removing it, and two are
+	// valid during a rotation. Without them, any certificate the listener's CA issues with the scope's
+	// name is the scope.
+	Certificates []Pin `json:"certificates,omitempty"`
 	// Egress "none" keeps its containers off every network with a way out: each network they join,
 	// its own or shared, must be internal, and so must its builders'. Its listener may require it of
 	// every scope (containers.egress).
@@ -132,6 +137,36 @@ var (
 	// and renames the new one to the old name: the first 12 hex of the old one's ID, _, its name.
 	recreated = regexp.MustCompile(`^[0-9a-f]{12}_(.+)$`)
 )
+
+// Pin is a certificate's public key: the SHA-256 (hex) of its SubjectPublicKeyInfo.
+type Pin struct {
+	SHA256 string `json:"sha256"`
+}
+
+// MaxCertificates is how many certificates a scope may pin.
+const MaxCertificates = 8
+
+// Pinned tells whether a certificate's public key (its SubjectPublicKeyInfo's SHA-256) is the
+// scope's: one it pins, or any when it pins none. Every pin is compared, in constant time.
+func (s *Scope) Pinned(spki [sha256.Size]byte) bool {
+	if len(s.Certificates) == 0 {
+		return true
+	}
+
+	found := 0
+
+	for _, p := range s.Certificates {
+		want, _ := hex.DecodeString(p.SHA256)
+		found |= subtle.ConstantTimeCompare(want, spki[:])
+	}
+
+	return found == 1
+}
+
+// ValidName tells whether a name is a scope's name, as a scope file's is.
+func ValidName(name string) bool {
+	return validName.MatchString(name)
+}
 
 // ErrUnknown is a scope with no file, or a token that doesn't match it.
 var ErrUnknown = errors.New("no such scope, or not its token")
@@ -324,7 +359,7 @@ func read(path string) ([]byte, os.FileInfo, error) {
 // maxFile is the largest scope file read: far more than any scope needs.
 const maxFile = 1 << 20
 
-func parse(path string, content []byte, info os.FileInfo, tokenless bool) (*Scope, error) {
+func parse(path string, content []byte, info os.FileInfo, f Folder) (*Scope, error) {
 	// Only a file that no one but its owner can change
 	if info.Mode().Perm()&0o022 != 0 {
 		return nil, fmt.Errorf("scope file %s: must be a plain file, writable by its owner only", path)
@@ -342,7 +377,7 @@ func parse(path string, content []byte, info os.FileInfo, tokenless bool) (*Scop
 		return nil, fmt.Errorf("scope file %s: one JSON object only", path)
 	}
 
-	if err := scope.check(tokenless); err != nil {
+	if err := scope.check(f); err != nil {
 		return nil, fmt.Errorf("scope file %s: %w", path, err)
 	}
 
@@ -352,7 +387,9 @@ func parse(path string, content []byte, info os.FileInfo, tokenless bool) (*Scop
 // formatVersion is the scope files' format (config.FormatVersion: the two move together).
 const formatVersion = 1
 
-func (s *Scope) check(tokenless bool) error {
+func (s *Scope) check(f Folder) error {
+	tokenless := f.Tokenless
+
 	if s.Version != nil && *s.Version != formatVersion {
 		return fmt.Errorf("version: %d isn't a format this build reads (%d)", *s.Version, formatVersion)
 	}
@@ -368,6 +405,27 @@ func (s *Scope) check(tokenless bool) error {
 		return errors.New("prefixes: at least one")
 	case s.Egress != "" && s.Egress != "none":
 		return fmt.Errorf("egress: %q isn't one (only none, or leave it out)", s.Egress)
+	}
+
+	if len(s.Certificates) > 0 && !f.Certificates {
+		return fmt.Errorf("certificates: only a scope on an mTLS listener has them (listener %s has no tls.client_ca)", f.Listener)
+	}
+
+	if len(s.Certificates) > MaxCertificates {
+		return fmt.Errorf("certificates: at most %d", MaxCertificates)
+	}
+
+	pins := map[string]bool{}
+	for _, p := range s.Certificates {
+		if !validDigest.MatchString(p.SHA256) {
+			return fmt.Errorf("certificates: %q must be a public key's SHA-256, as 64 lowercase hex digits", p.SHA256)
+		}
+
+		if pins[p.SHA256] {
+			return fmt.Errorf("certificates: %s is listed twice", p.SHA256)
+		}
+
+		pins[p.SHA256] = true
 	}
 
 	for _, i := range s.Images {

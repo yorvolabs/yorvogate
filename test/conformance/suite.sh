@@ -3,8 +3,9 @@
 # Compose and by raw HTTP. Two scopes, jane and blog: what each does as a tenant must work; what would
 # reach the host or the other must be refused, saying why, and leave nothing behind.
 #
-# It runs twice (run.sh): with each scope's token sent in a header (YGC_LISTENER=tokens), and with
-# each scope on a socket of its own (YGC_LISTENER=sockets), where the CLI and Compose send no header.
+# It runs three times (run.sh): with each scope's token sent in a header (YGC_LISTENER=tokens), with
+# each scope on a socket of its own (YGC_LISTENER=sockets), where the CLI and Compose send no header,
+# and with each scope's client certificate its scope (YGC_LISTENER=mtls), over TLS with --tlsverify.
 # Raw requests go to the token listener either way (BusyBox's nc has no unix sockets).
 #
 # Every attack is a create (or a read): even one that got through would run nothing. Run it through
@@ -22,6 +23,8 @@ as() {
 	shift
 	if [ "$listener" = sockets ]; then
 		DOCKER_HOST="unix://$dir/sockets/$scope.sock" DOCKER_CONFIG="$dir/bare" "$@"
+	elif [ "$listener" = mtls ]; then
+		DOCKER_HOST=tcp://127.0.0.1:2378 DOCKER_TLS_VERIFY=1 DOCKER_CERT_PATH="$dir/certs/$scope" DOCKER_CONFIG="$dir/bare" "$@"
 	else
 		DOCKER_HOST=tcp://127.0.0.1:2376 DOCKER_CONFIG="$dir/$scope" "$@"
 	fi
@@ -61,7 +64,7 @@ cleanup() {
 		direct network ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker network rm >/dev/null 2>&1
 		direct volume ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker volume rm >/dev/null 2>&1
 	done
-	direct rmi ygc-jane/app:1 ygc-blog/app:1 ygc-blog/only:1 ygc-jane/hello:1 hello-world:linux >/dev/null 2>&1
+	direct rmi ygc-jane/app:1 ygc-blog/app:1 ygc-blog/only:1 ygc-jane/hello:1 ygc-jane/built:1 ygc-jane/attested:1 hello-world:linux >/dev/null 2>&1
 	direct rm -f ygc-builder-privileged ygc-builder-rootless ygc-builder-nnp >/dev/null 2>&1
 	[ -n "${gate:-}" ] && kill "$gate" 2>/dev/null
 }
@@ -71,6 +74,32 @@ cleanup
 say "== Docker $(direct version --format '{{.Server.Version}} (API {{.Server.APIVersion}})'), Compose $(docker compose version --short)"
 say "== Setting up: YorvoGate, scopes jane and blog ($listener)"
 mkdir -p "$dir/scopes" "$dir/sockets" "$dir/bare"
+
+# mtls: the gate's CA and certificate, the scopes' CA, a certificate for each scope (and one for a
+# scope that isn't there), each client's folder as DOCKER_CERT_PATH has it (ca.pem is the gate's CA).
+# jane pins its certificate's key; blog pins none.
+pin() { openssl x509 -in "$1" -pubkey -noout | openssl pkey -pubin -outform der | sha256sum | cut -d' ' -f1; }
+issue() { # issue CA NAME FOLDER [EXTENSIONS]
+	mkdir -p "$3"
+	printf '%s\n' "${4:-extendedKeyUsage=clientAuth}" > "$3/ext"
+	openssl req -new -nodes -newkey ec -pkeyopt ec_paramgen_curve:P-256 -subj "/CN=$2" -keyout "$3/key.pem" -out "$3/csr" 2>/dev/null
+	openssl x509 -req -in "$3/csr" -CA "$dir/certs/$1.pem" -CAkey "$dir/certs/$1.key" -days 1 -extfile "$3/ext" -out "$3/cert.pem" 2>/dev/null
+	cp "$dir/certs/gate-ca.pem" "$3/ca.pem"
+}
+if [ "$listener" = mtls ]; then
+	apk add -q --no-cache openssl >/dev/null
+	mkdir -p "$dir/certs"
+	for ca in gate-ca scopes-ca other-ca; do
+		openssl req -x509 -new -nodes -newkey ec -pkeyopt ec_paramgen_curve:P-256 -days 1 -subj "/CN=ygc $ca" -keyout "$dir/certs/$ca.key" -out "$dir/certs/$ca.pem" 2>/dev/null
+	done
+	issue gate-ca 127.0.0.1 "$dir/certs/gate" 'subjectAltName=IP:127.0.0.1
+extendedKeyUsage=serverAuth'
+	for scope in jane blog nobody; do issue scopes-ca "$scope" "$dir/certs/$scope"; done
+	issue scopes-ca jane "$dir/certs/jane-unpinned"
+	issue other-ca jane "$dir/certs/jane-other-ca"
+	issue scopes-ca jane "$dir/certs/jane-server" 'extendedKeyUsage=serverAuth'
+fi
+
 for scope in jane blog; do
 	token=$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')
 	printf '%s' "$token" > "$dir/$scope.token"
@@ -78,6 +107,7 @@ for scope in jane blog; do
 	printf '{"HttpHeaders":{"X-YorvoGate-Scope":"%s","X-YorvoGate-Token":"%s"}}\n' "$scope" "$token" > "$dir/$scope/config.json"
 	builders='[]'
 	[ "$scope" = jane ] && builders='["ygc-builder-privileged","ygc-builder-rootless","ygc-builder-nnp"]'
+	[ "$listener" = mtls ] && [ "$scope" = jane ] && builders="$builders,\"certificates\":[{\"sha256\":\"$(pin "$dir/certs/jane/cert.pem")\"}]"
 	printf '{"token_sha256":"%s","owner":{"label":"com.docker.compose.project","value":"ygc-%s"},"prefixes":["ygc-%s-","ygc-%s_"],"images":["ygc-%s/"],"builders":%s}\n' \
 		"$(printf '%s' "$token" | sha256sum | cut -d' ' -f1)" "$scope" "$scope" "$scope" "$scope" "$builders" > "$dir/scopes/$scope.json"
 	chmod 600 "$dir/scopes/$scope.json"
@@ -119,6 +149,22 @@ if [ "$listener" = sockets ]; then
     scope_sockets: $dir/sockets
     mode: scoped
     scopes: $dir/scopes
+    containers:
+      capabilities: [NET_BIND_SERVICE]
+      drop_all_capabilities: true
+      no_new_privileges: true
+      max_memory: 268435456
+      max_pids: 128
+      protected_images: [ygc-jane/, ygc-blog/]
+EOF
+fi
+if [ "$listener" = mtls ]; then
+	cat >> "$dir/yorvogate.yaml" <<EOF
+  - name: tenant-mtls
+    address: tcp://127.0.0.1:2378
+    mode: scoped
+    scopes: $dir/scopes
+    tls: {certificate: $dir/certs/gate/cert.pem, key: $dir/certs/gate/key.pem, client_ca: $dir/certs/scopes-ca.pem}
     containers:
       capabilities: [NET_BIND_SERVICE]
       drop_all_capabilities: true
@@ -488,10 +534,65 @@ if [ "$listener" = sockets ]; then
 	works "jane's socket is still open" as jane docker version
 fi
 
+if [ "$listener" = mtls ]; then
+	say "== A client certificate is that scope only"
+	# tlsas CERTS COMMAND…: a command with a client's certificate folder, and no header
+	tlsas() {
+		certs=$1
+		shift
+		DOCKER_HOST=tcp://127.0.0.1:2378 DOCKER_TLS_VERIFY=1 DOCKER_CERT_PATH="$dir/certs/$certs" DOCKER_CONFIG="$dir/bare" "$@"
+	}
+	mkdir -p "$dir/naming-jane"
+	printf '{"HttpHeaders":{"X-YorvoGate-Scope":"jane"}}\n' > "$dir/naming-jane/config.json"
+	refused "naming jane with blog's certificate" "this client certificate is scope blog's" \
+		env DOCKER_HOST=tcp://127.0.0.1:2378 DOCKER_TLS_VERIFY=1 DOCKER_CERT_PATH="$dir/certs/blog" DOCKER_CONFIG="$dir/naming-jane" docker ps
+	refused "a token on the mTLS listener" "takes a client certificate, not a token" \
+		env DOCKER_HOST=tcp://127.0.0.1:2378 DOCKER_TLS_VERIFY=1 DOCKER_CERT_PATH="$dir/certs/jane" DOCKER_CONFIG="$dir/jane" docker ps
+	refused "a certificate of a scope that isn't there" "no such scope, or not its certificate" tlsas nobody docker ps
+	refused "jane's name, a key jane doesn't pin" "no such scope, or not its certificate" tlsas jane-unpinned docker ps
+	for certs in jane-other-ca jane-server; do
+		if output=$(tlsas "$certs" docker ps 2>&1); then ko "a certificate the handshake refuses ($certs) was allowed" "$output"; else ok "a certificate the handshake refuses ($certs)"; fi
+	done
+	if output=$(DOCKER_HOST=tcp://127.0.0.1:2378 DOCKER_CONFIG="$dir/bare" docker ps 2>&1); then ko "no TLS at all was allowed" "$output"; else ok "no TLS at all"; fi
+	works "blog: its own containers, with its certificate" as blog docker ps
+
+	# buildx's own connections, through a Docker context with jane's certificate: its dial-stdio gets
+	# past YorvoGate to the builder, as jane (alpine has no buildctl, so buildx then waits in vain)
+	DOCKER_CONFIG="$dir/bare" docker context create ygc-mtls-jane --docker "host=tcp://127.0.0.1:2378,ca=$dir/certs/jane/ca.pem,cert=$dir/certs/jane/cert.pem,key=$dir/certs/jane/key.pem" >/dev/null
+	# (a builder can't take a context's name: buildx counts contexts as builders)
+	works "buildx create --driver remote, over the mTLS context" env DOCKER_CONFIG="$dir/bare" docker buildx create --name ygc-mtls-builder --driver remote 'docker-container://ygc-builder-rootless?context=ygc-mtls-jane'
+	DOCKER_CONFIG="$dir/bare" timeout 20 docker buildx inspect --bootstrap ygc-mtls-builder >/dev/null 2>&1
+	if grep '"listener":"tenant-mtls"' "$dir/yorvogate.log" | grep '"msg":"allowed"' | grep '"scope":"ygc-jane"\|"scope":"jane"' | grep -q '"endpoint":"exec.start"'; then
+		ok "buildx over the mTLS context dials the builder, as jane"
+	else
+		ko "buildx over the mTLS context dials the builder, as jane" "$(grep '"listener":"tenant-mtls"' "$dir/yorvogate.log" | grep exec | tail -3)"
+	fi
+	DOCKER_CONFIG="$dir/bare" docker buildx rm ygc-mtls-builder >/dev/null 2>&1
+
+	# A scope no longer pinning a certificate: it's refused at once, and its stream ends
+	tlsas jane docker run -d --name ygc-jane-mtls --label com.docker.compose.project=ygc-jane --network none --cap-drop ALL --security-opt no-new-privileges --memory 64m --pids-limit 64 alpine:3.22 sleep 600 >/dev/null
+	tlsas jane docker logs -f ygc-jane-mtls > "$dir/mtls-logs.out" 2>&1 &
+	follower=$!
+	sleep 1
+	sed "s|\"certificates\":\[{\"sha256\":\"[0-9a-f]*\"}\]|\"certificates\":[{\"sha256\":\"$(pin "$dir/certs/jane-unpinned/cert.pem")\"}]|" "$dir/scopes/jane.json" > "$dir/jane.json.new"
+	chmod 600 "$dir/jane.json.new"
+	mv "$dir/jane.json.new" "$dir/scopes/jane.json"
+	kill -HUP "$gate"
+	sleep 2
+	if kill -0 "$follower" 2>/dev/null; then
+		ko "a certificate no longer pinned keeps its stream"
+		kill "$follower"
+	else
+		ok "a certificate no longer pinned ends its stream"
+	fi
+	refused "a certificate no longer pinned" "no such scope, or not its certificate" tlsas jane docker ps
+	works "the newly pinned one" tlsas jane-unpinned docker rm -f ygc-jane-mtls
+fi
+
 say "== A Docker newer than the gate"
 # A gate that accepts at most API 1.50, in front of a Docker with a newer one: the CLI negotiates the
 # version the gate advertises, and works. Without the clamp it would ask for Docker's and be refused.
-sed -e 's|^upstream: .*|&\napi: {max: "1.50"}|' -e 's|127.0.0.1:2376|127.0.0.1:2386|' -e 's|127.0.0.1:2377|127.0.0.1:2387|' -e 's|127.0.0.1:2380|127.0.0.1:2390|' \
+sed -e 's|^upstream: .*|&\napi: {max: "1.50"}|' -e 's|127.0.0.1:2376|127.0.0.1:2386|' -e 's|127.0.0.1:2377|127.0.0.1:2387|' -e 's|127.0.0.1:2380|127.0.0.1:2390|' -e 's|127.0.0.1:2378|127.0.0.1:2388|' \
 	-e "s|scope_sockets: $dir/sockets|scope_sockets: $dir/sockets-old|" "$dir/yorvogate.yaml" > "$dir/yorvogate-old.yaml"
 mkdir -p "$dir/sockets-old"
 "$yorvogate" serve --config "$dir/yorvogate-old.yaml" 2> "$dir/yorvogate-old.log" &

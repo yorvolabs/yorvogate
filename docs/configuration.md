@@ -46,6 +46,16 @@ listeners:                              # at least one
     scopes: /etc/yorvogate/sites
     builder_apparmor_profiles: [yorvogate-buildkit-rootless]  # profiles a builder may run under
     # allow_privileged_builders: true   # any builder, privileged included: the scope is root on the host
+
+  - name: remote                        # scopes on another host: each client's certificate is its scope
+    address: tcp://0.0.0.0:2376         # off loopback: mTLS required (below)
+    mode: scoped
+    scopes: /etc/yorvogate/remote
+    tls:
+      certificate: /etc/yorvogate/tls/server.pem
+      key: /etc/yorvogate/tls/server.key
+      client_ca: /etc/yorvogate/tls/scopes-ca.pem   # only this file's CAs, never the system's
+    # plaintext: i-understand           # off loopback without mTLS: cleartext, readable and replayable
 ```
 
 Every answer tells the client the newest API version both Docker and YorvoGate serve: a newer Docker's own (in the `Api-Version` header and in `/version`) is given as `max`, and Docker's minimum as `min` when it's older. A Docker older than `min` keeps its own version: no version is served by both, and YorvoGate refuses its clients' requests, saying so. A client that negotiates its version, as the Docker CLI, Compose and buildx do, then asks for one YorvoGate serves, so upgrading Docker before YorvoGate doesn't lock clients out.
@@ -60,6 +70,51 @@ A scoped listener can give each scope a unix socket of its own instead of one ad
 - YorvoGate makes the sockets, so its user needs write access to the folder. Sockets are mode `0660`, owned by YorvoGate's user and `socket_group`. They're made so that no one else can connect before the mode and group are set. A file at a socket's path that isn't a socket is left alone, and the scope's socket isn't made (it's logged, and tried again at the next scan).
 
 **Whoever can open a scope's socket is that scope.** The folder belongs where only the orchestrator, or the one client each socket is given to, can reach it: a volume only the orchestrator mounts, then each scope's socket alone mounted into that scope's client. Never give a client the folder.
+
+## TLS and client certificates
+
+A TCP listener takes `tls`: its `certificate` and `key` (PEM files), and with `client_ca`, the CAs its clients' certificates must come from (mTLS). YorvoGate speaks TLS 1.3 only. It reads the files again every 2 seconds and on `SIGHUP`, so a renewed certificate needs no restart. Files that don't load keep the last good ones in use, logged at error level, and a client CA that doesn't load never leaves a listener without client verification. `yorvogate check` warns when a certificate expires within 14 days.
+
+**Off loopback, a TCP listener needs mTLS** (`tls` with `client_ca`), whatever its mode. Otherwise the configuration is refused, unless the listener says `plaintext: i-understand`. A trusted listener has no other authentication, and a token sent with every request can be read and replayed by whatever sees the connection. Loopback addresses (`127.0.0.1`, `[::1]`) need neither. A host name never counts as loopback, `localhost` included: names aren't resolved.
+
+**On a scoped listener with `client_ca`, the certificate is the scope:**
+
+- Its subject's common name is the scope's name. It has exactly one common name, and it's exactly a scope file's name.
+- Its extended key usage includes client authentication (`clientAuth`). A server's certificate from the same CA is refused.
+- **Any certificate the CA issues with the name `jane` is `jane`.** Keep a CA for each listener's clients, and pin each scope's keys in its scope file (`certificates`), so one can be revoked without changing the CA. `yorvogate check` warns about scopes that pin none.
+- A certificate is the only credential: no token is needed, and a request that sends `X-YorvoGate-Token` is refused. A request may name its scope (`X-YorvoGate-Scope`), but only its own.
+- A certificate is checked on every request, not only when its connection is made: one that expired, whose CA was removed from `client_ca`, or that its scope no longer pins is refused on a connection kept alive too. Its requests being answered, streams included, end at the next scan. A scope removed or no longer valid ends them the same way.
+- buildx's own connections carry the certificate too, unlike a token, which buildx doesn't send: through a Docker context with the scope's certificate, its `remote` driver reaches the scope's builder as that scope. (A whole build over mTLS isn't in the conformance suite yet; [scope sockets](#scope-sockets) are what Quire Server's builds run on.)
+
+**On a trusted listener with `client_ca`,** a certificate a CA in the file issued directly may connect: not one under an intermediate, whichever intermediates the client sends. An orchestrator whose certificate comes from an intermediate lists that intermediate in `client_ca`. `clients: [{sha256: …}]` limits it to those public keys. Like a scope's, a trusted client's certificate is checked on every request, and its requests and streams end when it expires or its CA is removed. `clients` is read once at start: removing a pin takes a restart, which ends every connection.
+
+**Give each trust level its own root.** A trusted listener's CA can't be a scoped listener's (by public key), nor sit above or below one: a CA in one listener's `client_ca` that chains up to one in the other's is refused, at start and at each read of the files, as the files that don't load are. Clients send their own intermediates, so under a shared root a scope's certificate would open the trusted listener. Two CAs related only through an intermediate in neither file can't be seen: the trusted listener's direct-issuance rule is what refuses those.
+
+A CA, a scope's certificate, and its pin, with OpenSSL:
+
+```sh
+openssl req -x509 -new -nodes -newkey ec -pkeyopt ec_paramgen_curve:P-256 -days 3650 \
+  -subj "/CN=YorvoGate scopes CA" -keyout scopes-ca.key -out scopes-ca.pem
+
+mkdir -p jane
+printf 'extendedKeyUsage=clientAuth\n' > client.ext
+openssl req -new -nodes -newkey ec -pkeyopt ec_paramgen_curve:P-256 -subj "/CN=jane" \
+  -keyout jane/key.pem -out jane.csr
+openssl x509 -req -in jane.csr -CA scopes-ca.pem -CAkey scopes-ca.key -days 90 \
+  -extfile client.ext -out jane/cert.pem
+
+openssl x509 -in jane/cert.pem -pubkey -noout | openssl pkey -pubin -outform der | sha256sum
+```
+
+The last line is the pin: `"certificates": [{"sha256": "<it>"}]` in `jane.json`. The client uses a Docker context with its certificate, key and the CA of YorvoGate's own certificate, verifying the gate:
+
+```sh
+docker context create gate --docker "host=tcp://gate.example:2376,ca=/path/to/gate-ca.pem,cert=jane/cert.pem,key=jane/key.pem"
+```
+
+Or `DOCKER_HOST=tcp://gate.example:2376 DOCKER_TLS_VERIFY=1 DOCKER_CERT_PATH=<a folder with ca.pem, cert.pem and key.pem>`. Always verify (`--tlsverify`, `DOCKER_TLS_VERIFY=1`): a client that doesn't would talk to whoever answers.
+
+To rotate a certificate, pin the new key alongside the old one, give the client the new certificate, then remove the old pin.
 
 ## Containers (scoped listeners)
 
@@ -183,7 +238,7 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 ```
 
 - `version`: the format, `1`. A scope file without one is read as version 1, with a warning; YorvoGate 0.4 refuses it. See [formats and versions](#formats-and-versions).
-- `token_sha256`: the SHA-256 of the scope's token, 64 lowercase hex digits. The client sends the token itself. Optional where each scope has its own socket ([scope sockets](#scope-sockets)).
+- `token_sha256`: the SHA-256 of the scope's token, 64 lowercase hex digits. The client sends the token itself. Optional where each scope has its own socket ([scope sockets](#scope-sockets)), and where its client certificate is the scope ([mTLS](#tls-and-client-certificates)).
 - `owner`: the label (and its value) that marks the scope's objects. For Compose projects, `com.docker.compose.project` and the project's name. An object is a scope's by this label only, never by its name. What a scope creates must carry it, and no other scope's owner label; a volume a container's mount creates gets it from YorvoGate.
 - `prefixes`: what the names of the containers, networks and volumes it creates start with. Each ends with `-`, `_` or `.`, so `jane-` never matches `janet-…`. A container may also take the name Compose gives one it recreates, 12 hex and `_` before one of the scope's names (`f5dba3e4fa27_jane-php-1`), so no prefix may start with 12 hex and `_`.
 - `images` (optional): its own image namespaces, as prefixes ending with `/`: it may use images there even where the listener protects them.
@@ -196,6 +251,7 @@ A scope file that isn't valid (or that conflicts) is refused alone: its requests
 
 One case is left to the orchestrator: if tenant `jane` has a Compose service named `blog-php` before a scope `jane-blog` exists, its container `jane-blog-php-1` is jane's. Once `jane-blog` arrives, `jane-blog`'s Compose project can't take that name. Nothing crosses between the scopes, since ownership is by label, but it's a denial of service. An orchestrator that lets tenants pick nested names should refuse dashes in service names.
 - `networks` (optional): shared networks it may join besides its own, each with the `aliases` it may take and the `addresses` it may ask for there (none if left out). An alias is written as Docker's DNS keeps it: lowercase letters, digits, `-` and `_` (Compose's `demo_x-php-1`), labels of 1 to 63 characters separated by `.`, 253 in all. A container may take it in any case (`WEB` is `web` to Docker), never with a trailing dot (`web.` is another name to Docker), and no label of an alias may be of a container ID's form (12 hex digits). An alias with a dot is the scope's on that network, as a prefix is: another scope listing it there collides. One under a scope's prefix is that scope's container's name, which no other scope may list. A bare name (`web`, a Compose service's) is shared: see the [threat model](threat-model.md#out-of-scope).
+- `certificates` (optional, on an mTLS listener): its client certificates' public keys, each `{"sha256": "<the SHA-256 of the SubjectPublicKeyInfo>"}`, at most 8. When listed, only those certificates are the scope. See [TLS and client certificates](#tls-and-client-certificates).
 - `egress` (optional): `none` keeps its containers and builders on internal networks only. See [egress](#egress). The listener's `containers.egress: none` does the same for every scope.
 - `subnets` (optional): where its networks' addresses must be, in CIDR form: each network it creates names its subnet, inside one of these (otherwise Docker picks from its own pools).
 - `builders` (optional): its BuildKit builders, by exact name (no wildcard), each one scope's only, and outside every scope's prefixes (`buildkit-jane`, not `jane-buildkit`): a name a prefix covers is a container's of that scope, and the file is refused. See [builders](#builders). 0.1's `containers` key is refused: a container a scope "used" was fully its own, privileged or not.

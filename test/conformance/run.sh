@@ -10,9 +10,9 @@ if [ ! -x bin/yorvogate ]; then
 	exit 1
 fi
 
-# Twice: scopes by token (in a header), then each on its own socket
+# Three times: scopes by token (in a header), each on its own socket, and each by its client certificate (mTLS)
 status=0
-for listener in tokens sockets; do
+for listener in tokens sockets mtls; do
 	docker run --rm -e GITHUB_ACTIONS -e YGC_LISTENER=$listener \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v "$PWD/bin:/yorvogate:ro" \
