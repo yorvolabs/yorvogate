@@ -20,9 +20,6 @@ func dialStdio(cmd []string) bool {
 	return slices.Equal(cmd, []string{"buildctl", "dial-stdio"})
 }
 
-// dialStdioFields are what an exec of dial-stdio may set: what "docker exec -i" sends.
-var dialStdioFields = fields("Cmd", "AttachStdin", "AttachStdout", "AttachStderr", "ConsoleSize", "DetachKeys")
-
 // createDialStdio checks an exec created in a builder: buildctl dial-stdio and nothing else.
 func (s *scoped) createDialStdio(body []byte) ([]byte, error) {
 	var req container.ExecCreateRequest
@@ -34,7 +31,7 @@ func (s *scoped) createDialStdio(body []byte) ([]byte, error) {
 		return nil, refuse(http.StatusForbidden, "exec.create: in builder %s, only buildctl dial-stdio is allowed", s.builderName)
 	}
 
-	if f := unset(req, dialStdioFields); len(f) > 0 {
+	if f := unset(req, dialStdioCreate); len(f) > 0 {
 		return nil, refuse(http.StatusForbidden, "exec.create: in builder %s, %s isn't allowed", s.builderName, strings.Join(f, ", "))
 	}
 

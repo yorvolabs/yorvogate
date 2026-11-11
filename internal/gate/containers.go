@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/netip"
 	"path"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -19,102 +18,7 @@ import (
 	"github.com/yorvolabs/yorvogate/internal/scope"
 )
 
-// The fields of Docker's container types a scope may set, each either free (no power over the host
-// or other scopes) or checked by a rule below. Every other field must be left unset: a field a
-// newer Docker adds is refused until it's reviewed and listed here.
-var (
-	configFields = fields("Hostname", "Domainname", "User", "AttachStdin", "AttachStdout", "AttachStderr", "ExposedPorts",
-		"Tty", "OpenStdin", "StdinOnce", "Env", "Cmd", "Healthcheck", "ArgsEscaped", "Image", "Volumes", "WorkingDir",
-		"Entrypoint", "NetworkDisabled", "OnBuild", "Labels", "StopSignal", "StopTimeout", "Shell")
-
-	hostFields = fields(
-		// Free
-		"ContainerIDFile", "RestartPolicy", "AutoRemove", "ConsoleSize", "DNS", "DNSOptions", "DNSSearch", "ExtraHosts",
-		"GroupAdd", "ReadonlyRootfs", "Tmpfs", "ShmSize", "Umask", "Init",
-		"CPUShares", "Memory", "NanoCPUs", "BlkioWeight", "CPUPeriod", "CPUQuota", "CpusetCpus", "CpusetMems",
-		"MemoryReservation", "MemorySwap", "MemorySwappiness", "CPUCount", "CPUPercent", "IOMaximumIOps", "IOMaximumBandwidth",
-		// Checked below
-		"Binds", "LogConfig", "NetworkMode", "VolumeDriver", "VolumesFrom", "CapAdd", "CapDrop", "CgroupnsMode", "IpcMode",
-		"OomScoreAdj", "PidMode", "SecurityOpt", "UTSMode", "UsernsMode", "Runtime", "Isolation", "Mounts",
-		"OomKillDisable", "PidsLimit", "Ulimits")
-
-	updateFields = fields("CPUShares", "Memory", "NanoCPUs", "BlkioWeight", "CPUPeriod", "CPUQuota", "CpusetCpus", "CpusetMems",
-		"MemoryReservation", "MemorySwap", "MemorySwappiness", "CPUCount", "CPUPercent", "IOMaximumIOps", "IOMaximumBandwidth",
-		"RestartPolicy", "PidsLimit", "Ulimits", "OomKillDisable")
-
-	mountFields = fields("Type", "Source", "Target", "ReadOnly", "Consistency", "VolumeOptions", "TmpfsOptions")
-
-	// On a network of its own, an endpoint is the scope's to set up; on a shared one, only its aliases
-	// and addresses from its scope file.
-	ownEndpointFields    = fields("IPAMConfig", "Aliases", "GwPriority", "MacAddress")
-	sharedEndpointFields = fields("IPAMConfig", "Aliases", "GwPriority")
-
-	execFields = fields("User", "Tty", "ConsoleSize", "AttachStdin", "AttachStderr", "AttachStdout", "DetachKeys", "Env", "WorkingDir", "Cmd")
-
-	noNewPrivileges = []string{"no-new-privileges", "no-new-privileges:true", "no-new-privileges=true"}
-)
-
-func fields(names ...string) map[string]bool {
-	set := make(map[string]bool, len(names))
-	for _, n := range names {
-		set[n] = true
-	}
-
-	return set
-}
-
-// unset lists the fields of a struct (embedded ones included) that are set although they aren't
-// allowed, by the names Docker's API uses for them.
-func unset(v any, allowed map[string]bool) []string {
-	var set []string
-
-	value := reflect.ValueOf(v)
-	for value.Kind() == reflect.Pointer {
-		if value.IsNil() {
-			return nil
-		}
-
-		value = value.Elem()
-	}
-
-	for i := range value.NumField() {
-		field := value.Type().Field(i)
-		if field.Anonymous && field.Type.Kind() == reflect.Struct {
-			set = append(set, unset(value.Field(i).Interface(), allowed)...)
-
-			continue
-		}
-
-		if !allowed[field.Name] && isSet(field.Name, value.Field(i)) {
-			set = append(set, apiName(field))
-		}
-	}
-
-	return set
-}
-
-// isSet tells whether a field asks for something. An empty map or list asks for nothing, as Docker
-// reads it, but for the paths Docker masks or makes read-only in /proc: there, an empty list means
-// none, i.e. /proc unmasked.
-func isSet(name string, v reflect.Value) bool {
-	if name == "MaskedPaths" || name == "ReadonlyPaths" {
-		return !v.IsNil()
-	}
-
-	if (v.Kind() == reflect.Map || v.Kind() == reflect.Slice) && v.Len() == 0 {
-		return false
-	}
-
-	return !v.IsZero()
-}
-
-func apiName(f reflect.StructField) string {
-	if name, _, _ := strings.Cut(f.Tag.Get("json"), ","); name != "" && name != "-" {
-		return name
-	}
-
-	return f.Name
-}
+var noNewPrivileges = []string{"no-new-privileges", "no-new-privileges:true", "no-new-privileges=true"}
 
 // decode reads a body into Docker's own type the way Docker does (Go's decoder: keys matched
 // regardless of case, the last of duplicates wins), refusing a field the type doesn't have.
@@ -146,6 +50,10 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	if f := unset(req, createRequest); len(f) > 0 {
+		return nil, refuse(http.StatusForbidden, "container.create %s: %s isn't allowed", name, strings.Join(f, ", "))
+	}
+
 	if req.Config == nil || req.Config.Image == "" {
 		return nil, refuse(http.StatusBadRequest, "container.create: no image")
 	}
@@ -157,11 +65,11 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 
-	for _, f := range unset(req.Config, configFields) {
+	for _, f := range unset(req.Config, containerConfig) {
 		add("%s isn't allowed", f)
 	}
 
-	for _, f := range unset(req.HostConfig, hostFields) {
+	for _, f := range unset(req.HostConfig, hostConfigFields) {
 		add("HostConfig.%s isn't allowed", f)
 	}
 
@@ -173,6 +81,10 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 
 	s.host(req.HostConfig, add)
 	s.resources(&req.HostConfig.Resources, add)
+	for _, f := range unset(req.NetworkingConfig, networkingConfig) {
+		add("NetworkingConfig.%s isn't allowed", f)
+	}
+
 	s.networking(req.HostConfig.NetworkMode, req.NetworkingConfig, add)
 
 	if len(problems) > 0 {
@@ -356,6 +268,10 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 		s.logOptions(h.LogConfig, add)
 	}
 
+	for _, f := range unset(h.LogConfig, logConfig) {
+		add("LogConfig.%s isn't allowed", f)
+	}
+
 	if h.OomScoreAdj < 0 {
 		add("OomScoreAdj below 0 isn't allowed")
 	}
@@ -405,10 +321,16 @@ func (s *scoped) resources(r *container.Resources, add func(string, ...any)) {
 			add("the ulimit %s isn't allowed", u.Name)
 		}
 	}
+
+	for _, u := range r.Ulimits {
+		for _, f := range unset(u, ulimit) {
+			add("a ulimit's %s isn't allowed", f)
+		}
+	}
 }
 
 func (s *scoped) mount(m mount.Mount, add func(string, ...any)) {
-	for _, f := range unset(m, mountFields) {
+	for _, f := range unset(m, mountSpec) {
 		add("a mount's %s isn't allowed", f)
 	}
 
@@ -425,6 +347,14 @@ func (s *scoped) mount(m mount.Mount, add func(string, ...any)) {
 		}
 
 		if o := m.VolumeOptions; o != nil {
+			for _, f := range unset(o, volumeOptions) {
+				add("a mount's VolumeOptions.%s isn't allowed", f)
+			}
+
+			for _, f := range unset(o.DriverConfig, mountDriver) {
+				add("a mount's VolumeOptions.DriverConfig.%s isn't allowed", f)
+			}
+
 			if o.DriverConfig != nil && !plainLocal(o.DriverConfig.Name, o.DriverConfig.Options) {
 				add("mount of %q: volume driver options aren't allowed", m.Source)
 			}
@@ -539,7 +469,7 @@ func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(str
 			return
 		}
 
-		for _, f := range unset(e, sharedEndpointFields) {
+		for _, f := range unset(e, endpointShared) {
 			add("on the shared network %s, %s isn't allowed", name, f)
 		}
 
@@ -555,6 +485,10 @@ func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(str
 			if !slices.Contains(shared.Aliases, alias) {
 				add("the alias %q on the shared network %s isn't one of its own", a, name)
 			}
+		}
+
+		for _, f := range unset(e.IPAMConfig, endpointIPAMShared) {
+			add("on the shared network %s, IPAMConfig.%s isn't allowed", name, f)
 		}
 
 		if c := e.IPAMConfig; c != nil {
@@ -586,7 +520,7 @@ func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(str
 	}
 
 	if e != nil {
-		for _, f := range unset(e, ownEndpointFields) {
+		for _, f := range unset(e, endpointOwn) {
 			add("on the network %s, %s isn't allowed", name, f)
 		}
 	}
@@ -602,7 +536,7 @@ func (s *scoped) updateContainer(body []byte) ([]byte, error) {
 	var problems []string
 	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 
-	for _, f := range unset(req, updateFields) {
+	for _, f := range unset(req, updateConfig) {
 		add("%s isn't allowed", f)
 	}
 
@@ -625,6 +559,12 @@ func (s *scoped) updateContainer(body []byte) ([]byte, error) {
 		}
 	}
 
+	for _, u := range r.Ulimits {
+		for _, f := range unset(u, ulimit) {
+			add("a ulimit's %s isn't allowed", f)
+		}
+	}
+
 	if len(problems) > 0 {
 		return nil, refuse(http.StatusForbidden, "container.update: %s", strings.Join(problems, "; "))
 	}
@@ -643,7 +583,7 @@ func (s *scoped) createExec(body []byte) ([]byte, error) {
 		return nil, refuse(http.StatusForbidden, "exec.create: a privileged exec isn't allowed")
 	}
 
-	if f := unset(req, execFields); len(f) > 0 {
+	if f := unset(req, execCreate); len(f) > 0 {
 		return nil, refuse(http.StatusForbidden, "exec.create: %s isn't allowed", strings.Join(f, ", "))
 	}
 
@@ -654,6 +594,10 @@ func (s *scoped) startExec(body []byte) ([]byte, error) {
 	var req container.ExecStartRequest
 	if err := decode(body, &req); err != nil {
 		return nil, err
+	}
+
+	if f := unset(req, execStart); len(f) > 0 {
+		return nil, refuse(http.StatusForbidden, "exec.start: %s isn't allowed", strings.Join(f, ", "))
 	}
 
 	// Attached, it's a stream both ways: only as an upgrade.
