@@ -40,8 +40,10 @@ type Gate struct {
 	loads    *loadLimiter
 	// Docker's defaults as last read: while they're unsafe, or unread, every scoped request is refused
 	defaults *Defaults
-	// A token listener's requests being answered, ended when their scope's allowance goes
+	// A token or mTLS listener's requests being answered, ended when their allowance goes
 	streams streams
+	// An mTLS listener's files: whose CAs, as last read, its client certificates must still chain to
+	tls *TLSFiles
 	// The headers a scope sent that weren't forwarded, each warned of once
 	dropped sync.Map
 	// How long its recent decisions took, each endpoint's: a refusal is held as long (refusals.go)
@@ -81,6 +83,12 @@ func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.
 	}
 
 	return g
+}
+
+// UseTLS gives an mTLS listener's gate the files its listener serves: without them, its client
+// certificates are refused.
+func (g *Gate) UseTLS(files *TLSFiles) {
+	g.tls = files
 }
 
 // refusal is a request not forwarded: its HTTP status and why, and what's only logged.
@@ -123,10 +131,16 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if decision != nil && !g.listener.SocketBound() {
+	switch {
+	case decision != nil && !g.listener.SocketBound():
 		var answered func()
 
-		forward, answered = g.streams.track(g.scopes, decision.scope, forward)
+		forward, answered = g.streams.track(g.scopes, g.tls, decision.scope, forward)
+		defer answered()
+	case g.listener.Mode == config.Trusted && g.listener.MutualTLS():
+		var answered func()
+
+		forward, answered = g.streams.track(nil, g.tls, nil, forward)
 		defer answered()
 	}
 
@@ -160,6 +174,12 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 
 	switch g.listener.Mode {
 	case config.Trusted:
+		if g.listener.MutualTLS() {
+			if c, ok := credentialOf(r.TLS); !ok || !g.tls.admits(c, nil) {
+				return nil, nil, refuse(http.StatusUnauthorized, "the client certificate has expired, or its CA is no longer this listener's: connect again with a current one")
+			}
+		}
+
 		if !g.listener.Allows(req.Endpoint) {
 			return nil, nil, refuse(http.StatusForbidden, "%s isn't allowed on this listener", req.Endpoint.Name)
 		}
@@ -321,9 +341,7 @@ func (g *Gate) certified(r *http.Request) (*scope.Scope, error) {
 		return nil, refuse(http.StatusInternalServerError, "the request came without a client certificate")
 	}
 
-	leaf := r.TLS.PeerCertificates[0]
-
-	name, err := certificateScope(leaf)
+	name, err := certificateScope(r.TLS.PeerCertificates[0])
 	if err != nil {
 		return nil, refuse(http.StatusUnauthorized, "the client certificate names no scope: %s", err)
 	}
@@ -332,9 +350,18 @@ func (g *Gate) certified(r *http.Request) (*scope.Scope, error) {
 		return nil, refuse(http.StatusForbidden, "this client certificate is scope %s's: a request with it can't name another", name)
 	}
 
+	// Pinned, not expired, and from a CA still the listener's, on each request: a connection kept
+	// alive outlives its handshake
 	s, err := g.scopes.Get(name)
-	if err != nil || !s.Pinned(SPKI(leaf)) {
-		return nil, refuse(http.StatusUnauthorized, "no such scope, or not its certificate")
+	c, verified := credentialOf(r.TLS)
+
+	if err != nil || !verified || !g.tls.admits(c, s) {
+		refused := refuse(http.StatusUnauthorized, "no such scope, or not its certificate")
+		if err == nil && verified && s.Pinned(c.key) {
+			refused.logged = []any{"why", "the client certificate expired, or its CA is no longer the listener's"}
+		}
+
+		return nil, refused
 	}
 
 	return s, nil

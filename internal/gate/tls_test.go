@@ -18,8 +18,10 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -125,8 +127,9 @@ type mtls struct {
 	server, clients, admins *pki
 	dir, scopes             string
 	set                     *TLS
-	gate                    *Gate
-	sites, trusted          string // addresses
+	gate                    *Gate   // the scoped listener's
+	gates                   []*Gate // both
+	sites, trusted          string  // addresses
 	log                     *bytes.Buffer
 }
 
@@ -153,7 +156,7 @@ listeners:
   - name: admin
     address: tcp://0.0.0.0:2375
     mode: trusted
-    allow: {system: read}
+    allow: {system: read, exec: write}
     tls: {certificate: ` + m.dir + `/server.pem, key: ` + m.dir + `/server.key, client_ca: ` + m.dir + `/admins.pem}
 ` + trustedClients))
 	if err != nil {
@@ -174,6 +177,9 @@ listeners:
 
 	for i, l := range c.Listeners {
 		g := New(c, l, NewUpstream(c, log), registry, defaults, log)
+		g.UseTLS(m.set.For(l.Name))
+		m.gates = append(m.gates, g)
+
 		if i == 0 {
 			m.gate = g
 		}
@@ -368,10 +374,10 @@ func TestAScopesPinnedCertificates(t *testing.T) {
 }
 
 // tlsStream starts an exec's stream over TLS with a client certificate.
-func (m *mtls) tlsStream(t *testing.T, exec string, cert tls.Certificate) (net.Conn, *bufio.Reader) {
+func (m *mtls) tlsStream(t *testing.T, address, exec string, cert tls.Certificate) (net.Conn, *bufio.Reader) {
 	t.Helper()
 
-	conn, err := tls.Dial("tcp", m.sites, m.tlsConfig(&cert))
+	conn, err := tls.Dial("tcp", address, m.tlsConfig(&cert))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,8 +422,8 @@ func TestACertificatesStreamsEndWithIt(t *testing.T) {
 			writeScope(t, m.scopes, "jane", `{"owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-", "jane_"], "certificates": [{"sha256": "`+pin(jane)+`"}]}`)
 			revoke(t, m.gate)
 
-			janeConn, janeReader := m.tlsStream(t, "exec-jane", jane)
-			blogConn, blogReader := m.tlsStream(t, "exec-blog", blog)
+			janeConn, janeReader := m.tlsStream(t, m.sites, "exec-jane", jane)
+			blogConn, blogReader := m.tlsStream(t, m.sites, "exec-blog", blog)
 
 			revoke(t, m.gate)
 			echoes(t, janeConn, janeReader)
@@ -477,7 +483,9 @@ func TestATrustedListenersPinnedClient(t *testing.T) {
 
 	raw, _ := net.Listen("tcp", "127.0.0.1:0")
 	log := slog.New(slog.DiscardHandler)
-	server := NewServer(New(c, c.Listeners[0], NewUpstream(c, log), Registry(c), readDefaults(c), log))
+	g := New(c, c.Listeners[0], NewUpstream(c, log), Registry(c), readDefaults(c), log)
+	g.UseTLS(set.For("admin"))
+	server := NewServer(g)
 	go func() { _ = server.Serve(tls.NewListener(raw, set.For("admin").Config())) }()
 	t.Cleanup(func() { _ = server.Close() })
 
@@ -628,5 +636,233 @@ func TestTLSFilesThatDontLoad(t *testing.T) {
 		if _, err := LoadTLS(c, slog.New(slog.DiscardHandler)); err == nil || !strings.Contains(err.Error(), "listener admin: "+want) {
 			t.Errorf("%s: %v", want, err)
 		}
+	}
+}
+
+// sub is a CA the CA issues: an intermediate.
+func (p *pki) sub(t testing.TB, name string) *pki {
+	t.Helper()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	serial++
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, p.cert, &key.PublicKey, p.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cert, _ := x509.ParseCertificate(der)
+
+	return &pki{cert: cert, key: key, pem: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})}
+}
+
+// sending is a client certificate sent with these intermediates after it.
+func sending(c tls.Certificate, intermediates ...*pki) tls.Certificate {
+	c.Certificate = slices.Clone(c.Certificate)
+	for _, p := range intermediates {
+		c.Certificate = append(c.Certificate, p.cert.Raw)
+	}
+
+	return c
+}
+
+// twoLevels is a configuration of a scoped listener and a trusted one, with these client CA files.
+func (m *mtls) twoLevels(t *testing.T, d *docker, scoped, trusted string) *config.Config {
+	t.Helper()
+
+	c, err := config.Parse([]byte("upstream: unix://" + d.socket + "\nlisteners:\n  - name: sites\n    address: tcp://0.0.0.0:2376\n    mode: scoped\n    scopes: " + m.scopes + "\n    tls: {certificate: " + m.dir + "/server.pem, key: " + m.dir + "/server.key, client_ca: " + m.dir + "/" + scoped + "}\n  - name: admin\n    address: tcp://0.0.0.0:2375\n    mode: trusted\n    allow: {system: read}\n    tls: {certificate: " + m.dir + "/server.pem, key: " + m.dir + "/server.key, client_ca: " + m.dir + "/" + trusted + "}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return c
+}
+
+// A CA of one trust level can't sit above or below one of the other: Go verifies a chain through
+// the intermediates the client sends, so a scope's certificate under an intermediate of the trusted
+// listener's root would open the trusted listener (and the other way round).
+func TestTrustLevelsDontChainToEachOther(t *testing.T) {
+	d := startDocker(t)
+	m := mtlsGate(t, d, "")
+	root := newCA(t, "corporate root")
+	one := root.sub(t, "intermediate one")
+	two := one.sub(t, "intermediate two")
+	m.write(t, "root.pem", root.pem)
+	m.write(t, "one.pem", one.pem)
+	m.write(t, "two-and-one.pem", append(append([]byte{}, two.pem...), one.pem...))
+
+	for _, tc := range []struct {
+		name, scoped, trusted, want string
+	}{
+		{"a scoped intermediate under the trusted root", "one.pem", "root.pem", "listener admin: tls.client_ca: listener sites's CA (CN=intermediate one), of the other trust level, chains up to one here"},
+		{"a trusted intermediate under the scoped root", "root.pem", "one.pem", "listener admin: tls.client_ca: a CA (CN=intermediate one) chains up to one of listener sites's"},
+		{"two levels down, the one between in the file", "two-and-one.pem", "root.pem", "chains up to one here"},
+	} {
+		if _, err := LoadTLS(m.twoLevels(t, d, tc.scoped, tc.trusted), slog.New(slog.DiscardHandler)); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v", tc.name, err)
+		}
+	}
+
+	// Becoming related at a reload: the trusted listener keeps its own CA
+	m.write(t, "admins.pem", m.clients.sub(t, "under the scopes CA").pem)
+	m.set.Reload()
+
+	if !strings.Contains(m.log.String(), "level=ERROR msg=\"tls files: kept the last good ones\" listener=admin") || !strings.Contains(m.log.String(), "chains up to one of listener sites's") {
+		t.Errorf("the log: %s", m.log.String())
+	}
+}
+
+// A trusted listener takes only a certificate a CA in its client_ca issued directly: an intermediate
+// isn't followed, whoever sent it, so a CA above a scoped one (not in its file) opens nothing.
+func TestATrustedClientIsIssuedDirectly(t *testing.T) {
+	d := startDocker(t)
+	m := mtlsGate(t, d, "")
+	root := newCA(t, "corporate root")
+	one := root.sub(t, "intermediate one")
+	two := one.sub(t, "intermediate two")
+	m.write(t, "root.pem", root.pem)
+	m.write(t, "two.pem", two.pem)
+
+	// Loads: the file has two, not the one between it and the root
+	c := m.twoLevels(t, d, "two.pem", "root.pem")
+	set, err := LoadTLS(c, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := net.Listen("tcp", "127.0.0.1:0")
+	log := slog.New(slog.DiscardHandler)
+	g := New(c, c.Listeners[1], NewUpstream(c, log), Registry(c), readDefaults(c), log)
+	g.UseTLS(set.For("admin"))
+	server := NewServer(g)
+	go func() { _ = server.Serve(tls.NewListener(raw, set.For("admin").Config())) }()
+	t.Cleanup(func() { _ = server.Close() })
+
+	admin, _, _ := root.issue(t, client("orchestrator"))
+	janeUnderOne, _, _ := one.issue(t, client("jane"))
+	janeUnderTwo, _, _ := two.issue(t, client("jane"))
+
+	for _, tc := range []struct {
+		name  string
+		cert  tls.Certificate
+		opens bool
+	}{
+		{"the root's own", admin, true},
+		{"the root's own, padded with intermediates", sending(admin, two, one), true},
+		{"under an intermediate it sends", sending(janeUnderOne, one), false},
+		{"a scope's, two levels down, sending both", sending(janeUnderTwo, two, one), false},
+		{"a scope's, padded once more", sending(janeUnderTwo, two, one, two), false},
+	} {
+		status, _, err := m.get(t, raw.Addr().String(), &tc.cert, "/_ping", nil)
+		if opened := err == nil && status == 200; opened != tc.opens {
+			t.Errorf("%s: opened %v (%d %v)", tc.name, opened, status, err)
+		}
+	}
+}
+
+// A client certificate is checked on each request, not only at its connection's handshake: on a
+// connection kept alive, a certificate that expired, or whose CA was removed, is refused; and its
+// streams end. On both trust levels.
+func TestACertificateIsCheckedAfterItsHandshake(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(m *mtls, cert tls.Certificate)
+	}{
+		{"expired", func(m *mtls, cert tls.Certificate) {
+			expires := cert.Leaf.NotAfter
+			clock = func() time.Time { return expires.Add(time.Second) }
+		}},
+		{"its CA removed", func(m *mtls, _ tls.Certificate) {
+			m.write(t, "clients.pem", newCA(t, "the new scopes CA").pem)
+			m.write(t, "admins.pem", newCA(t, "the new admins CA").pem)
+			m.set.Reload()
+		}},
+	} {
+		for _, level := range []string{"scoped", "trusted"} {
+			t.Run(tc.name+" on "+level, func(t *testing.T) {
+				t.Cleanup(func() { clock = time.Now })
+				d := startDocker(t)
+				m := mtlsGate(t, d, "")
+				address, path, g, cert := m.sites, "/v1.56/exec/exec-jane/json", m.gates[0], tls.Certificate{}
+
+				if level == "scoped" {
+					cert, _, _ = m.clients.issue(t, client("jane"))
+				} else {
+					address, path, g = m.trusted, "/_ping", m.gates[1]
+					cert, _, _ = m.admins.issue(t, client("orchestrator"))
+				}
+
+				// One connection, kept alive
+				var reused []bool
+				trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) { reused = append(reused, i.Reused) }}
+				keptAlive := &http.Client{Transport: &http.Transport{TLSClientConfig: m.tlsConfig(&cert), MaxConnsPerHost: 1}, Timeout: 5 * time.Second}
+				send := func() int {
+					req, _ := http.NewRequestWithContext(httptrace.WithClientTrace(t.Context(), trace), "GET", "https://"+address+path, nil)
+					res, err := keptAlive.Do(req)
+					if err != nil {
+						t.Fatal(err)
+					}
+					_, _ = io.Copy(io.Discard, res.Body)
+					_ = res.Body.Close()
+
+					return res.StatusCode
+				}
+
+				if status := send(); status != 200 {
+					t.Fatalf("before: %d", status)
+				}
+
+				conn, reader := m.tlsStream(t, address, "exec-jane", cert)
+
+				tc.change(m, cert)
+
+				if status := send(); status != http.StatusUnauthorized {
+					t.Errorf("after, on the connection kept alive: %d", status)
+				}
+
+				if len(reused) != 2 || !reused[1] {
+					t.Errorf("the connection wasn't kept alive: %v", reused)
+				}
+
+				g.Revoke()
+
+				if !ended(t, conn, reader) {
+					t.Error("its stream is still open")
+				}
+			})
+		}
+	}
+}
+
+// On a scoped listener a client certificate needs its scope: without one, admits takes nothing. A
+// trusted listener's needs none.
+func TestAScopedListenerAdmitsNoCertificateWithoutItsScope(t *testing.T) {
+	d := startDocker(t)
+	m := mtlsGate(t, d, "")
+	jane, _, _ := m.clients.issue(t, client("jane"))
+	admin, _, _ := m.admins.issue(t, client("orchestrator"))
+	of := func(c tls.Certificate, ca *pki) credential {
+		return credential{key: SPKI(c.Leaf), chains: []verifiedChain{{ca: SPKI(ca.cert), expires: c.Leaf.NotAfter}}}
+	}
+
+	scope, err := m.gate.scopes.Get("jane")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if sites := m.set.For("sites"); sites.admits(of(jane, m.clients), nil) || !sites.admits(of(jane, m.clients), scope) {
+		t.Error("the scoped listener: a certificate without its scope, or not with it")
+	}
+
+	if !m.set.For("admin").admits(of(admin, m.admins), nil) {
+		t.Error("the trusted listener")
+	}
+
+	if (*TLSFiles)(nil).admits(of(admin, m.admins), scope) {
+		t.Error("a gate without its listener's files")
 	}
 }

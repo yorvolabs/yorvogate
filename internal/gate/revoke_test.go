@@ -204,7 +204,7 @@ func TestARequestDecidedBeforeAReloadIsCheckedAgain(t *testing.T) {
 	revoke(t, g)
 
 	req, _ := http.NewRequest("GET", "http://docker/v1.56/containers/jane-php-1/logs", nil)
-	forward, answered := g.streams.track(g.scopes, allowed, req)
+	forward, answered := g.streams.track(g.scopes, nil, allowed, req)
 
 	if forward.Context().Err() == nil {
 		t.Error("a request of a removed scope goes on")
@@ -214,7 +214,7 @@ func TestARequestDecidedBeforeAReloadIsCheckedAgain(t *testing.T) {
 
 	// One that's current isn't ended, and once answered it's no longer tracked
 	blog, _ := g.scopes.Authenticate("blog", blogToken)
-	forward, done := g.streams.track(g.scopes, blog, req)
+	forward, done := g.streams.track(g.scopes, nil, blog, req)
 
 	if forward.Context().Err() != nil {
 		t.Error("blog's request was ended")

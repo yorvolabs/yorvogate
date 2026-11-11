@@ -403,7 +403,7 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 
 	servers := make([]*http.Server, 0, len(c.Listeners))
 	bound := []*gate.Sockets{}
-	// Token listeners' gates: each ends the requests of a scope whose allowance goes
+	// Gates of scoped and mTLS listeners with an address: each ends the requests whose allowance goes
 	tokens := []*gate.Gate{}
 	failed := make(chan error, len(c.Listeners))
 
@@ -449,9 +449,10 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		listener = gate.LimitListener(listener, gate.MaxConnections)
 		if files := certificates.For(l.Name); files != nil {
 			listener = tls.NewListener(listener, files.Config())
+			g.UseTLS(files)
 		}
 
-		if l.Mode == config.Scoped {
+		if l.Mode == config.Scoped || l.MutualTLS() {
 			tokens = append(tokens, g)
 		}
 
