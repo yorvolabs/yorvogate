@@ -15,6 +15,8 @@ cli=docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb148
 label=com.docker.compose.project
 # shellcheck source-path=SCRIPTDIR source=lib.sh
 . "$(dirname "$0")/lib.sh"
+# shellcheck source-path=SCRIPTDIR source=scope_sandbox.sh
+. "$(dirname "$0")/scope_sandbox.sh"
 
 # What an agent runs, in its container
 ana() { direct exec ygca-agent-ana "$@"; }
@@ -30,38 +32,19 @@ cleanup() {
 	done
 	direct rm -f ygca-agent-ana ygca-agent-nogroup ygca-proxy >/dev/null 2>&1
 	direct network rm ygca-egress ygca-out >/dev/null 2>&1
-	[ -n "${gate:-}" ] && kill "$gate" 2>/dev/null
+	sandbox_stop
 }
 trap cleanup EXIT
 cleanup
 
 say "== Docker $(direct version --format '{{.Server.Version}}'): an agent's socket (docs/agents.md)"
-mkdir -p "$dir/scopes"
 for agent in ygca-ana ygca-bob; do
-	printf '{"owner": {"label": "%s", "value": "%s"}, "prefixes": ["%s-", "%s_"], "images": ["agents/%s/"]}\n' \
-		"$label" "$agent" "$agent" "$agent" "$agent" > "$dir/scopes/$agent.json"
+	sandbox_scope "$dir" "$agent" "$(printf '{"owner": {"label": "%s", "value": "%s"}, "prefixes": ["%s-", "%s_"], "images": ["agents/%s/"]}' "$label" "$agent" "$agent" "$agent" "$agent")"
 done
 # Eve: no way out but the proxy on the shared internal network ygca-egress (ygca-out has one)
-printf '{"owner": {"label": "%s", "value": "ygca-eve"}, "prefixes": ["ygca-eve-", "ygca-eve_"], "networks": {"ygca-egress": {}, "ygca-out": {}}, "egress": "none"}\n' "$label" > "$dir/scopes/ygca-eve.json"
-chmod 600 "$dir/scopes/"*.json
+sandbox_scope "$dir" ygca-eve "$(printf '{"owner": {"label": "%s", "value": "ygca-eve"}, "prefixes": ["ygca-eve-", "ygca-eve_"], "networks": {"ygca-egress": {}, "ygca-out": {}}, "egress": "none"}' "$label")"
 
-cat > "$dir/yorvogate.yaml" <<EOF
-upstream: unix:///var/run/docker.sock
-listeners:
-  - name: agents
-    scope_sockets: $sockets
-    socket_group: "$group"
-    mode: scoped
-    scopes: $dir/scopes
-EOF
-without_lsm "$dir/yorvogate.yaml"
-
-${YORVOGATE:-/yorvogate/yorvogate} serve --config "$dir/yorvogate.yaml" 2> "$dir/yorvogate.log" &
-gate=$!
-for _ in $(seq 20); do
-	[ -S "$sockets/ygca-ana.sock" ] && [ -S "$sockets/ygca-bob.sock" ] && [ -S "$sockets/ygca-eve.sock" ] && break
-	sleep 0.5
-done
+sandbox_start "$dir" "$sockets" "$group" ygca-ana ygca-bob ygca-eve
 
 direct image inspect alpine:3.22 >/dev/null 2>&1 || direct pull -q alpine:3.22 >/dev/null
 direct image inspect "$cli" >/dev/null 2>&1 || direct pull -q "$cli" >/dev/null

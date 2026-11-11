@@ -47,4 +47,11 @@ docker run --rm -e GITHUB_ACTIONS \
 	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
 	sh /conformance/agents.sh || status=1
 docker volume rm ygc-agents >/dev/null 2>&1
+# Then SandboxEscapeBench's gate-relevant escape scenarios, end to end through a scope socket
+docker run --rm -e GITHUB_ACTIONS \
+	-v /var/run/docker.sock:/var/run/docker.sock \
+	-v "$PWD/bin:/yorvogate:ro" \
+	-v "$PWD/test/conformance:/conformance:ro" \
+	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
+	sh /conformance/escapes.sh || status=1
 exit $status
