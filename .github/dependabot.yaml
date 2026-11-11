@@ -14,6 +14,22 @@ updates:
       minor-and-patch:
         update-types: [minor, patch]
 
+  # The differential suite's module (test/differential/README.md). moby/v2 is pinned at the commit
+  # of the Docker Engine CI installs and moves with it, by hand: not here.
+  - package-ecosystem: gomod
+    directory: /test/differential
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore"
+    cooldown:
+      default-days: 7
+    ignore:
+      - dependency-name: github.com/moby/moby/v2
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
   - package-ecosystem: docker
     directory: /
     schedule:

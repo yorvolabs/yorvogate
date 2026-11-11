@@ -161,3 +161,9 @@ func (d descriptor) parameters(endpoint string, query map[string][]string) error
 
 	return nil
 }
+
+// ScopeEndpoints is the names of the endpoints a scope may send: what the differential suite
+// (test/differential) must have a request for.
+func ScopeEndpoints() []string {
+	return slices.Sorted(maps.Keys(forScopes))
+}

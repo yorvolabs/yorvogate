@@ -12,9 +12,9 @@ EFFICACY ?= 90
 # The version a release's binaries say they are (make dist VERSION=1.2.3)
 VERSION ?= dev
 
-.PHONY: check format lint test vulnerabilities build fuzz mutation dist
+.PHONY: check format lint test vulnerabilities differential build fuzz mutation dist
 
-check: format lint test vulnerabilities
+check: format lint test vulnerabilities differential
 
 # Code formatted as gofmt does (fails on any difference)
 format:
@@ -30,6 +30,15 @@ test:
 # Known vulnerabilities in what YorvoGate calls of its dependencies and Go's standard library
 vulnerabilities:
 	go run $(GOVULNCHECK) ./...
+
+# The differential suite: the gate in front of Docker's own API server code (moby's routers, at the
+# Engine version CI installs), whose backends record what they're handed; what Docker reads of what
+# the gate forwards must be what the gate decided on (test/differential/README.md). Its own module,
+# so moby's daemon stays out of YorvoGate's go.mod. Budget: 60 s once its modules are downloaded
+# and built (about 3 s of tests); the first build takes minutes. Without cgo (one of moby's network
+# packages wants libnftables with it), so without -race.
+differential:
+	cd test/differential && CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test -count=1 -timeout 60s ./...
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/yorvogate ./cmd/yorvogate
