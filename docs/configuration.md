@@ -238,7 +238,9 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 ```
 
 - `version`: the format, `1`. A scope file without one is read as version 1, with a warning; YorvoGate 0.4 refuses it. See [formats and versions](#formats-and-versions).
-- `token_sha256`: the SHA-256 of the scope's token, 64 lowercase hex digits. The client sends the token itself. Optional where each scope has its own socket ([scope sockets](#scope-sockets)), and where its client certificate is the scope ([mTLS](#tls-and-client-certificates)).
+- `token_sha256`: the SHA-256 of the scope's token, 64 lowercase hex digits. The client sends the token itself. Optional where each scope has its own socket ([scope sockets](#scope-sockets)), and where its client certificate is the scope ([mTLS](#tls-and-client-certificates)), or when `tokens` has one.
+- `tokens` (optional): more tokens, each `{"sha256": "<its SHA-256>", "expires": "<RFC 3339, optional>"}`. At most 8 with `token_sha256`, and no digest listed twice. Each is the scope until it expires; past `expires` it's refused like a wrong token, and what it had open ends at the next read. See [rotating a token](#rotating-a-token).
+- `peer_uids` (optional, on a unix address): the user IDs whose connections may be the scope. See [peer users](#peer-users).
 - `owner`: the label (and its value) that marks the scope's objects. For Compose projects, `com.docker.compose.project` and the project's name. An object is a scope's by this label only, never by its name. What a scope creates must carry it, and no other scope's owner label; a volume a container's mount creates gets it from YorvoGate.
 - `prefixes`: what the names of the containers, networks and volumes it creates start with. Each ends with `-`, `_` or `.`, so `jane-` never matches `janet-…`. A container may also take the name Compose gives one it recreates, 12 hex and `_` before one of the scope's names (`f5dba3e4fa27_jane-php-1`), so no prefix may start with 12 hex and `_`.
 - `images` (optional): its own image namespaces, as prefixes ending with `/`: it may use images there even where the listener protects them.
@@ -371,7 +373,23 @@ On a listener with an address, a client sends its scope with each request. With 
 {"HttpHeaders": {"X-YorvoGate-Scope": "jane", "X-YorvoGate-Token": "<the token>"}}
 ```
 
-Each request is decided on the scope files as last read. A request already being answered ends at the next read when its scope file is removed, is no longer valid, or has a new `token_sha256`: streams (attach, exec, logs that follow) included, as a scope's socket closes on a [scope-sockets](#scope-sockets) listener. Another scope's requests go on.
+Each request is decided on the scope files as last read. A request already being answered ends at the next read when its scope file is removed, is no longer valid, no longer has the token it was allowed with (replaced, removed from `tokens`, or past its `expires`), or no longer lists its connection's user in `peer_uids`: streams (attach, exec, logs that follow) included, as a scope's socket closes on a [scope-sockets](#scope-sockets) listener. Another scope's requests go on.
+
+### Rotating a token
+
+A scope's token is compared with every one it has, in constant time, and always with 8, so a request's time doesn't say which matched, nor how many a scope has. To rotate one without a moment where the client is refused:
+
+1. Add the new token's digest to `tokens`, and give the old one an `expires` (or leave it as `token_sha256`).
+2. Give the client the new token.
+3. Remove the old one. What it still had open ends at the next read.
+
+`yorvogate check`, and a running gate's log once each, name a scope's tokens that have expired (they're kept in the file, and refused: remove them) and those expiring within 7 days, by the first 12 digits of their digest.
+
+### Peer users
+
+On a listener with a unix `address`, the kernel knows which user connected (`SO_PEERCRED`). A scope file's `peer_uids: [1000, …]` makes its token the scope only over a connection from one of those users. A request from another, its token proved, is refused naming its user. YorvoGate reads it once per connection, when the connection is made. A listener's `require_peer_uids: true` makes every scope on it list them, and a scope file without them is refused.
+
+`peer_uids` is only for scopes whose folder is served by unix addresses alone. On a TCP listener there's no peer user, and on [scope sockets](#scope-sockets) the socket's own permissions decide who connects, so a scope file there that lists them is refused, not silently ignored. A user ID is only as distinct as the host's users: UID 0 can be anyone, and a connection handed to another process keeps the user that made it (see the [threat model](threat-model.md)).
 
 ## Scope status
 

@@ -56,6 +56,9 @@ func tokenGate(t *testing.T, d *docker) (*httptest.Server, *Gate, string) {
 	return server, g, scopes
 }
 
+// gates are the gates of running subtests, by name, for a change that revokes on its own.
+var gates = map[string]*Gate{}
+
 // revoke reloads the scope files and ends what they no longer allow, as serve's scan does.
 func revoke(t *testing.T, g *Gate) {
 	t.Helper()
@@ -71,7 +74,14 @@ func revoke(t *testing.T, g *Gate) {
 func execStream(t *testing.T, server *httptest.Server, exec string, header map[string]string) (net.Conn, *bufio.Reader) {
 	t.Helper()
 
-	conn, err := net.Dial("tcp", strings.TrimPrefix(server.URL, "http://"))
+	return execStreamOn(t, "tcp", strings.TrimPrefix(server.URL, "http://"), exec, header)
+}
+
+// execStreamOn is execStream on a network's address.
+func execStreamOn(t *testing.T, network, address, exec string, header map[string]string) (net.Conn, *bufio.Reader) {
+	t.Helper()
+
+	conn, err := net.Dial(network, address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,10 +141,21 @@ func TestATokenListenerEndsAScopesStreamsWhenItsAllowanceGoes(t *testing.T) {
 		{"a new token", func(t *testing.T, scopes string) {
 			writeScope(t, scopes, "jane", tokenScope("jane", "another-token-0123456789abcdef0123"))
 		}},
+		{"its token removed in a rotation, another kept", func(t *testing.T, scopes string) {
+			writeScope(t, scopes, "jane", strings.Replace(tokenScope("jane", "another-token-0123456789abcdef0123"), `"owner"`, `"tokens": [{"sha256": "`+sha(blogToken)+`"}], "owner"`, 1))
+		}},
+		{"its token expired", func(t *testing.T, scopes string) {
+			expires := time.Now().Add(time.Hour)
+			writeScope(t, scopes, "jane", `{"tokens": [{"sha256": "`+sha(token)+`", "expires": "`+expires.UTC().Format(time.RFC3339)+`"}], "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-", "jane_"]}`)
+			revoke(t, gates[t.Name()])
+			clock = func() time.Time { return expires }
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Cleanup(func() { clock = time.Now })
 			d := startDocker(t)
 			server, g, scopes := tokenGate(t, d)
+			gates[t.Name()] = g
 
 			jane, janeReader := execStream(t, server, "exec-jane", asJane)
 			blog, blogReader := execStream(t, server, "exec-blog", asBlog)
@@ -204,7 +225,7 @@ func TestARequestDecidedBeforeAReloadIsCheckedAgain(t *testing.T) {
 	revoke(t, g)
 
 	req, _ := http.NewRequest("GET", "http://docker/v1.56/containers/jane-php-1/logs", nil)
-	forward, answered := g.streams.track(g.scopes, nil, allowed, req)
+	forward, answered := g.streams.track(g.scopes, nil, allowed, allowed.TokenSHA256, req)
 
 	if forward.Context().Err() == nil {
 		t.Error("a request of a removed scope goes on")
@@ -214,7 +235,7 @@ func TestARequestDecidedBeforeAReloadIsCheckedAgain(t *testing.T) {
 
 	// One that's current isn't ended, and once answered it's no longer tracked
 	blog, _ := g.scopes.Authenticate("blog", blogToken)
-	forward, done := g.streams.track(g.scopes, nil, blog, req)
+	forward, done := g.streams.track(g.scopes, nil, blog, blog.TokenSHA256, req)
 
 	if forward.Context().Err() != nil {
 		t.Error("blog's request was ended")

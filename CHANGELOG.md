@@ -4,6 +4,15 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ## [Unreleased]
 
+### Added
+
+- **Several tokens per scope, with expiry.** A scope file's `tokens: [{"sha256": …, "expires": …}]`, besides `token_sha256`: at most 8 in all, no digest twice. Each is the scope until its `expires`; past it, it's refused like a wrong one, and what it had open ends at the next read, as when a token is removed. A token is compared with 8 digests whatever the scope has, so its time says neither which matched nor how many there are. `yorvogate check`, and a running gate's log, name expired tokens and those expiring within 7 days. See [rotating a token](docs/configuration.md#rotating-a-token).
+- **Peer users on a unix address.** A scope file's `peer_uids` binds its token to the users whose connections may use it (`SO_PEERCRED`, read once per connection); a request from another is refused naming its user, and a stream ends when its user is no longer listed. A listener's `require_peer_uids: true` makes every scope list them. Refused where a folder is served by TCP or scope sockets. See [peer users](docs/configuration.md#peer-users).
+
+### Changed
+
+- **A trusted mTLS listener answers an expired client certificate with 401 only**, whatever the request asks for, before reading its path.
+
 ## [0.3.0-rc.2] - 2026-11-11
 
 A second release candidate of 0.3.0: rc.1 with TLS and mTLS listeners, built with Go 1.27.4. Use it instead of rc.1: rc.1's Go has a flaw by which a client can crash the gate's HTTP server (GO-2026-6859). It isn't for production: 0.3.0 still adds several tokens per scope with expiry, peer credentials on unix listeners, a tool for new Docker API versions, CodeQL with a parser-differential suite, and agent escape scenarios in CI. A TCP listener off loopback now needs mTLS: check your configuration with `yorvogate check --docker` before you try it.

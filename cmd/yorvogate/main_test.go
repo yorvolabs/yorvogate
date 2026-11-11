@@ -547,3 +547,24 @@ func TestCheckReadsTLS(t *testing.T) {
 		t.Errorf("plaintext over TLS, scoped: %d %s %s", code, out, errs)
 	}
 }
+
+// check names a scope's expired tokens (kept, and refused) and those expiring within 7 days, on a
+// token listener; a scope socket listener's scopes have no tokens to warn about.
+func TestCheckNamesExpiringTokens(t *testing.T) {
+	dir := t.TempDir()
+	scopes := filepath.Join(dir, "scopes")
+	_ = os.Mkdir(scopes, 0o700)
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n  - {name: own, scope_sockets: "+filepath.Join(dir, "sockets")+", mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+	at := func(d time.Duration) string { return time.Now().Add(d).UTC().Format(time.RFC3339) }
+	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"tokens": [{"sha256": "`+strings.Repeat("a", 64)+`", "expires": "`+at(-time.Hour)+`"}, {"sha256": "`+strings.Repeat("b", 64)+`", "expires": "`+at(3*24*time.Hour)+`"}, {"sha256": "`+strings.Repeat("c", 64)+`", "expires": "`+at(30*24*time.Hour)+`"}, {"sha256": "`+strings.Repeat("d", 64)+`"}], "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
+
+	var out, errs bytes.Buffer
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 ||
+		!strings.Contains(out.String(), "  warning: scope jane: tokens expired, and refused ("+strings.Repeat("a", 12)+"): remove them from its file\n") ||
+		!strings.Contains(out.String(), "  warning: scope jane: tokens expiring within 7 days ("+strings.Repeat("b", 12)+"): give its client another\n") ||
+		strings.Contains(out.String(), strings.Repeat("c", 12)) || strings.Contains(out.String(), strings.Repeat("d", 12)) ||
+		strings.Count(out.String(), "tokens expired") != 1 {
+		t.Fatalf("%d %q %q", code, out.String(), errs.String())
+	}
+}

@@ -18,14 +18,69 @@ import (
 	"github.com/yorvolabs/yorvogate/internal/config"
 )
 
-// NewServer serves a listener's requests, with the limits every listener has.
+// NewServer serves a listener's requests, with the limits every listener has. A unix connection's
+// peer user is read once, as it's accepted, for its requests to be decided on.
 func NewServer(h http.Handler) *http.Server {
 	return &http.Server{
 		Handler:           h,
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    64 << 10,
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			if uid, ok := peerUID(c); ok {
+				return context.WithValue(ctx, peerKey{}, uid)
+			}
+
+			return ctx
+		},
 	}
+}
+
+// peerKey carries, in the context of a request that came over a unix connection, its peer's user ID.
+type peerKey struct{}
+
+// peerOf is the user ID of the peer of a request's connection, when it came over a unix socket.
+func peerOf(ctx context.Context) (uint32, bool) {
+	uid, ok := ctx.Value(peerKey{}).(uint32)
+
+	return uid, ok
+}
+
+// peerUID is a unix connection's peer user, as the kernel recorded it when the peer called
+// connect() (SO_PEERCRED).
+func peerUID(c net.Conn) (uint32, bool) {
+	// Through every wrapper (a limit, the tracking of a scope's socket), however many
+	for {
+		w, ok := c.(interface{ wrapped() net.Conn })
+		if !ok {
+			break
+		}
+
+		c = w.wrapped()
+	}
+
+	unix, ok := c.(*net.UnixConn)
+	if !ok {
+		return 0, false
+	}
+
+	raw, err := unix.SyscallConn()
+	if err != nil {
+		return 0, false
+	}
+
+	var (
+		cred   *syscall.Ucred
+		credOK error
+	)
+
+	if err := raw.Control(func(fd uintptr) {
+		cred, credOK = syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+	}); err != nil || credOK != nil {
+		return 0, false
+	}
+
+	return cred.Uid, true
 }
 
 // bodyReadTimeout bounds how long YorvoGate waits for a non-stream request body (a small JSON value
@@ -67,6 +122,8 @@ type limitConn struct {
 	release func()
 	once    sync.Once
 }
+
+func (c *limitConn) wrapped() net.Conn { return c.Conn }
 
 func (c *limitConn) Close() error {
 	err := c.Conn.Close()
@@ -373,6 +430,8 @@ type trackedConn struct {
 	listener *tracked
 	once     sync.Once
 }
+
+func (c *trackedConn) wrapped() net.Conn { return c.Conn }
 
 func (c *trackedConn) Close() error {
 	err := c.Conn.Close()

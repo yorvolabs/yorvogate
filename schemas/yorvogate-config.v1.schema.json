@@ -59,7 +59,8 @@
           }
         },
         "plaintext": {"const": "i-understand"},
-        "clients": {"type": "array", "items": {"$ref": "#/$defs/pin"}}
+        "clients": {"type": "array", "items": {"$ref": "#/$defs/pin"}},
+        "require_peer_uids": {"type": "boolean"}
       },
       "oneOf": [
         {"required": ["address"], "not": {"required": ["scope_sockets"]}},
@@ -68,7 +69,7 @@
       "if": {"properties": {"mode": {"const": "trusted"}}},
       "then": {
         "required": ["allow"],
-        "not": {"anyOf": [{"required": ["scopes"]}, {"required": ["containers"]}, {"required": ["builder_apparmor_profiles"]}, {"required": ["allow_privileged_builders"]}, {"required": ["pulls"]}]}
+        "not": {"anyOf": [{"required": ["scopes"]}, {"required": ["containers"]}, {"required": ["builder_apparmor_profiles"]}, {"required": ["allow_privileged_builders"]}, {"required": ["pulls"]}, {"required": ["require_peer_uids"]}]}
       },
       "else": {"required": ["scopes"], "not": {"anyOf": [{"required": ["allow"]}, {"required": ["clients"]}]}}
     },
