@@ -61,7 +61,7 @@ cleanup() {
 		direct network ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker network rm >/dev/null 2>&1
 		direct volume ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker volume rm >/dev/null 2>&1
 	done
-	direct rmi ygc-jane/app:1 ygc-blog/app:1 ygc-blog/only:1 ygc-jane/hello:1 hello-world:linux >/dev/null 2>&1
+	direct rmi ygc-jane/app:1 ygc-blog/app:1 ygc-blog/only:1 ygc-jane/hello:1 ygc-jane/built:1 ygc-jane/attested:1 hello-world:linux >/dev/null 2>&1
 	direct rm -f ygc-builder-privileged ygc-builder-rootless ygc-builder-nnp >/dev/null 2>&1
 	[ -n "${gate:-}" ] && kill "$gate" 2>/dev/null
 }
