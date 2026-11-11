@@ -96,6 +96,19 @@ func TestAgainstARealDocker(t *testing.T) {
 		t.Errorf("an attack left something behind: %v", left)
 	}
 
+	// What the gate leaves free because Docker refuses it (internal/gate/fields.go, IPAMConfig): an
+	// address outside the network's subnet. A Docker that stopped refusing it would make it the
+	// gate's to check.
+	for field, value := range map[string]string{"Gateway": `"10.98.0.1"`, "IPRange": `"10.98.0.0/28"`, "AuxiliaryAddresses": `{"x":"10.98.0.5"}`} {
+		body := `{"Name":"jane_new","Labels":{"com.docker.compose.project":"jane","` + worldLabel + `":"1"},"IPAM":{"Config":[{"Subnet":"10.99.0.0/24","` + field + `":` + value + `}]}}`
+
+		status, message := sendTo(front, w.real(asJane("POST", "/v1.56/networks/create", "application/json", []byte(body))), 3*time.Second)
+		if strings.HasPrefix(message, "yorvogate: ") || status/100 != 4 || !strings.Contains(message, "parent subnet 10.99.0.0/24 doesn't contain") {
+			t.Errorf("IPAM %s outside the subnet: %d %s; want the gate to forward it, and Docker to refuse it (its parent subnet doesn't contain it)", field, status, message)
+			w.restore()
+		}
+	}
+
 	if n := f.count.Load(); n != 0 {
 		t.Errorf("the real Docker fetched an import %d times", n)
 	}

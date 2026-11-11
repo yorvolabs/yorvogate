@@ -269,7 +269,7 @@ var (
 
 	ipamConfig = decided("IPAMConfig", reflect.TypeFor[network.IPAMConfig](),
 		checkedBy("createNetwork (inside the scope's subnets)", "Subnet"),
-		freeAs("addresses within the subnet, which is checked: Docker refuses one outside it (\"no matching subnet\")", "IPRange", "Gateway", "AuxAddress"))
+		freeAs("addresses within the subnet, which is checked: Docker refuses one outside it (\"parent subnet … doesn't contain\"; the nightly leg checks it)", "IPRange", "Gateway", "AuxAddress"))
 
 	ipam = decided("IPAM", reflect.TypeFor[network.IPAM](),
 		checkedBy("createNetwork (the default driver)", "Driver"),
@@ -326,6 +326,9 @@ func unset(v any, c *classification) []string {
 	return unsetIn(reflect.ValueOf(v), c, "")
 }
 
+// applying, set by a test, is told of each classification unset applies to a body's struct.
+var applying func(*classification)
+
 func unsetIn(value reflect.Value, c *classification, prefix string) []string {
 	for value.Kind() == reflect.Pointer {
 		if value.IsNil() {
@@ -333,6 +336,10 @@ func unsetIn(value reflect.Value, c *classification, prefix string) []string {
 		}
 
 		value = value.Elem()
+	}
+
+	if applying != nil {
+		applying(c)
 	}
 
 	var set []string

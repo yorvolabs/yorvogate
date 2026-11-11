@@ -95,7 +95,7 @@ func TestAScopesPeerUsers(t *testing.T) {
 	}{
 		{"none listed", "", 200, ""},
 		{"its user listed", fmt.Sprint(me), 200, ""},
-		{"among others", fmt.Sprintf("0, %d, 4242", me), 200, ""},
+		{"among others", fmt.Sprintf("%d, %d, %d", me+1, me, me+2), 200, ""},
 		{"another user", fmt.Sprint(me + 4242), http.StatusForbidden, fmt.Sprintf("this connection's user (UID %d) isn't one of scope jane's peer_uids", me)},
 	} {
 		t.Run(c.name, func(t *testing.T) {

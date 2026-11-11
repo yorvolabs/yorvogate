@@ -271,9 +271,9 @@ network.create EnableIPv4 *bool [network.CreateRequest] free: which addresses th
 network.create EnableIPv6 *bool [network.CreateRequest] free: which addresses the scope's own bridge has
 network.create IPAM *network.IPAM [network.CreateRequest] checked: createNetwork
 network.create IPAM.Config []network.IPAMConfig [IPAM] checked: createNetwork
-network.create IPAM.Config[].AuxiliaryAddresses map[string]netip.Addr [IPAMConfig] free: addresses within the subnet, which is checked: Docker refuses one outside it ("no matching subnet")
-network.create IPAM.Config[].Gateway netip.Addr [IPAMConfig] free: addresses within the subnet, which is checked: Docker refuses one outside it ("no matching subnet")
-network.create IPAM.Config[].IPRange netip.Prefix [IPAMConfig] free: addresses within the subnet, which is checked: Docker refuses one outside it ("no matching subnet")
+network.create IPAM.Config[].AuxiliaryAddresses map[string]netip.Addr [IPAMConfig] free: addresses within the subnet, which is checked: Docker refuses one outside it ("parent subnet … doesn't contain"; the nightly leg checks it)
+network.create IPAM.Config[].Gateway netip.Addr [IPAMConfig] free: addresses within the subnet, which is checked: Docker refuses one outside it ("parent subnet … doesn't contain"; the nightly leg checks it)
+network.create IPAM.Config[].IPRange netip.Prefix [IPAMConfig] free: addresses within the subnet, which is checked: Docker refuses one outside it ("parent subnet … doesn't contain"; the nightly leg checks it)
 network.create IPAM.Config[].Subnet netip.Prefix [IPAMConfig] checked: createNetwork (inside the scope's subnets)
 network.create IPAM.Driver string [IPAM] checked: createNetwork (the default driver)
 network.create IPAM.Options map[string]string [IPAM] refused: an IPAM driver's options
