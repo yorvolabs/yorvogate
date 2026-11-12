@@ -13,6 +13,8 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 - **A tool for each new Docker API version.** `go run ./tools/apidiff <old> <new>` lists what changed between two versions of Docker's API (endpoints, parameters, headers, request-body fields) and YorvoGate's decision on each, failing while any is undecided. Every field of every request body the gate reads now has a recorded decision (free, checked by a named rule, or refused, with its reason), and a test fails when Docker adds one without a decision, when a field changes type, or when a field marked checked has no request that shows it refused. See [CONTRIBUTING](CONTRIBUTING.md#a-new-docker-api-version).
 
+- **Agent escape scenarios in CI.** The seven gate-relevant scenarios of SandboxEscapeBench (UK AI Security Institute, the Docker socket, privileged containers, host mounts and dangerous capabilities) are mapped to every Docker API route a scope has to each, and every route is refused — a test fails when a route goes untested. Nightly, a control on a real Docker shows each escape reaching the host through a raw socket and the gate refusing the request that enables it, and the same scenarios are refused end to end through a real scope socket. See [docs/agents.md](docs/agents.md#what-it-refuses) and [test/differential](test/differential/README.md#agent-escape-scenarios-03-g).
+
 ### Changed
 
 - **A trusted mTLS listener answers an expired client certificate with 401 only**, whatever the request asks for, before reading its path.

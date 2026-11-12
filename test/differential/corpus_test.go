@@ -144,6 +144,7 @@ var attacks = []attack{
 		return asJane("PUT", "/v1.56/containers/blog-php-1/archive?path=/tmp", "application/x-tar", tarOf(t, map[string]string{"x": "y"}))
 	}},
 	{"exec.create", "in another scope's", postJSON("/v1.56/containers/blog-php-1/exec", `{"Cmd":["true"]}`)},
+	{"exec.create", "privileged", postJSON("/v1.56/containers/jane-php-1/exec", `{"Cmd":["true"],"Privileged":true}`)},
 	{"exec.start", "another scope's", postJSON("/v1.56/exec/exec-blog/start", `{"Detach":true}`)},
 	{"exec.resize", "another scope's", post("/v1.56/exec/exec-blog/resize?h=24&w=80")},
 	{"image.create", "into another scope's namespace", post("/v1.56/images/create?fromImage=quire-sites/blog/app&tag=1")},
@@ -195,6 +196,12 @@ var attacks = []attack{
 	{"container.create", "a ulimit not allowed", janeHost(`"Ulimits":[{"Name":"nofile","Soft":1048576,"Hard":1048576}]`)},
 	{"container.create", "a volume driver", janeHost(`"VolumeDriver":"nfs"`)},
 	{"container.create", "another scope's volumes", janeHost(`"VolumesFrom":["blog-php-1"]`)},
+	{"container.create", "every capability added", janeHost(`"CapAdd":["ALL"]`)},
+	{"container.create", "the SYS_MODULE capability", janeHost(`"CapAdd":["SYS_MODULE"]`)},
+	{"container.create", "the DAC_READ_SEARCH capability", janeHost(`"CapAdd":["DAC_READ_SEARCH"]`)},
+	{"container.create", "the SYS_PTRACE capability", janeHost(`"CapAdd":["SYS_PTRACE"]`)},
+	{"container.create", "the host's devices", janeHost(`"Devices":[{"PathOnHost":"/dev/sda1","PathInContainer":"/dev/sda1","CgroupPermissions":"rwm"}]`)},
+	{"container.create", "seccomp unconfined", postJSON("/v1.56/containers/create?name=jane-x", `{"Image":"alpine:3.22",`+own+`,"HostConfig":{"NetworkMode":"jane_default","CapDrop":["ALL"],"SecurityOpt":["no-new-privileges","seccomp=unconfined"]}}`)},
 	{"container.update", "the OOM killer disabled", postJSON("/v1.56/containers/jane-php-1/update", `{"OomKillDisable":true}`)},
 	{"container.update", "a ulimit not allowed", postJSON("/v1.56/containers/jane-php-1/update", `{"Ulimits":[{"Name":"nofile","Soft":1048576,"Hard":1048576}]}`)},
 	{"network.connect", "an endpoint's legacy links", postJSON("/v1.56/networks/jane_default/connect", `{"Container":"jane-php-1","EndpointConfig":{"Links":["blog-php-1:db"]}}`)},
@@ -203,6 +210,7 @@ var attacks = []attack{
 	{"network.create", "another scope's label", postJSON("/v1.56/networks/create", `{"Name":"jane_new","Labels":{"com.docker.compose.project":"blog"}}`)},
 	{"network.create", "an IPAM plugin", postJSON("/v1.56/networks/create", `{"Name":"jane_new",`+own+`,"IPAM":{"Driver":"weave"}}`)},
 	{"volume.create", "a driver not allowed", postJSON("/v1.56/volumes/create", `{"Name":"jane_new","Driver":"nfs",`+own+`}`)},
+	{"volume.create", "a local driver binding a host path", postJSON("/v1.56/volumes/create", `{"Name":"jane_new","Driver":"local","DriverOpts":{"type":"none","o":"bind","device":"/"},`+own+`}`)},
 	{"volume.create", "another scope's label", postJSON("/v1.56/volumes/create", `{"Name":"jane_new","Labels":{"com.docker.compose.project":"blog"}}`)},
 }
 
