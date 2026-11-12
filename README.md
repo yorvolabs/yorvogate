@@ -2,7 +2,7 @@
 
 Access to the Docker API is root on the machine: whoever can create a container can create one that mounts `/`, runs privileged, or joins the host's namespaces. Proxies that filter by path (allow "containers", deny "swarm") don't change that, since every escape is in the body of a request they allow. YorvoGate reads every request, its body included, the way Docker reads it, forwards the very value it checked, and lets through only what its policy allows, **per client**: a client can be limited to its own containers, volumes, networks and images, created only in ways that can't reach the host. Other proxies read bodies and keep owners apart too; [how YorvoGate compares](docs/comparison.md) names them, and what YorvoGate does differently.
 
-> **Status:** 0.2.2 ([changelog](CHANGELOG.md)); 0.3.0-rc.2 is a release candidate for trying 0.3, not for production. 0.2.0 fixed security flaws in 0.1.0: update from 0.1.0, [migrating](docs/configuration.md#migrating-from-010) a scope file's `containers` to `builders`. 0.2.1 lets Compose recreate a scope's containers. 0.2.2 is security hardening from an audit, and fixes rootless builders on CIS-hardened daemons; check your config with `yorvogate check` (two scoped listeners on one Docker may no longer share an owner label, prefix, image namespace or builder). What it does: trusted listeners (endpoint allowlists), and scoped listeners with authenticated scopes (by token, or each on a socket of its own) and their rules for containers, exec, networks, volumes, images (image archives' names checked before they're loaded) and rootless BuildKit builders; real Docker Compose runs through it, builds included. Tested by fuzzing, mutation testing and a conformance suite against a real Docker in CI.
+> **Status:** 0.3.0 ([changelog](CHANGELOG.md)). 0.3.0 fixes security flaws in 0.2.2, and several of its changes are breaking: run its `yorvogate check --docker` on your configuration before you update from 0.2.x. 0.2.0 fixed security flaws in 0.1.0: from 0.1.0, [migrate](docs/configuration.md#migrating-from-010) a scope file's `containers` to `builders` first. What it does: trusted listeners (endpoint allowlists, over a unix socket, TLS or mTLS), and scoped listeners with authenticated scopes (by token, client certificate, or each on a socket of its own, optionally bound to a peer user) and their rules for containers, exec, networks and egress, volumes, images (image archives' names and content checked before they're loaded), pulls (registries and platforms) and rootless BuildKit builders; real Docker Compose runs through it, builds included. Tested by fuzzing, mutation testing, a parser-differential suite against Docker's own API code, CodeQL, agent escape scenarios, and a conformance suite against a real Docker in CI, on both image stores and a CIS-hardened daemon.
 
 ## How it works
 
@@ -25,7 +25,7 @@ The image, `ghcr.io/yorvolabs/yorvogate`, for x86_64 and arm64: the static binar
 ```yaml
 services:
   yorvogate:
-    image: ghcr.io/yorvolabs/yorvogate:0.2.2   # better: by its digest, from the release notes
+    image: ghcr.io/yorvolabs/yorvogate:0.3.0   # better: by its digest, from the release notes
     group_add: ["${DOCKER_GID}", "2000", "2001"]  # Docker's socket's group (stat -c %g /var/run/docker.sock), and its sockets' groups
     read_only: true
     cap_drop: [ALL]
@@ -48,7 +48,7 @@ Or a binary from the [releases](https://github.com/yorvolabs/yorvogate/releases)
 **Check what you install.** Each release is signed by this repository's release workflow, for its own tag (Sigstore, keyless). Check the signature names the version you install: a signature of another release (an older one, with its known flaws) doesn't check out.
 
 ```bash
-version=0.2.2
+version=0.3.0
 cosign verify ghcr.io/yorvolabs/yorvogate:$version \
   --certificate-identity "https://github.com/yorvolabs/yorvogate/.github/workflows/release.yaml@refs/tags/v$version" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
