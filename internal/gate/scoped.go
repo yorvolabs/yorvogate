@@ -173,9 +173,9 @@ func (s *scoped) pinImage() error {
 // saveImage, saveMany: by the names asked, not the ID, which would leave the archive without them
 // (Docker names what it saves by what it was asked). A name may move between the check and the
 // save. A scope can't move one through image.tag (it tags only from what it may read, and only into
-// its own namespaces). Whether image.load or a pull can give a name to content the scope doesn't
-// hold is open until the archive completeness check and 0.3-d's registry allowlist ship: see the
-// roadmap (0.3-o, 0.3-w).
+// its own namespaces). image.load can't give a name to content the scope doesn't hold (an archive
+// must hold every blob it refers to), nor can a pull from a registry the listener doesn't list; a
+// listed registry is trusted with every scope's images (docs/threat-model.md).
 func (s *scoped) saveImage() error {
 	_, err := s.readsImage(s.req.Params["name"])
 

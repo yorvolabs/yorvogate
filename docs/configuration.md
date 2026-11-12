@@ -196,9 +196,9 @@ Another scope's objects are answered as Docker answers objects that don't exist,
 | images: pull | `fromSrc`, `repo`, `message`, `changes` | An import's |
 | images: list | `filter` | The filter of API versions before 1.25 |
 
-A pull's `platform` isn't checked yet: until 0.3-d, a scope may pull another platform of a shared name.
+A pull's `platform` is checked: the host's, or one in [`pulls.platforms`](#pulls-scoped-listeners).
 
-**Headers: an allow-list, and an unlisted one isn't forwarded.** Docker gets only the headers it reads that YorvoGate lists, copied from the request: `User-Agent`, `Accept`, `Accept-Encoding`, `traceparent`, `tracestate` and `baggage` everywhere, `X-Registry-Auth` on a pull and a distribution inspect only, `Upgrade` and `Connection` on attach and exec start only. Any other header (a proxy's `Via` or `X-Forwarded-For`, a client's `X-Request-Id`) is left out, without refusing the request, and named in the decision's log line (`headers_not_forwarded`); the first time each name is seen on a listener, it's also a warning. A listed header given twice, under any spelling of its name, or longer than its limit is refused. `Content-Type` is YorvoGate's own, from what it forwards. A trusted listener forwards the client's headers as they come, YorvoGate's own aside.
+**Headers: an allow-list, and an unlisted one isn't forwarded.** Docker gets only the headers it reads that YorvoGate lists, copied from the request: `User-Agent`, `Accept`, `Accept-Encoding`, `traceparent`, `tracestate` and `baggage` everywhere, `X-Registry-Auth` on a pull and a distribution inspect only, `Upgrade` and `Connection` on attach and exec start only, and a WebSocket's handshake (`Sec-WebSocket-Key`, `Sec-WebSocket-Version`, `Sec-WebSocket-Protocol`) on `container.attach-websocket` only. Any other header (a proxy's `Via` or `X-Forwarded-For`, a client's `X-Request-Id`) is left out, without refusing the request, and named in the decision's log line (`headers_not_forwarded`); the first time each name is seen on a listener, it's also a warning. A listed header given twice, under any spelling of its name, or longer than its limit is refused. `Content-Type` is YorvoGate's own, from what it forwards. A trusted listener forwards the client's headers as they come, YorvoGate's own aside.
 
 ## Endpoint groups (trusted listeners)
 

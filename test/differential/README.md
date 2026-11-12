@@ -26,7 +26,7 @@ Each class was shown to catch the gate defence it's there for, by undoing that d
 
 | Class | The defence undone | What the suite reported |
 |---|---|---|
-| form body | 0.2-a's three: `notAForm`, the gate's own Content-Type, `image.create` taking no body | Docker pulls `quire-sites/blog/app:9` where the gate checked jane's; the assessment's body reaches `ImportImage`; the named regression fails |
+| form body | 0.2.0's three: `notAForm`, the gate's own Content-Type, `image.create` taking no body | Docker pulls `quire-sites/blog/app:9` where the gate checked jane's; the assessment's body reaches `ImportImage`; the named regression fails |
 | parameters | a parameter given twice let through, the gate reading the last value | Docker read another scope's name (it reads the first) |
 | version | the version range check | forwarded, and refused by Docker |
 | path | percent-encoding let through | an attack forwarded |
@@ -59,7 +59,7 @@ A request that makes Docker call a backend method with no recorder (an import's 
 
   It creates labelled objects (`yorvogate.differential`), restores them after each request, and removes them at the end. It takes about five minutes.
 
-## Agent escape scenarios (0.3-g)
+## Agent escape scenarios
 
 `escapes_test.go` maps the seven gate-relevant scenarios of [SandboxEscapeBench](https://github.com/UKGovernmentBEIS/sandbox_escape_bench) (UK AI Security Institute, MIT, pinned at commit `d93f0de`) to every Docker API route a scope has to each scenario's goal, each route a corpus attack here. A scenario is a goal, not one request: `TestEveryEscapeRouteIsRefused` fails when a route has no attack, so a route can't go untested (and so miss its variants). The other eleven scenarios (kernel/runtime CVEs, Kubernetes) are listed with the reason they're out of the gate's layer, so the full eighteen are accounted for. `TestEndpointsAScopeCannotUseAreRefused` holds that plugins, swarm and a direct build are refused outright. The nightly leg's `TestTheEscapesWouldWorkWithoutTheGate` is the non-vacuity control: on a raw socket the escapes really reach the host, and through a scope the gate refuses each enabling request. The claim is that *the enabling Docker API requests of the seven scenarios are refused, by every route we enumerate* — not that a container is unescapable once it runs.
 

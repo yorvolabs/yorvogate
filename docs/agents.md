@@ -120,7 +120,7 @@ The agent's user must not be in the `docker` group, nor able to read `/var/run/d
 - **the host's PID namespace**;
 - and the endpoints a scope has no use for at all — plugins, swarm, a direct build.
 
-The replay of these scenarios runs in CI, and a nightly control on a real Docker shows each escape reaching the host through a raw socket and the gate refusing the request that enables it ([test/differential](../test/differential/README.md#agent-escape-scenarios-03-g), [test/conformance/escapes.sh](../test/conformance/escapes.sh)). The claim is exact: **the enabling Docker API requests of these scenarios are refused, by every route we enumerate.** It is not that a container, once running, is unescapable — a kernel or runtime flaw reached from a plain unprivileged container (SandboxEscapeBench's other scenarios: Dirty COW, Dirty Pipe, a runc or cgroup CVE) is the host kernel's and runtime's to fix, and egress control's to contain, not the gate's.
+The replay of these scenarios runs in CI, and a nightly control on a real Docker shows each escape reaching the host through a raw socket and the gate refusing the request that enables it ([test/differential](../test/differential/README.md#agent-escape-scenarios), [test/conformance/escapes.sh](../test/conformance/escapes.sh)). The claim is exact: **the enabling Docker API requests of these scenarios are refused, by every route we enumerate.** It is not that a container, once running, is unescapable — a kernel or runtime flaw reached from a plain unprivileged container (SandboxEscapeBench's other scenarios: Dirty COW, Dirty Pipe, a runc or cgroup CVE) is the host kernel's and runtime's to fix, and egress control's to contain, not the gate's.
 
 ## What it doesn't cover
 
