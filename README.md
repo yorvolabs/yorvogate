@@ -10,11 +10,11 @@ Access to the Docker API is root on the machine: whoever can create a container 
 orchestrator ─── trusted listener ───┐
                                      ├── YorvoGate ── Docker's socket
 a scope's client ─ scoped listener ──┘
-  (X-YorvoGate-Scope, X-YorvoGate-Token)
+  (a token, its own socket, or a client certificate)
 ```
 
 - **Trusted listeners** allow groups of endpoints, each for reading or writing, like a path filter. They're for a client that's trusted anyway (an orchestrator's own operations).
-- **Scoped listeners** act for one scope per request. Each request names its scope and proves it with the scope's token (`X-YorvoGate-Scope`, `X-YorvoGate-Token`: the Docker CLI and Compose send them from `config.json`'s `HttpHeaders`), or each scope has a unix socket of its own and needs neither (that's how to [give an AI agent Docker](docs/agents.md) without giving it the host). A scope owns what carries its owner label; what it creates must carry that label and start with its name prefixes, and every body is checked against the listener's rules.
+- **Scoped listeners** act for one scope per request. Each request names its scope and proves it with one of the scope's tokens (`X-YorvoGate-Scope`, `X-YorvoGate-Token`: the Docker CLI and Compose send them from `config.json`'s `HttpHeaders`), on a unix address optionally only from the users the scope lists ([peer users](docs/configuration.md#peer-users)); or each scope has a unix socket of its own and needs neither (that's how to [give an AI agent Docker](docs/agents.md) without giving it the host); or, on an mTLS listener, its client certificate is the scope ([TLS and client certificates](docs/configuration.md#tls-and-client-certificates)). Off loopback, a TCP listener needs mTLS. A scope owns what carries its owner label; what it creates must carry that label and start with its name prefixes, and every body is checked against the listener's rules.
 - **Read the way Docker reads it.** Bodies are decoded into the Docker Engine's own API types, with unknown fields refused, then re-encoded: what was checked is exactly what Docker gets, whatever the keys' case or duplicates. A scope's parameters are the query that was checked, and only those listed for the endpoint: any other is refused. Form bodies, which Docker would read over the query, are refused too, and Docker gets only the headers YorvoGate lists, with YorvoGate's `Content-Type`, never the client's. Paths must be canonical and carry an API version YorvoGate knows (1.44 to 1.56); an endpoint it doesn't know is refused, so a newer Docker's new endpoints stay closed until they're reviewed.
 - **Fail-closed and said:** every refusal is a Docker-style error (`{"message": "yorvogate: …"}`) that clients show, and every decision is logged as JSON.
 
@@ -101,7 +101,7 @@ listeners:
     scopes: /etc/yorvogate/scopes
 ```
 
-Each listener's socket is its group's only: the orchestrator's (2000) and the tenants' clients' (2001). A trusted listener with `write` is full control of Docker, so keep it on a unix socket, never a network address.
+Each listener's socket is its group's only: the orchestrator's (2000) and the tenants' clients' (2001). A trusted listener with `write` is full control of Docker, so keep it on a unix socket; on a network address it needs mTLS, and even then its clients are root-equivalent.
 
 A scope is a file in the scoped listener's folder, written by your orchestrator (`/etc/yorvogate/scopes/jane.json`):
 
@@ -114,7 +114,7 @@ A scope is a file in the scoped listener's folder, written by your orchestrator 
 }
 ```
 
-Scope files are read again when they change: adding or removing a scope needs no restart. [docs/configuration.md](docs/configuration.md) has every setting; [docs/threat-model.md](docs/threat-model.md) what YorvoGate holds and what it doesn't.
+Scope files are read again every 2 seconds and on `SIGHUP`: adding or removing a scope needs no restart, and an orchestrator can wait for its write to be in effect with [scope status](docs/configuration.md#scope-status) instead of sleeping. [docs/configuration.md](docs/configuration.md) has every setting; [docs/threat-model.md](docs/threat-model.md) what YorvoGate holds and what it doesn't.
 
 ```bash
 yorvogate check --config /etc/yorvogate/yorvogate.yaml   # the configuration and every scope file
@@ -127,7 +127,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Everything runs in Docker:
 
 ```bash
 export HOST_UID=$(id -u) HOST_GID=$(id -g)
-docker compose -f compose.dev.yaml run --rm go make check   # format, vet, staticcheck, tests (race), govulncheck
+docker compose -f compose.dev.yaml run --rm go make check   # format, vet, staticcheck, tests (race), govulncheck, the differential suite
 docker compose -f compose.dev.yaml run --rm go make build && test/conformance/run.sh   # against a real Docker
 ```
 
