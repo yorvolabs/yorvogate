@@ -12,6 +12,8 @@ services:
       - mkdir -p /cache/build /cache/mod && if [ "$$(stat -c %u:%g /cache)" != "${HOST_UID:-1000}:${HOST_GID:-1000}" ]; then chown -R "${HOST_UID:-1000}:${HOST_GID:-1000}" /cache; fi
     volumes:
       - cache:/cache
+    labels:
+      org.yorvolabs.project: yorvogate
 
   go:
     image: golang:1.27.4-trixie@sha256:b54b2639de8c1bfe538ec5ffc45f29b1932235ac5f6d63c059853646677112d9
@@ -28,6 +30,15 @@ services:
     volumes:
       - .:/src
       - cache:/cache
+    labels:
+      org.yorvolabs.project: yorvogate
 
 volumes:
   cache:
+    labels:
+      org.yorvolabs.project: yorvogate
+
+networks:
+  default:
+    labels:
+      org.yorvolabs.project: yorvogate
