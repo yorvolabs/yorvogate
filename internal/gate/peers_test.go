@@ -36,7 +36,7 @@ func unixGate(t *testing.T, d *docker, uids string) (string, *Gate, string) {
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	g := New(c, c.Listeners[0], NewUpstream(c, log), registry, readDefaults(c), log)
+	g := New(c, c.Listeners[0], NewUpstream(c, log), registry, readDefaults(c), NewSpool(c), log)
 
 	raw, err := Listen(socket, -1)
 	if err != nil {

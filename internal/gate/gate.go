@@ -85,13 +85,14 @@ func Registry(c *config.Config) *scope.Registry {
 	return scope.NewRegistry(folders, c.StateFile)
 }
 
-// New makes the handler of a listener; a scoped one's scopes are the registry's.
-func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.Registry, defaults *Defaults, log *slog.Logger) *Gate {
+// New makes the handler of a listener; a scoped one's scopes are the registry's, and its image loads
+// the process's spool.
+func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.Registry, defaults *Defaults, spool *Spool, log *slog.Logger) *Gate {
 	g := &Gate{config: c, listener: l, upstream: upstream, registry: scopes, defaults: defaults, log: log.With("listener", l.Name)}
 	if l.Mode == config.Scoped {
 		g.scopes = scopes.Store(l.Name)
 		g.docker = NewDocker(c.UpstreamSocket())
-		g.spool = spoolOf(c)
+		g.spool = spool
 	}
 
 	return g

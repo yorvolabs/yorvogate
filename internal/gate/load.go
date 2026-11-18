@@ -102,15 +102,25 @@ func (l *loadLimiter) loading() int {
 // bytes on disk (spool.limit, reserved as they come), what the archive decompresses to and how many
 // entries it has (refused as soon as it passes them, before any name is checked), and time (an
 // upload that goes silent, a check that runs long).
-func (s *scoped) load() error {
+func (s *scoped) load() (err error) {
+	// A refused load gives back its file, bytes and turn at once, not after its refusal is answered
+	// (and held, see longestHold): another scope's load may need them now.
+	defer func() {
+		if err != nil && s.cleanup != nil {
+			s.cleanup()
+			s.cleanup = nil
+		}
+	}()
+
 	if s.length > s.loadLimit {
 		return refuse(http.StatusRequestEntityTooLarge, "image.load: the archive is larger than %d bytes", s.loadLimit)
 	}
 
-	held := &reservation{spool: s.spool}
 	if s.length > s.spool.limit {
-		return held.reserve(s.length)
+		return refuse(http.StatusRequestEntityTooLarge, "image.load: the archive is larger than the image spool (spool.limit, %d bytes)", s.spool.limit)
 	}
+
+	held := &reservation{spool: s.spool}
 
 	release, err := s.spool.turn(s.ctx, s.scope.Name)
 	if err != nil {
@@ -231,9 +241,10 @@ func (s *scoped) unpacked(n int64) int64 {
 	return s.spoolConfig.UnpackedLimit(n)
 }
 
-// The most entries an archive may have: a docker save writes about one per blob, and a few more (four
-// per layer on the classic store).
-const maxEntries = 100000
+// The most entries an archive may have, as many as the blobs it may refer to: a docker save writes
+// about one per blob, and a few more (four per layer on the classic store), so an image of 2,500
+// layers still loads.
+const maxEntries = maxDescriptors
 
 // archiveBounds are what reading an archive may cost.
 type archiveBounds struct {

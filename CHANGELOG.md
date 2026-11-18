@@ -6,11 +6,11 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ### Added
 
-- **`spool`: bounds on image loads, every scope's together.** An image archive a scope loads is kept in one folder (`spool.dir`, on disk, by default beside `state_file`), within one budget of bytes reserved as it arrives (`spool.limit`), a few loads at a time (`spool.loads`, each scope one at a time; a load waits at most 30 s for its turn). An archive is refused as soon as it decompresses to more than `spool.ratio` times its size or `spool.unpacked`, or has more than 100,000 entries, before any of its names is checked. An upload that goes silent for 60 s is ended. A load that doesn't fit now is told to retry (503, `Retry-After`); one that never could gets 413. See [the image spool](docs/configuration.md#the-image-spool).
+- **`spool`: bounds on image loads, every scope's together.** An image archive a scope loads is kept in one folder (`spool.dir`, on disk, by default beside `state_file`), within one budget of bytes reserved as it arrives (`spool.limit`), a few loads at a time (`spool.loads`, each scope one at a time; a load waits at most 30 s for its turn). An archive is refused as soon as it decompresses to more than `spool.ratio` times its size or `spool.unpacked`, or has more than 10,000 entries, before any of its names is checked. An upload that goes silent for 60 s is ended. A load that doesn't fit now is told to retry (503, `Retry-After`); one that never could gets 413. See [the image spool](docs/configuration.md#the-image-spool).
 
 ### Changed
 
-- **Image archives are kept in `spool.dir`, not `$TMPDIR`.** `serve` doesn't start, and `check` refuses, when that folder can't be made or written while a scoped listener could load images. A setup that mounted a volume at `/tmp` for loads can drop it, once the state file's folder (or `spool.dir`) is a volume. Don't write `spool:` into a configuration that 0.3 may still read: 0.3 refuses the key.
+- **Breaking: image archives are kept in `spool.dir`, not `$TMPDIR`, and YorvoGate needs that folder to start.** With a scoped listener, `serve` doesn't start, and `check` refuses, when `spool.dir` can't be made or written: by default `spool/` beside `state_file`, or `/var/lib/yorvogate/spool` without one. A container with `read_only: true` and no `state_file` needs a volume at `/var/lib/yorvogate`, or `spool.dir` set to one. A setup that mounted a volume at `/tmp` for loads can drop it once that's in place. Don't write `spool:` into a configuration that 0.3 may still read: 0.3 refuses the key.
 
 ### Fixed
 

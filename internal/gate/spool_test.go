@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -61,7 +62,7 @@ listeners:
 	}
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	server := httptest.NewServer(New(c, c.Listeners[0], NewUpstream(c, log), registry, readDefaults(c), log))
+	server := httptest.NewServer(New(c, c.Listeners[0], NewUpstream(c, log), registry, readDefaults(c), NewSpool(c), log))
 	t.Cleanup(server.Close)
 
 	return server, dir
@@ -233,7 +234,7 @@ func TestLoadEntryBomb(t *testing.T) {
 		status, answer = send(t, server, "POST", "/v1.56/images/load", raw.String(), asJane)
 	})
 
-	if status != http.StatusRequestEntityTooLarge || !strings.Contains(answer, "more than 100000 entries") {
+	if status != http.StatusRequestEntityTooLarge || !strings.Contains(answer, fmt.Sprintf("more than %d entries", maxEntries)) {
 		t.Fatalf("%d entries: %d %s", maxEntries+10, status, answer)
 	}
 
@@ -242,7 +243,7 @@ func TestLoadEntryBomb(t *testing.T) {
 	}
 
 	// About 1.5 KiB per entry read (its tar header, hash and map keys), most of it garbage at once
-	if bytes > 200<<20 && !raceBuild {
+	if bytes > 32<<20 && !raceBuild {
 		t.Errorf("reading %d entries allocated %d MiB", maxEntries, bytes>>20)
 	}
 
@@ -483,7 +484,7 @@ func TestLoadSlowButSteady(t *testing.T) {
 	server, _ := spoolGate(t, d, "")
 
 	old := loadStall
-	loadStall = 200 * time.Millisecond
+	loadStall = 400 * time.Millisecond
 	defer func() { loadStall = old }()
 
 	body := padded(t, 8<<10)
@@ -493,7 +494,7 @@ func TestLoadSlowButSteady(t *testing.T) {
 	go func() {
 		for i := 0; i < len(body); i += len(body) / 8 {
 			_, _ = pw.Write(body[i:min(i+len(body)/8, len(body))])
-			time.Sleep(100 * time.Millisecond) // a slow client, 4 stall timeouts in all
+			time.Sleep(100 * time.Millisecond) // a slow client: 2 stall timeouts in all, a quarter of one at a time
 		}
 		_ = pw.Close()
 	}()

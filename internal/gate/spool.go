@@ -42,19 +42,11 @@ var onSpool = func(string) {}
 // spoolPrefix names an archive's file in the spool, so one left by a crash can be told and removed.
 const spoolPrefix = "yorvogate-load-"
 
-// spools holds the one spool of each configuration: every listener made from a configuration shares
-// it, so its bounds hold across listeners.
-var spools sync.Map
-
-// spoolOf is the configuration's spool.
-func spoolOf(c *config.Config) *Spool {
-	if s, ok := spools.Load(c); ok {
-		return s.(*Spool)
-	}
-
-	s, _ := spools.LoadOrStore(c, &Spool{dir: c.Spool.Dir, limit: c.Spool.Limit, global: make(chan struct{}, c.Spool.Loads), scopes: newLoadLimiter()})
-
-	return s.(*Spool)
+// NewSpool makes a configuration's spool. A process has one, made at its start, which every listener
+// shares, so its bounds hold across listeners (and, once the configuration can be reloaded, across
+// reloads: a reload must update its limits in place, never make another).
+func NewSpool(c *config.Config) *Spool {
+	return &Spool{dir: c.Spool.Dir, limit: c.Spool.Limit, global: make(chan struct{}, c.Spool.Loads), scopes: newLoadLimiter()}
 }
 
 // needsSpool is whether a configuration has a scoped listener, whose scopes may load images.

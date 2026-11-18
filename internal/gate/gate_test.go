@@ -639,7 +639,7 @@ listeners:
 
 	for _, l := range c.Listeners {
 		if l.Name == listener {
-			server := httptest.NewServer(New(c, l, NewUpstream(c, log), registry, defaults, log))
+			server := httptest.NewServer(New(c, l, NewUpstream(c, log), registry, defaults, NewSpool(c), log))
 			t.Cleanup(server.Close)
 
 			return server, defaults

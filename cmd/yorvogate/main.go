@@ -429,6 +429,8 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	defer signal.Stop(hup)
 
 	upstream := gate.NewUpstream(c, log)
+	// One spool for every listener: image loads are bounded across them all
+	spool := gate.NewSpool(c)
 
 	// Docker's defaults, read while scoped listeners serve: until they're read, and while they're
 	// unsafe, scoped requests are refused.
@@ -464,7 +466,7 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	defer stop()
 
 	for _, l := range c.Listeners {
-		g := gate.New(c, l, upstream, registry, defaults, log)
+		g := gate.New(c, l, upstream, registry, defaults, spool, log)
 
 		if l.SocketBound() {
 			sockets, err := gate.NewSockets(g, log)
