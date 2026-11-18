@@ -64,6 +64,7 @@ var attackFields = map[string][]string{
 var refusedElsewhere = map[string]string{
 	"container.create HostConfig.Memory":                                          "TestWhatReachesTheHostOrAnotherScopeIsRefused",
 	"container.create HostConfig.PidsLimit":                                       "TestWhatReachesTheHostOrAnotherScopeIsRefused",
+	"container.create HostConfig.MemorySwap":                                      "TestSwapIsBoundedByTheMemoryLimit",
 	"container.create NetworkingConfig.EndpointsConfig{}.Aliases":                 "TestWhatReachesTheHostOrAnotherScopeIsRefused",
 	"container.create NetworkingConfig.EndpointsConfig{}.IPAMConfig":              "TestWhatReachesTheHostOrAnotherScopeIsRefused",
 	"container.create NetworkingConfig.EndpointsConfig{}.IPAMConfig.IPv4Address":  "TestWhatReachesTheHostOrAnotherScopeIsRefused",
@@ -71,6 +72,7 @@ var refusedElsewhere = map[string]string{
 	"container.create NetworkingConfig.EndpointsConfig{}.IPAMConfig.LinkLocalIPs": "TestWhatReachesTheHostOrAnotherScopeIsRefused",
 	"container.update Memory":                                                     "TestNewLimitsAreChecked",
 	"container.update PidsLimit":                                                  "TestNewLimitsAreChecked",
+	"container.update MemorySwap":                                                 "TestSwapIsBoundedByTheMemoryLimit",
 	"exec.create Cmd":                                                             "TestABuilderIsReachedOnlyByDialStdio",
 	"exec.start Detach":                                                           "TestExecsAreInItsOwnContainersAndNeverPrivileged",
 	"network.connect EndpointConfig.Aliases":                                      "TestJoiningANetwork",

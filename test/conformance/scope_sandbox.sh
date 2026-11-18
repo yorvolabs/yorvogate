@@ -24,6 +24,7 @@ sandbox_start() {
 	_dir=$1 _sockets=$2 _group=$3
 	shift 3
 	cat > "$_dir/yorvogate.yaml" <<EOF
+version: 1
 upstream: unix:///var/run/docker.sock
 listeners:
   - name: sandbox

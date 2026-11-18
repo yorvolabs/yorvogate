@@ -668,7 +668,7 @@ func TestBuilders(t *testing.T) {
 	}
 }
 
-// A scope file says its format; one without is valid, and named as one 0.4 refuses.
+// A scope file says its format; one without is valid (read as version 1), and named as unversioned.
 func TestScopeFormatVersions(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "jane", strings.Replace(jane(), `"prefixes"`, `"version": 1, "prefixes"`, 1))

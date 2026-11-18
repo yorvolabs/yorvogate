@@ -104,6 +104,10 @@ func listenerWarnings(l config.Listener) []string {
 		w = append(w, "no socket_group: the listener's unix sockets fall back to the process's primary group, which may let more than the intended clients connect")
 	}
 
+	if l.Unix() && (l.SocketGroup == "0" || l.SocketGroup == "root") {
+		w = append(w, "socket_group "+l.SocketGroup+" is root's: YorvoGate must run as root to give its sockets that group, and every process in the root group may connect. Use a group of its own for each set of clients")
+	}
+
 	if l.AllowPrivilegedBuilders {
 		w = append(w, "allow_privileged_builders is on: a scope's builder is accepted whatever its configuration, so the scope can become root on the host")
 	}
@@ -277,6 +281,10 @@ func check(path string, docker bool, stdout io.Writer) error {
 		for _, warn := range egressLeaks(c, registry) {
 			fmt.Fprintf(stdout, "  warning: %s\n", warn)
 		}
+
+		for _, warn := range gate.TakenWarnings(context.Background(), c, registry) {
+			fmt.Fprintf(stdout, "  warning: %s\n", warn)
+		}
 	}
 
 	if len(refused) == 1 {
@@ -359,7 +367,7 @@ func unversioned(names []string) string {
 		list = append(slices.Clone(list[:5]), fmt.Sprintf("and %d more", len(names)-5))
 	}
 
-	return fmt.Sprintf("%d scope files have no version (%s): they're read as version %d, and YorvoGate 0.4 refuses them without one (add \"version\": %d)", len(names), strings.Join(list, ", "), config.FormatVersion, config.FormatVersion)
+	return fmt.Sprintf("%d scope files have no version (%s): they're read as version %d, and a later YorvoGate refuses them without one (add \"version\": %d)", len(names), strings.Join(list, ", "), scope.FormatVersion, scope.FormatVersion)
 }
 
 // stateWarnings tells what isn't held across a restart.

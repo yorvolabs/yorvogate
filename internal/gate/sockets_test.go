@@ -46,7 +46,7 @@ func boundGate(t *testing.T, d *docker, group string) (*Sockets, string, string)
 		listener += ", socket_group: '" + group + "'"
 	}
 
-	c, err := config.Parse([]byte("upstream: unix://" + d.socket + "\nlisteners:\n" + listener + "}\n"))
+	c, err := config.Parse([]byte("version: 1\nupstream: unix://" + d.socket + "\nlisteners:\n" + listener + "}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

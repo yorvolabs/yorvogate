@@ -33,7 +33,7 @@ func TestCheckReadsTheConfigurationAndEveryScope(t *testing.T) {
 	scopes := filepath.Join(dir, "scopes")
 	_ = os.Mkdir(scopes, 0o700)
 	configFile := filepath.Join(dir, "yorvogate.yaml")
-	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: server, address: 'tcp://127.0.0.1:2375', mode: trusted, allow: {system: read}}\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+	_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: server, address: 'tcp://127.0.0.1:2375', mode: trusted, allow: {system: read}}\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n"), 0o600)
 	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
 
 	var out, errs bytes.Buffer
@@ -56,7 +56,7 @@ func TestCheckRefusesCrossListenerCollision(t *testing.T) {
 	_ = os.Mkdir(a, 0o700)
 	_ = os.Mkdir(b, 0o700)
 	configFile := filepath.Join(dir, "yorvogate.yaml")
-	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: one, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+a+"}\n  - {name: two, address: 'tcp://127.0.0.1:2377', mode: scoped, scopes: "+b+"}\n"), 0o600)
+	_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: one, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+a+"}\n  - {name: two, address: 'tcp://127.0.0.1:2377', mode: scoped, scopes: "+b+"}\n"), 0o600)
 	// Two scopes on two listeners that share the owner label "shared": each passes its own folder,
 	// but one listener's scope could then reach the other's objects. Neither held it: both are
 	// refused, and check names both.
@@ -78,7 +78,7 @@ func TestCheckNestedScopesOnTwoListeners(t *testing.T) {
 	_ = os.Mkdir(b, 0o700)
 	state := filepath.Join(dir, "state.json")
 	configFile := filepath.Join(dir, "yorvogate.yaml")
-	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nstate_file: "+state+"\nlisteners:\n  - {name: one, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+a+"}\n  - {name: two, address: 'tcp://127.0.0.1:2377', mode: scoped, scopes: "+b+"}\n"), 0o600)
+	_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix:///var/run/docker.sock\nstate_file: "+state+"\nlisteners:\n  - {name: one, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+a+"}\n  - {name: two, address: 'tcp://127.0.0.1:2377', mode: scoped, scopes: "+b+"}\n"), 0o600)
 	_ = os.WriteFile(filepath.Join(a, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
 	_ = os.WriteFile(filepath.Join(b, "jane-blog.json"), []byte(`{"token_sha256": "`+strings.Repeat("b", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane-blog"}, "prefixes": ["jane-blog-"]}`), 0o600)
 
@@ -107,7 +107,7 @@ func TestCheckAllowsSameScopesOnTwoListeners(t *testing.T) {
 	configFile := filepath.Join(dir, "yorvogate.yaml")
 	// One scopes folder served by two listeners (a token one and a socket one): the same scope on
 	// both, which is allowed — a client is that one scope either way.
-	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: tenants, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n  - {name: sockets, scope_sockets: "+filepath.Join(dir, "sock")+", socket_group: '0', mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+	_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: tenants, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n  - {name: sockets, scope_sockets: "+filepath.Join(dir, "sock")+", socket_group: '0', mode: scoped, scopes: "+scopes+"}\n"), 0o600)
 	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
 
 	var out, errs bytes.Buffer
@@ -122,7 +122,7 @@ func TestCheckWarnsOnDangerousConfig(t *testing.T) {
 	_ = os.Mkdir(scopes, 0o700)
 	configFile := filepath.Join(dir, "yorvogate.yaml")
 	// A scoped TCP listener open to the world in cleartext, with privileged builders allowed: valid (it says so), but dangerous.
-	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://0.0.0.0:2376', plaintext: i-understand, mode: scoped, scopes: "+scopes+", allow_privileged_builders: true}\n"), 0o600)
+	_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://0.0.0.0:2376', plaintext: i-understand, mode: scoped, scopes: "+scopes+", allow_privileged_builders: true}\n"), 0o600)
 	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
 
 	var out, errs bytes.Buffer
@@ -175,7 +175,7 @@ func TestServe(t *testing.T) {
 	_ = stale.Close()
 
 	configFile := filepath.Join(dir, "yorvogate.yaml")
-	_ = os.WriteFile(configFile, []byte("upstream: unix://"+upstream+"\nlisteners:\n  - {name: server, address: 'unix://"+gateSocket+"', mode: trusted, allow: {system: read}}\n"), 0o600)
+	_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix://"+upstream+"\nlisteners:\n  - {name: server, address: 'unix://"+gateSocket+"', mode: trusted, allow: {system: read}}\n"), 0o600)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -259,7 +259,7 @@ func TestServeScopeSockets(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
 
 	configFile := filepath.Join(dir, "yorvogate.yaml")
-	_ = os.WriteFile(configFile, []byte("upstream: unix://"+upstream+"\nlisteners:\n  - {name: sites, scope_sockets: "+sockets+", mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+	_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix://"+upstream+"\nlisteners:\n  - {name: sites, scope_sockets: "+sockets+", mode: scoped, scopes: "+scopes+"}\n"), 0o600)
 
 	var out, errs bytes.Buffer
 	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 || !strings.Contains(out.String(), "sites (scoped, scope_sockets "+sockets+"): ok, 1 scopes") {
@@ -327,16 +327,28 @@ func TestCheckFormatVersions(t *testing.T) {
 	scopes := filepath.Join(dir, "scopes")
 	_ = os.Mkdir(scopes, 0o700)
 	configFile := filepath.Join(dir, "yorvogate.yaml")
-	body := "upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: " + scopes + "}\n"
+	body := "version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: " + scopes + "}\n"
 	_ = os.WriteFile(configFile, []byte(body), 0o600)
 	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
 
+	// A configuration without a version is refused from 0.4; a scope file without one is still read,
+	// with a warning
+	_ = os.WriteFile(configFile, []byte(strings.Replace(body, "version: 1\n", "", 1)), 0o600)
+
 	var out, errs bytes.Buffer
-	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 || !strings.Contains(out.String(), "the configuration has no version") || !strings.Contains(out.String(), "1 scope files have no version (jane)") {
-		t.Fatalf("no versions: %d %q %q", code, out.String(), errs.String())
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code == 0 || !strings.Contains(errs.String(), "version: required") {
+		t.Fatalf("a configuration without a version: %d %q %q", code, out.String(), errs.String())
 	}
 
-	_ = os.WriteFile(configFile, []byte("version: 1\n"+body), 0o600)
+	_ = os.WriteFile(configFile, []byte(body), 0o600)
+	out.Reset()
+	errs.Reset()
+
+	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 0 || !strings.Contains(out.String(), "1 scope files have no version (jane)") || strings.Contains(out.String(), "0.4") {
+		t.Fatalf("a scope file without a version: %d %q %q", code, out.String(), errs.String())
+	}
+
+	_ = os.WriteFile(configFile, []byte(body), 0o600)
 	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"version": 1, "token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
 	out.Reset()
 
@@ -344,7 +356,7 @@ func TestCheckFormatVersions(t *testing.T) {
 		t.Fatalf("versioned: %d %q %q", code, out.String(), errs.String())
 	}
 
-	_ = os.WriteFile(configFile, []byte("version: 2\n"+body), 0o600)
+	_ = os.WriteFile(configFile, []byte(strings.Replace(body, "version: 1", "version: 2", 1)), 0o600)
 	errs.Reset()
 
 	if code := run([]string{"check", "--config", configFile}, &out, &errs); code != 1 || !strings.Contains(errs.String(), "version: 2 isn't a format this build reads") {
@@ -359,7 +371,7 @@ func TestCheckNamesRegistriesNotListed(t *testing.T) {
 	scopes := filepath.Join(dir, "scopes")
 	_ = os.Mkdir(scopes, 0o700)
 	configFile := filepath.Join(dir, "yorvogate.yaml")
-	config := "upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: " + scopes + "%s}\n"
+	config := "version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: " + scopes + "%s}\n"
 	_ = os.WriteFile(configFile, []byte(strings.Replace(config, "%s", "", 1)), 0o600)
 	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"], "images": ["quire-sites/jane/", "ghcr.io/jane/", "ghcr.io/jane-tools/", "registry.local/jane/"]}`), 0o600)
 	_ = os.WriteFile(filepath.Join(scopes, "blog.json"), []byte(`{"token_sha256": "`+strings.Repeat("b", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "blog"}, "prefixes": ["blog-"], "images": ["quire-sites/blog/"]}`), 0o600)
@@ -405,7 +417,7 @@ func TestCheckReadsDockersDefaults(t *testing.T) {
 
 	configFile := filepath.Join(dir, "yorvogate.yaml")
 	write := func(extra string) {
-		_ = os.WriteFile(configFile, []byte("upstream: unix://"+socket+"\n"+extra+"listeners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+		_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix://"+socket+"\n"+extra+"listeners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n"), 0o600)
 	}
 	write("")
 
@@ -476,7 +488,7 @@ func TestCheckListsEgressLeaks(t *testing.T) {
 
 	_ = os.WriteFile(filepath.Join(scopes, "ana.json"), []byte(`{"token_sha256": "`+strings.Repeat("a", 64)+`", "owner": {"label": "com.docker.compose.project", "value": "ana"}, "prefixes": ["ana-", "ana_"], "egress": "none"}`), 0o600)
 	configFile := filepath.Join(dir, "yorvogate.yaml")
-	_ = os.WriteFile(configFile, []byte("upstream: unix://"+socket+"\nlisteners:\n  - {name: agents, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+	_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix://"+socket+"\nlisteners:\n  - {name: agents, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n"), 0o600)
 
 	var out, errs bytes.Buffer
 	if code := run([]string{"check", "--config", configFile, "--docker"}, &out, &errs); code != 0 || !strings.Contains(out.String(), "  warning: scope ana (egress: none) has running containers on a network that isn't internal: ana-web-1 (ana_default); disconnect or recreate them\n") || strings.Contains(out.String(), "ana-tool-1") {
@@ -497,7 +509,7 @@ func TestCheckReadsTLS(t *testing.T) {
 
 	run := func(listeners string) (int, string, string) {
 		path := filepath.Join(dir, "yorvogate.yaml")
-		_ = os.WriteFile(path, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n"+strings.ReplaceAll(listeners, "CERTS", certs)), 0o600)
+		_ = os.WriteFile(path, []byte("version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n"+strings.ReplaceAll(listeners, "CERTS", certs)), 0o600)
 
 		var out, errs bytes.Buffer
 		code := run([]string{"check", "--config", path}, &out, &errs)
@@ -555,7 +567,7 @@ func TestCheckNamesExpiringTokens(t *testing.T) {
 	scopes := filepath.Join(dir, "scopes")
 	_ = os.Mkdir(scopes, 0o700)
 	configFile := filepath.Join(dir, "yorvogate.yaml")
-	_ = os.WriteFile(configFile, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n  - {name: own, scope_sockets: "+filepath.Join(dir, "sockets")+", mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+	_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: "+scopes+"}\n  - {name: own, scope_sockets: "+filepath.Join(dir, "sockets")+", mode: scoped, scopes: "+scopes+"}\n"), 0o600)
 	at := func(d time.Duration) string { return time.Now().Add(d).UTC().Format(time.RFC3339) }
 	_ = os.WriteFile(filepath.Join(scopes, "jane.json"), []byte(`{"tokens": [{"sha256": "`+strings.Repeat("a", 64)+`", "expires": "`+at(-time.Hour)+`"}, {"sha256": "`+strings.Repeat("b", 64)+`", "expires": "`+at(3*24*time.Hour)+`"}, {"sha256": "`+strings.Repeat("c", 64)+`", "expires": "`+at(30*24*time.Hour)+`"}, {"sha256": "`+strings.Repeat("d", 64)+`"}], "owner": {"label": "com.docker.compose.project", "value": "jane"}, "prefixes": ["jane-"]}`), 0o600)
 
@@ -566,5 +578,25 @@ func TestCheckNamesExpiringTokens(t *testing.T) {
 		strings.Contains(out.String(), strings.Repeat("c", 12)) || strings.Contains(out.String(), strings.Repeat("d", 12)) ||
 		strings.Count(out.String(), "tokens expired") != 1 {
 		t.Fatalf("%d %q %q", code, out.String(), errs.String())
+	}
+}
+
+// A unix listener whose socket_group is root's is named: the gate has to run as root for it, and
+// every process in that group may connect. A group of its own isn't.
+func TestCheckWarnsOnRootsSocketGroup(t *testing.T) {
+	dir := t.TempDir()
+	scopes := filepath.Join(dir, "scopes")
+	_ = os.Mkdir(scopes, 0o700)
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+
+	for group, warned := range map[string]bool{"'0'": true, "root": true, "'2001'": false, "sites": false} {
+		_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sockets, scope_sockets: "+filepath.Join(dir, "sock")+", socket_group: "+group+", mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+
+		var out, errs bytes.Buffer
+		run([]string{"check", "--config", configFile}, &out, &errs)
+
+		if got := strings.Contains(out.String(), "is root's: YorvoGate must run as root"); got != warned {
+			t.Errorf("socket_group %s: warned %v, want %v (%q %q)", group, got, warned, out.String(), errs.String())
+		}
 	}
 }

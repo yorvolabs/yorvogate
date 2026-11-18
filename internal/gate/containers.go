@@ -45,6 +45,10 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 		return nil, refuse(http.StatusForbidden, "container.create: the name %q isn't one of scope %s's (%s)", name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
 	}
 
+	if err := s.notTaken("container", name, s.docker.Container); err != nil {
+		return nil, err
+	}
+
 	var req container.CreateRequest
 	if err := decode(body, &req); err != nil {
 		return nil, err
@@ -85,7 +89,7 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 		add("NetworkingConfig.%s isn't allowed", f)
 	}
 
-	s.networking(req.HostConfig.NetworkMode, req.NetworkingConfig, add)
+	s.networking(&req.HostConfig.NetworkMode, req.NetworkingConfig, add)
 
 	if len(problems) > 0 {
 		return nil, refuse(http.StatusForbidden, "container.create %s: %s", name, strings.Join(problems, "; "))
@@ -209,9 +213,21 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 		add("the host's namespaces aren't allowed")
 	}
 
-	for mode, other := range map[string]string{"PidMode": h.PidMode.Container(), "IpcMode": h.IpcMode.Container()} {
-		if other != "" && !s.ownsContainer(other) {
-			add("%s: container:%s isn't one of its own", mode, other)
+	// Another of its own containers' namespace, by the ID the check found: by its name, Docker would
+	// look it up again, and the name may be another container's by then.
+	if other := h.PidMode.Container(); other != "" {
+		if id, ok := s.ownContainerID(other); ok {
+			h.PidMode = container.PidMode("container:" + id)
+		} else {
+			add("PidMode: container:%s isn't one of its own", other)
+		}
+	}
+
+	if other := h.IpcMode.Container(); other != "" {
+		if id, ok := s.ownContainerID(other); ok {
+			h.IpcMode = container.IpcMode("container:" + id)
+		} else {
+			add("IpcMode: container:%s isn't one of its own", other)
 		}
 	}
 
@@ -280,10 +296,18 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 		add("the volume driver %q isn't allowed", h.VolumeDriver)
 	}
 
-	for _, from := range h.VolumesFrom {
-		other, _, _ := strings.Cut(from, ":")
-		if !s.ownsContainer(other) {
+	// By the ID the check found, as namespaces are (its :ro or :rw kept)
+	for i, from := range h.VolumesFrom {
+		other, mode, moded := strings.Cut(from, ":")
+		id, ok := s.ownContainerID(other)
+
+		switch {
+		case !ok:
 			add("VolumesFrom: %s isn't one of its own containers", other)
+		case moded:
+			h.VolumesFrom[i] = id + ":" + mode
+		default:
+			h.VolumesFrom[i] = id
 		}
 	}
 
@@ -299,16 +323,40 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 	}
 }
 
-// resources checks limits: what the listener requires, and what reaches the host's devices or its
-// real-time scheduler.
+// resources checks a new container's limits: what the listener requires, and what reaches the host's
+// devices or its real-time scheduler.
 func (s *scoped) resources(r *container.Resources, add func(string, ...any)) {
+	s.limits(*r, true, 0, add)
+}
+
+// limits checks a container's limits against the listener's, the same way on create and on update.
+// On create, a required limit must be given. On an update, one left out (Memory 0, PidsLimit nil)
+// is the container's own, which Docker keeps, and only one given is checked. Swap (MemorySwap, which
+// is memory and swap together) is bounded by the memory limit as Docker bounds it by default: at
+// most twice it, never unlimited. An update that gives swap without memory is checked against the
+// container's memory now (current).
+func (s *scoped) limits(r container.Resources, creating bool, current int64, add func(string, ...any)) {
 	p := s.policy
 
-	if p.MaxMemory > 0 && (r.Memory <= 0 || r.Memory > p.MaxMemory) {
-		add("a memory limit up to %d bytes is required", p.MaxMemory)
+	if p.MaxMemory > 0 {
+		if (creating || r.Memory != 0) && (r.Memory <= 0 || r.Memory > p.MaxMemory) {
+			add("a memory limit up to %d bytes is required", p.MaxMemory)
+		}
+
+		memory := r.Memory
+		if memory == 0 {
+			memory = current
+		}
+
+		switch {
+		case r.MemorySwap < 0:
+			add("unlimited swap (MemorySwap -1) isn't allowed: memory and swap together are at most twice the memory limit")
+		case r.MemorySwap > 0 && memory > 0 && (r.MemorySwap < memory || r.MemorySwap > 2*memory):
+			add("MemorySwap (memory and swap together) must be between the memory limit and twice it (%d to %d bytes), or left unset", memory, 2*memory)
+		}
 	}
 
-	if p.MaxPids > 0 && (r.PidsLimit == nil || *r.PidsLimit <= 0 || *r.PidsLimit > p.MaxPids) {
+	if p.MaxPids > 0 && (creating || r.PidsLimit != nil) && (r.PidsLimit == nil || *r.PidsLimit <= 0 || *r.PidsLimit > p.MaxPids) {
 		add("a process limit up to %d is required", p.MaxPids)
 	}
 
@@ -408,7 +456,9 @@ func (s *scoped) volumeSource(source string) error {
 
 // networking checks the networks a container joins: its own, or the shared ones its scope names
 // (with only its own aliases and addresses there).
-func (s *scoped) networking(mode container.NetworkMode, nc *network.NetworkingConfig, add func(string, ...any)) {
+func (s *scoped) networking(pinned *container.NetworkMode, nc *network.NetworkingConfig, add func(string, ...any)) {
+	mode := *pinned
+
 	var endpoints map[string]*network.EndpointSettings
 	if nc != nil {
 		endpoints = nc.EndpointsConfig
@@ -424,6 +474,11 @@ func (s *scoped) networking(mode container.NetworkMode, nc *network.NetworkingCo
 	case strings.HasPrefix(string(mode), "container:"):
 		other := strings.TrimPrefix(string(mode), "container:")
 		c, err := s.docker.Container(s.ctx, s.version, other)
+
+		if err == nil && s.owned(c) {
+			// By the ID the check found, not the name Docker would look up again
+			*pinned = container.NetworkMode("container:" + string(c.ID))
+		}
 
 		switch {
 		case err != nil || !s.owned(c):
@@ -527,6 +582,16 @@ func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(str
 }
 
 // updateContainer checks new limits for a running container, as create does.
+// currentMemory is the memory limit of the container an update is for, as Docker has it (0 when
+// there's none, or it wasn't inspected).
+func (s *scoped) currentMemory() int64 {
+	if c := s.target; c != nil && c.inspection != nil && c.inspection.HostConfig != nil {
+		return c.inspection.HostConfig.Memory
+	}
+
+	return 0
+}
+
 func (s *scoped) updateContainer(body []byte) ([]byte, error) {
 	var req container.UpdateConfig
 	if err := decode(body, &req); err != nil {
@@ -540,30 +605,7 @@ func (s *scoped) updateContainer(body []byte) ([]byte, error) {
 		add("%s isn't allowed", f)
 	}
 
-	r := req.Resources
-	if s.policy.MaxMemory > 0 && r.Memory != 0 && (r.Memory < 0 || r.Memory > s.policy.MaxMemory) {
-		add("a memory limit up to %d bytes is required", s.policy.MaxMemory)
-	}
-
-	if s.policy.MaxPids > 0 && r.PidsLimit != nil && (*r.PidsLimit <= 0 || *r.PidsLimit > s.policy.MaxPids) {
-		add("a process limit up to %d is required", s.policy.MaxPids)
-	}
-
-	if r.OomKillDisable != nil && *r.OomKillDisable {
-		add("disabling the OOM killer isn't allowed")
-	}
-
-	for _, u := range r.Ulimits {
-		if u != nil && !slices.Contains(s.policy.Ulimits, u.Name) {
-			add("the ulimit %s isn't allowed", u.Name)
-		}
-	}
-
-	for _, u := range r.Ulimits {
-		for _, f := range unset(u, ulimit) {
-			add("a ulimit's %s isn't allowed", f)
-		}
-	}
+	s.limits(req.Resources, false, s.currentMemory(), add)
 
 	if len(problems) > 0 {
 		return nil, refuse(http.StatusForbidden, "container.update: %s", strings.Join(problems, "; "))

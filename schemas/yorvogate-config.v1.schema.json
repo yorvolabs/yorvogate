@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yorvolabs/yorvogate/schemas/yorvogate-config.v1.schema.json",
   "title": "YorvoGate configuration, format 1",
-  "description": "The YAML configuration (docs/configuration.md). YorvoGate itself is stricter in places (an address's host and port, a path's form, the listeners' names and addresses being their own): run yorvogate check. Without version, a file is read as version 1 until YorvoGate 0.4, which requires it.",
+  "description": "The YAML configuration (docs/configuration.md). YorvoGate itself is stricter in places (an address's host and port, a path's form, the listeners' names and addresses being their own): run yorvogate check. The version is required from YorvoGate 0.4 (0.3 read a file without one as version 1).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["upstream", "listeners"],
+  "required": ["version", "upstream", "listeners"],
   "properties": {
     "version": {"const": 1},
     "upstream": {"type": "string", "pattern": "^unix:///"},

@@ -57,6 +57,8 @@ type scoped struct {
 	forwardLength int64
 	// Done once the request is forwarded (e.g. an archive's copy removed)
 	cleanup func()
+	// The container the request is for, as the gate inspected it
+	target *object
 	// Changes Docker's answer before the client sees it (e.g. other scopes' objects left out)
 	answer func([]byte) ([]byte, error)
 }
@@ -232,6 +234,7 @@ func (s *scoped) container() (bool, error) {
 	}
 
 	s.with("id", c.ID)
+	s.target = c
 
 	if s.scope.Builds(c.Name) {
 		return true, s.builder(c)
@@ -246,11 +249,15 @@ func (s *scoped) owned(c *object) bool {
 	return c != nil && s.scope.Owns(c.Labels) && !s.scope.Builds(c.Name)
 }
 
-// ownsContainer tells whether a container (by ID or name) is the scope's own.
-func (s *scoped) ownsContainer(id string) bool {
+// ownContainerID is the full ID of one of the scope's own containers, by any name or ID Docker knows
+// it by.
+func (s *scoped) ownContainerID(id string) (string, bool) {
 	c, err := s.docker.Container(s.ctx, s.version, id)
+	if err != nil || c == nil || !s.owned(c) {
+		return "", false
+	}
 
-	return err == nil && s.owned(c)
+	return string(c.ID), true
 }
 
 // exec checks that an exec runs in one of the scope's containers, or is a builder's dial-stdio (only

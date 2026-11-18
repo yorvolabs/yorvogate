@@ -25,7 +25,7 @@ func unixGate(t *testing.T, d *docker, uids string) (string, *Gate, string) {
 	writeScope(t, scopes, "jane", janeWithPeers(uids))
 	socket := filepath.Join(dir, "sites.sock")
 
-	c, err := config.Parse([]byte("upstream: unix://" + d.socket + "\nlisteners:\n  - {name: sites, address: 'unix://" + socket + "', mode: scoped, scopes: " + scopes + "}\n"))
+	c, err := config.Parse([]byte("version: 1\nupstream: unix://" + d.socket + "\nlisteners:\n  - {name: sites, address: 'unix://" + socket + "', mode: scoped, scopes: " + scopes + "}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestPeerUsersAreForUnixAddressesOnly(t *testing.T) {
 
 			writeScope(t, dir, "jane", janeWithPeers(uids))
 
-			cfg, err := config.Parse([]byte("upstream: unix:///run/docker.sock\nlisteners:\n" + strings.ReplaceAll(c.listeners, "DIR", dir)))
+			cfg, err := config.Parse([]byte("version: 1\nupstream: unix:///run/docker.sock\nlisteners:\n" + strings.ReplaceAll(c.listeners, "DIR", dir)))
 			if err != nil {
 				t.Fatalf("%s: %v", c.name, err)
 			}

@@ -60,9 +60,9 @@ container.create HostConfig.LogConfig container.LogConfig [HostConfig] checked: 
 container.create HostConfig.LogConfig.Config map[string]string [LogConfig] checked: host, logOptions
 container.create HostConfig.LogConfig.Type string [LogConfig] checked: host, logOptions
 container.create HostConfig.MaskedPaths []string [HostConfig] refused ([] asks): what Docker masks or makes read-only in /proc: [] is none, /proc unmasked
-container.create HostConfig.Memory int64 [HostConfig] checked: resources (the listener's limits)
+container.create HostConfig.Memory int64 [HostConfig] checked: limits (the listener's limits)
 container.create HostConfig.MemoryReservation int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
-container.create HostConfig.MemorySwap int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.create HostConfig.MemorySwap int64 [HostConfig] checked: limits (the listener's limits)
 container.create HostConfig.MemorySwappiness *int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
 container.create HostConfig.Mounts []mount.Mount [HostConfig] checked: host, mount
 container.create HostConfig.Mounts[].BindOptions *mount.BindOptions [Mount] refused: a bind mount reaches the host's files
@@ -86,10 +86,10 @@ container.create HostConfig.Mounts[].VolumeOptions.NoCopy bool [VolumeOptions] f
 container.create HostConfig.Mounts[].VolumeOptions.Subpath string [VolumeOptions] checked: mount (inside the volume)
 container.create HostConfig.NanoCpus int64 [HostConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
 container.create HostConfig.NetworkMode container.NetworkMode [HostConfig] checked: networking
-container.create HostConfig.OomKillDisable *bool [HostConfig] checked: resources (the listener's limits)
+container.create HostConfig.OomKillDisable *bool [HostConfig] checked: limits (the listener's limits)
 container.create HostConfig.OomScoreAdj int [HostConfig] checked: host
 container.create HostConfig.PidMode container.PidMode [HostConfig] checked: host
-container.create HostConfig.PidsLimit *int64 [HostConfig] checked: resources (the listener's limits)
+container.create HostConfig.PidsLimit *int64 [HostConfig] checked: limits (the listener's limits)
 container.create HostConfig.PortBindings map[network.Port][]network.PortBinding [HostConfig] refused: publishes the host's ports
 container.create HostConfig.Privileged bool [HostConfig] refused: every power over the host
 container.create HostConfig.PublishAllPorts bool [HostConfig] refused: publishes the host's ports
@@ -186,13 +186,13 @@ container.update DeviceRequests []container.DeviceRequest [container.UpdateConfi
 container.update Devices []container.DeviceMapping [container.UpdateConfig] refused: reaches the host's devices or block devices
 container.update IOMaximumBandwidth uint64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
 container.update IOMaximumIOps uint64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
-container.update Memory int64 [container.UpdateConfig] checked: updateContainer (the listener's limits)
+container.update Memory int64 [container.UpdateConfig] checked: limits (the listener's limits)
 container.update MemoryReservation int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
-container.update MemorySwap int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
+container.update MemorySwap int64 [container.UpdateConfig] checked: limits (the listener's limits)
 container.update MemorySwappiness *int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
 container.update NanoCpus int64 [container.UpdateConfig] free: a limit on the scope's own container (cgroup shares, quotas, sets, weights)
-container.update OomKillDisable *bool [container.UpdateConfig] checked: updateContainer (the listener's limits)
-container.update PidsLimit *int64 [container.UpdateConfig] checked: updateContainer (the listener's limits)
+container.update OomKillDisable *bool [container.UpdateConfig] checked: limits (the listener's limits)
+container.update PidsLimit *int64 [container.UpdateConfig] checked: limits (the listener's limits)
 container.update RestartPolicy container.RestartPolicy [container.UpdateConfig] free: the scope's own container's setting, on its own namespaces and files
 container.update RestartPolicy.MaximumRetryCount int [RestartPolicy] free: when Docker restarts the scope's own container
 container.update RestartPolicy.Name container.RestartPolicyMode [RestartPolicy] free: when Docker restarts the scope's own container

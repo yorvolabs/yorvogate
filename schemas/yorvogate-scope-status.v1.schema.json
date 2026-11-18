@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yorvolabs/yorvogate/schemas/yorvogate-scope-status.v1.schema.json",
   "title": "YorvoGate scope status, format 1",
-  "description": "The answer of GET /_yorvogate/v1/scopes/<name> on a trusted listener (docs/configuration.md#scope-status). With sha256 or absent, the request waited: matched tells whether what it waited for came. A 408 answer has matched false and the current state, which is never the state waited for: treat it as a failure.",
+  "description": "The answer of GET /_yorvogate/v1/scopes/<name> on a trusted listener (docs/configuration.md#scope-status). With sha256 or absent, the request waited: matched tells whether what it waited for came. A 408 answer has matched false and the current state, which is never the state waited for: treat it as a failure. An answer is open for additions: a later release may add optional fields within version 1, so ignore fields you don't know (an input format, such as the configuration or a scope file, stays closed).",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["version", "generation", "listener", "scope", "state"],
   "properties": {
     "version": {"const": 1},
@@ -17,7 +17,13 @@
       "description": "loaded: in effect (its socket open, on a listener with scope sockets). refused: its file isn't valid, or collides, and it holds no claims. reserved: refused, but its last valid claims are held for it. unknown: no scope file."
     },
     "reason": {"type": "string", "description": "Why it's refused or reserved."},
-    "matched": {"type": "boolean"}
+    "matched": {"type": "boolean"},
+    "taken": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Only when loaded, and only when there are any: the names under the scope's prefixes that another owner's objects have (made before its file was valid). The scope can't create them: an orchestrator should stop before deploying, and decide what to do with the other owner's objects.",
+      "items": {"type": "object", "additionalProperties": false, "required": ["kind", "name", "owner"], "properties": {"kind": {"enum": ["container", "network", "volume"]}, "name": {"type": "string"}, "owner": {"type": "string", "description": "scope <name>, or <label>=<value> of an owner no scope has now"}}}
+    }
   },
   "allOf": [
     {"if": {"properties": {"state": {"const": "unknown"}}}, "then": {"not": {"required": ["file_sha256"]}}, "else": {"required": ["file_sha256"]}},

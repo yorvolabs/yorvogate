@@ -9,6 +9,7 @@ import (
 )
 
 const valid = `
+version: 1
 upstream: unix:///var/run/docker.sock
 listeners:
   - name: server
@@ -140,7 +141,7 @@ func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 		"a state file not clean":         valid + "state_file: /var/lib/../state.json\n",
 		"a state file in scopes":         valid + "state_file: /etc/yorvogate/scopes/state.json\n",
 		"the scopes folder as state":     valid + "state_file: /etc/yorvogate/scopes\n",
-		"no listeners":                   "upstream: unix:///var/run/docker.sock\n",
+		"no listeners":                   "version: 1\nupstream: unix:///var/run/docker.sock\n",
 		"containers on a trusted one":    strings.Replace(valid, "mode: trusted", "mode: trusted\n    containers: {max_pids: 10}", 1),
 		"lists on a trusted one":         strings.Replace(valid, "mode: trusted", "mode: trusted\n    containers: {capabilities: [CHOWN], security_options: [x]}", 1),
 		"a body limit just too large":    valid + "body_limit: 67108865\n",
@@ -172,16 +173,19 @@ func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 	}
 }
 
-// A configuration says its format; without one it's read as 1, with a warning (0.4 refuses it).
+// A configuration says its format: required from 0.4, and an unknown one is refused.
 func TestTheFormatVersion(t *testing.T) {
-	c, err := Parse([]byte(valid + "version: 1\n"))
-	if err != nil || len(c.Deprecations()) != 0 {
-		t.Errorf("version 1: %v %v", err, c.Deprecations())
+	if _, err := Parse([]byte(valid)); err != nil {
+		t.Errorf("version 1: %v", err)
 	}
 
-	c, err = Parse([]byte(valid))
-	if err != nil || len(c.Deprecations()) != 1 || !strings.Contains(c.Deprecations()[0], "0.4 refuses it") {
-		t.Errorf("no version: %v %v", err, c.Deprecations())
+	// Without one, refused from 0.4 (0.3 read it as version 1, with a warning)
+	if _, err := Parse([]byte(strings.Replace(valid, "version: 1\n", "", 1))); err == nil || !strings.Contains(err.Error(), "version: required") {
+		t.Errorf("no version: %v", err)
+	}
+
+	if _, err := Parse([]byte(strings.Replace(valid, "version: 1", "version: 2", 1))); err == nil || !strings.Contains(err.Error(), "isn't a format this build reads") {
+		t.Errorf("version 2: %v", err)
 	}
 }
 
@@ -195,7 +199,7 @@ func TestTheLogBuffer(t *testing.T) {
 // needs neither. A host name isn't loopback, whatever it resolves to.
 func TestOffLoopbackNeedsMTLS(t *testing.T) {
 	listener := func(address, extra string) string {
-		return "upstream: unix:///var/run/docker.sock\nlisteners:\n  - name: server\n    address: " + address + "\n    mode: trusted\n    allow: {system: read}\n" + extra
+		return "version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - name: server\n    address: " + address + "\n    mode: trusted\n    allow: {system: read}\n" + extra
 	}
 	mtls := "    tls: {certificate: /etc/yorvogate/server.pem, key: /etc/yorvogate/server.key, client_ca: /etc/yorvogate/clients.pem}\n"
 	tlsOnly := "    tls: {certificate: /etc/yorvogate/server.pem, key: /etc/yorvogate/server.key}\n"
@@ -236,7 +240,7 @@ func TestOffLoopbackNeedsMTLS(t *testing.T) {
 }
 
 func TestTLSIsChecked(t *testing.T) {
-	base := "upstream: unix:///var/run/docker.sock\nlisteners:\n  - name: server\n    address: %s\n    mode: %s\n    %s\n"
+	base := "version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - name: server\n    address: %s\n    mode: %s\n    %s\n"
 	trusted := "trusted\n    allow: {system: read}"
 	scoped := "scoped\n    scopes: /etc/yorvogate/scopes"
 	pin := strings.Repeat("a", 64)
@@ -285,7 +289,7 @@ func TestRequirePeerUIDsIsForAUnixAddress(t *testing.T) {
 		{"scope sockets", "{name: a, scope_sockets: /run/a, mode: scoped, scopes: /etc/a, require_peer_uids: true}", "require_peer_uids: only a scoped listener on a unix address has it"},
 		{"trusted", "{name: a, address: 'unix:///run/a.sock', mode: trusted, allow: {system: read}, require_peer_uids: true}", "require_peer_uids: only a scoped listener on a unix address has it"},
 	} {
-		c2, err := Parse([]byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - " + c.listener + "\n"))
+		c2, err := Parse([]byte("version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - " + c.listener + "\n"))
 		if c.want == "" && (err != nil || !c2.Listeners[0].RequirePeerUIDs || !c2.Listeners[0].PeerCredentials()) || c.want != "" && (err == nil || !strings.Contains(err.Error(), c.want)) {
 			t.Errorf("%s: %v", c.name, err)
 		}

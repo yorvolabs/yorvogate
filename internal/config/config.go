@@ -256,16 +256,17 @@ func (c *Config) UpstreamSocket() string {
 }
 
 // Deprecations are what the configuration still uses that a later version refuses.
+// None today: a configuration without a version, deprecated in 0.3, is refused from 0.4.
 func (c *Config) Deprecations() []string {
-	if c.Version == nil {
-		return []string{fmt.Sprintf("the configuration has no version: it's read as version %d, and YorvoGate 0.4 refuses it without one (add version: %d)", FormatVersion, FormatVersion)}
-	}
-
 	return nil
 }
 
 func (c *Config) check() error {
-	if c.Version != nil && *c.Version != FormatVersion {
+	if c.Version == nil {
+		return fmt.Errorf("version: required (add version: %d; YorvoGate 0.3 read a configuration without one as version %d, with a warning)", FormatVersion, FormatVersion)
+	}
+
+	if *c.Version != FormatVersion {
 		return fmt.Errorf("version: %d isn't a format this build reads (%d)", *c.Version, FormatVersion)
 	}
 

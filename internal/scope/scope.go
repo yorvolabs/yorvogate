@@ -378,8 +378,9 @@ func (v *folderView) get(name string) (*Scope, error) {
 	return nil, errMissing
 }
 
-// Unversioned names the valid scopes whose files have no version: read as version 1 until 0.4, which
-// refuses them.
+// Unversioned names the valid scopes whose files have no version: read as version 1, with a warning,
+// until a later release refuses them (ADR-0005: the first minor after Quire Server writes a version
+// in every scope file).
 func (s *Store) Unversioned() []string {
 	snap := s.registry.snapshot.Load()
 	if snap == nil {
@@ -541,14 +542,15 @@ func (s *Scope) checkPeers(f Folder) error {
 	return nil
 }
 
-// formatVersion is the scope files' format (config.FormatVersion: the two move together).
-const formatVersion = 1
+// FormatVersion is the scope files' format. It's frozen apart from the configuration's
+// (config.FormatVersion): each changes only when its own format does.
+const FormatVersion = 1
 
 func (s *Scope) check(f Folder) error {
 	tokenless := f.Tokenless
 
-	if s.Version != nil && *s.Version != formatVersion {
-		return fmt.Errorf("version: %d isn't a format this build reads (%d)", *s.Version, formatVersion)
+	if s.Version != nil && *s.Version != FormatVersion {
+		return fmt.Errorf("version: %d isn't a format this build reads (%d)", *s.Version, FormatVersion)
 	}
 
 	switch {
@@ -672,6 +674,30 @@ func (s *Scope) OwnedByAnother(labels map[string]string) bool {
 	}
 
 	return false
+}
+
+// OtherOwner says who owns an object whose labels aren't this scope's: another scope by name, when
+// one owns them, else the value of this scope's own owner label on it (an owner no scope has now).
+// "" when the object has no owner a scope could have: neither this scope's owner label, nor
+// another's.
+func (s *Scope) OtherOwner(labels map[string]string) string {
+	if s.Owns(labels) {
+		return ""
+	}
+
+	if s.index != nil {
+		for key, value := range labels {
+			if owner, ok := s.index.owners[Label{key, value}]; ok && owner != s.Name {
+				return "scope " + owner
+			}
+		}
+	}
+
+	if value, ok := labels[s.Owner.Key]; ok {
+		return s.Owner.Key + "=" + value
+	}
+
+	return ""
 }
 
 // Contains tells whether a subnet is inside one of the scope's (true when it has none).

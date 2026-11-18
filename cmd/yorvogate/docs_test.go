@@ -115,7 +115,7 @@ func TestEveryExampleIsValid(t *testing.T) {
 			}
 
 			path := filepath.Join(dir, "yorvogate.yaml")
-			_ = os.WriteFile(path, []byte("upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, "+listener+", mode: scoped, scopes: "+scopesDir+"}\n"), 0o600)
+			_ = os.WriteFile(path, []byte("version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, "+listener+", mode: scoped, scopes: "+scopesDir+"}\n"), 0o600)
 
 			var out, errs bytes.Buffer
 			if code := run([]string{"check", "--config", path}, &out, &errs); code != 0 || !strings.Contains(out.String(), "ok, 1 scopes") {

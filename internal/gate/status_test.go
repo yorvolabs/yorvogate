@@ -107,6 +107,7 @@ type statusAnswer struct {
 	State      string
 	Reason     string
 	Matched    *bool
+	Taken      []Taken
 }
 
 var statusSchema = func() *jsonschema.Schema {

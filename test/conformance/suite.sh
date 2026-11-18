@@ -124,6 +124,7 @@ printf '%s\n' "$nested" > "$dir/nested/jane-blog.json"
 chmod 600 "$dir/nested/jane-blog.json"
 
 cat > "$dir/yorvogate.yaml" <<EOF
+version: 1
 upstream: unix:///var/run/docker.sock
 listeners:
   - name: tenants
