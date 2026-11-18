@@ -403,6 +403,22 @@ status "/proc unmasked" 403 jane POST /v1.56/containers/create?name=ygc-jane-evi
 status "a field Docker doesn't have yet" 400 jane POST /v1.56/containers/create?name=ygc-jane-evil-1 "$(printf "$create" ',"SomeFutureField":true')"
 # shellcheck disable=SC2059
 status "a name given twice" 400 jane POST "/v1.56/containers/create?name=ygc-jane-evil-1&name=ygc-blog-evil-1" "$(printf "$create" '')"
+
+say "== What a refusal says: each problem, where it is and what's allowed there (refusal_version 1)"
+# shellcheck disable=SC2059
+answer=$(request jane POST /v1.56/containers/create?name=ygc-jane-evil-1 "$(printf "$create" ',"CapAdd":["NET_BIND_SERVICE","SYS_ADMIN"]')" | nc 127.0.0.1 2376)
+if printf '%s' "$answer" | grep -q '"refusal_version":1' && printf '%s' "$answer" | grep -qF '"code":"policy.capability","in":"body","field":"HostConfig.CapAdd[1]","allowed":{"kind":"one-of","values":["NET_BIND_SERVICE"]}'; then
+	ok "a refusal's problem: its field and what's allowed"
+else
+	ko "a refusal's problem: its field and what's allowed" "$answer"
+fi
+# Docker's CLI shows the message, as it did before there were problems (it sends --cap-add SYS_ADMIN as CAP_SYS_ADMIN)
+output=$(as jane docker run --rm --name ygc-jane-evil-2 --label com.docker.compose.project=ygc-jane --network none --cap-drop ALL --security-opt no-new-privileges --memory 64m --pids-limit 64 --cap-add SYS_ADMIN alpine:3.22 true 2>&1)
+if printf '%s' "$output" | grep -q "yorvogate: container.create ygc-jane-evil-2: adding the capability CAP_SYS_ADMIN isn't allowed (allowed: NET_BIND_SERVICE)" && ! printf '%s' "$output" | grep -q problems; then
+	ok "the CLI shows the message, and only it"
+else
+	ko "the CLI shows the message, and only it" "$output"
+fi
 # An image all of whose names are blog's, run by its ID: by a few of its digits (Docker takes 4), or whole
 printf 'FROM alpine:3.22\nLABEL ygc=blog-only\n' | direct build -q -t ygc-blog/only:1 - >/dev/null
 only=$(direct image inspect ygc-blog/only:1 --format '{{.Id}}' | sed 's/^sha256://')
