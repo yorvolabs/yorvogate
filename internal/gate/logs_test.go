@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"log/slog"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -113,5 +114,49 @@ func (c *logChecker) waitFor(t *testing.T, match func(map[string]any) bool) map[
 
 			return nil
 		}
+	}
+}
+
+// Every answer says its request's ID, and the request's line has it; a client's own ID, when it's a
+// plain one, is logged beside it, never in its place.
+func TestEveryRequestHasAnID(t *testing.T) {
+	d := startDocker(t)
+	log, lines := checkedLog(t)
+	server := gateLogging(t, d, "sites", log)
+
+	for _, theirs := range []string{"", "quire-op-42.1"} {
+		header := map[string]string{"X-YorvoGate-Scope": "jane", "X-YorvoGate-Token": token}
+		if theirs != "" {
+			header[RequestIDHeader] = theirs
+		}
+
+		req, _ := http.NewRequest("GET", server.URL+"/v1.56/containers/json", nil)
+		for k, v := range header {
+			req.Header.Set(k, v)
+		}
+
+		res, err := server.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+
+		id := res.Header.Get(RequestIDHeader)
+		if id == "" || id == theirs {
+			t.Fatalf("answered X-Request-Id %q (theirs %q)", id, theirs)
+		}
+
+		line := lines.waitFor(t, func(l map[string]any) bool { return l["request_id"] == id && l["msg"] == "allowed" })
+		if theirs != "" && line["client_request_id"] != theirs {
+			t.Errorf("client_request_id: %v, want %s", line["client_request_id"], theirs)
+		}
+
+		if line["log_version"] != float64(LogVersion) || line["scope"] != "jane" || line["endpoint"] != "container.list" {
+			t.Errorf("the line: %v", line)
+		}
+	}
+
+	if len(lines.Lines()) == 0 {
+		t.Fatal("nothing logged: the checker sees no lines")
 	}
 }

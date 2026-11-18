@@ -524,4 +524,20 @@ A refusal that collects several problems (a container's, network's or volume's c
 
 ## Logs
 
-One JSON line per decision on standard error: `listener`, `method`, `path`, `scope` (scoped listeners), `endpoint`, the headers that weren't forwarded (`headers_not_forwarded`, names only), and for a refusal its `status` and `reason`.
+One JSON line per decision on standard error, in a published format ([schema](../schemas/yorvogate-log.v1.schema.json), `"log_version": 1` in each line). The format is open for additions: a later release may add optional fields within log version 1, so ignore fields you don't know. A field removed, or one whose meaning changes, is a new `log_version`. `code` is the contract for a refusal, and `reason` is free text for people.
+
+```
+{"time":"…","level":"WARN","msg":"refused","log_version":1,"request_id":"5ffb2dfacc1b6c5b769473a8fffb9d0a","source":"uid=1000","method":"POST","path":"/v1.56/containers/create","listener":"sites","scope":"jane","status":403,"code":"policy.capability","reason":"container.create jane-php-1: adding the capability SYS_ADMIN isn't allowed (allowed: NET_BIND_SERVICE, CHOWN)","decision_ms":1.9}
+```
+
+- `msg`: `allowed` or `refused` for a decision, `auth failed` for why an authentication failed (below), `stream opened` and `stream closed` for a stream.
+- `request_id`: the request's ID, also in its answer's `X-Request-Id` header. A client's own `X-Request-Id` (1 to 64 of `A-Z a-z 0-9 . _ -`) is logged as `client_request_id`, so an orchestrator can find its operations. It's never the gate's ID, so one client can't make its lines look like another's.
+- `source`: where it came from. Over TCP, the peer's IP address and port. On a unix socket, `uid=<n>`, the connecting user as the kernel reports it.
+- `listener`, `method`, `path` (cut to 256 bytes), `endpoint`, `scope` (the authenticated scope), the headers that weren't forwarded (`headers_not_forwarded`, names only).
+- `decision_ms`: how long YorvoGate took to decide, a refusal's hold included (Docker's own time isn't in it).
+- For a refusal: its `status`, `code` ([reason codes](#reason-codes)), `codes` when it collected several problems, and `reason`.
+- **`auth failed`** follows an authentication's refusal, written after the client has its answer, so the answer's timing doesn't depend on the cause. `auth_failure` is one of `no-credentials`, `unknown-scope`, `scope-file-invalid`, `wrong-token`, `token-expired`, `peer-not-allowed`, `names-another`, `certificate-not-pinned`, `certificate-expired` and `token-on-certificate-listener`, with `claimed_scope` (cut to 64) and `source`. A client is told none of it: its answer is always `auth.rejected`. A token is never logged, in any line.
+- **Streams** (a request upgraded to a connection of its own: attach, exec, a builder's dial-stdio): `stream opened`, then `stream closed` with `duration_ms`, `bytes_in`, `bytes_out` and `by`. `by` is `ended` (the client or Docker closed it) or `revoked` (its scope no longer allows it). Followed logs are an ordinary answer, logged as `allowed`.
+- Values a client chose are JSON-escaped, so a line can't be split or forged, and cut short.
+
+To keep refusals apart, for an audit trail or alerts, filter them where the log is shipped. For example `jq -c 'select(.msg == "refused" or .msg == "auth failed")'`, or with journald, `journalctl -u yorvogate -o cat | jq -c 'select(.level == "WARN")'`. Every refusal and every authentication failure is a WARN line, and nothing else is.
