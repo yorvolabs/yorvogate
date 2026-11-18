@@ -116,7 +116,27 @@ type refusal struct {
 	logged []any
 	// Seconds to wait before retrying, when the refusal is only for now
 	retryAfter int
+	// An authentication failure's cause, logged once the client has its answer (so the answer's time
+	// doesn't depend on it): its fields
+	cause func() []any
 }
+
+// authFailed is an authentication's refusal: auth.rejected, whatever the cause, logged afterwards.
+func authFailed(status int, cause func() string, claimed string, format string, args ...any) *refusal {
+	r := refuse(status, CodeAuthRejected, format, args...)
+	r.cause = func() []any {
+		fields := []any{"auth_failure", cause()}
+		if claimed != "" {
+			fields = append(fields, "claimed_scope", cut(claimed, 64))
+		}
+
+		return fields
+	}
+
+	return r
+}
+
+func because(cause string) func() string { return func() string { return cause } }
 
 func (r *refusal) Error() string { return r.reason }
 
@@ -161,6 +181,12 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		answer(w, refused.status, refused.code, refused.reason)
 
+		// Why authentication failed, once the client has its answer
+		if refused.cause != nil {
+			_ = http.NewResponseController(w).Flush()
+			entry.Warn("auth failed", refused.cause()...)
+		}
+
 		return
 	}
 
@@ -197,7 +223,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 	// A trusted client's certificate first: an expired one gets nothing but this, whatever it asks
 	if g.listener.Mode == config.Trusted && g.listener.MutualTLS() {
 		if c, ok := credentialOf(r.TLS); !ok || !g.tls.admits(c, nil) {
-			return nil, nil, refuse(http.StatusUnauthorized, CodeAuthRejected, "the client certificate has expired, or its CA is no longer this listener's: connect again with a current one")
+			return nil, nil, authFailed(http.StatusUnauthorized, because("certificate-expired"), "", "the client certificate has expired, or its CA is no longer this listener's: connect again with a current one")
 		}
 	}
 
@@ -337,11 +363,12 @@ func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 	}
 
 	if !g.listener.SocketBound() {
-		s, err := g.scopes.Authenticate(r.Header.Get(ScopeHeader), r.Header.Get(TokenHeader))
+		claimed, sent := r.Header.Get(ScopeHeader), r.Header.Get(TokenHeader)
+		s, err := g.scopes.Authenticate(claimed, sent)
 		// A scope file that isn't valid is refused as a scope that isn't there, and in the same
-		// work: why is in the reload's log, not each request's.
+		// work: why is logged after the answer.
 		if errors.Is(err, scope.ErrUnknown) {
-			return nil, refuse(http.StatusUnauthorized, CodeAuthRejected, "no such scope, or not its token")
+			return nil, authFailed(http.StatusUnauthorized, func() string { return g.scopes.WhyRejected(claimed, sent) }, claimed, "no such scope, or not its token")
 		}
 
 		if err != nil {
@@ -351,10 +378,10 @@ func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 		// Its token proved, the connection's user must be one the scope lists, when it lists any
 		if uid, known := peerOf(r.Context()); !s.PeerAllowed(uid, known) {
 			if !known {
-				return nil, refuse(http.StatusForbidden, CodeAuthRejected, "scope %s takes only connections from its peer_uids, and this connection's user isn't known", s.Name)
+				return nil, authFailed(http.StatusForbidden, because("peer-not-allowed"), s.Name, "scope %s takes only connections from its peer_uids, and this connection's user isn't known", s.Name)
 			}
 
-			return nil, refuse(http.StatusForbidden, CodeAuthRejected, "this connection's user (UID %d) isn't one of scope %s's peer_uids", uid, s.Name)
+			return nil, authFailed(http.StatusForbidden, because("peer-not-allowed"), s.Name, "this connection's user (UID %d) isn't one of scope %s's peer_uids", uid, s.Name)
 		}
 
 		return s, nil
@@ -366,12 +393,12 @@ func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 	}
 
 	if named := r.Header.Get(ScopeHeader); named != "" && named != name {
-		return nil, refuse(http.StatusForbidden, CodeAuthRejected, "this socket is scope %s's: a request on it can't name another", name)
+		return nil, authFailed(http.StatusForbidden, because("names-another"), named, "this socket is scope %s's: a request on it can't name another", name)
 	}
 
 	s, err := g.scopes.Get(name)
 	if err != nil {
-		return nil, refuse(http.StatusForbidden, CodeAuthRejected, "scope %s isn't valid now: its socket closes", name)
+		return nil, authFailed(http.StatusForbidden, because("scope-file-invalid"), name, "scope %s isn't valid now: its socket closes", name)
 	}
 
 	return s, nil
@@ -392,7 +419,7 @@ func tokenDigest(l config.Listener, r *http.Request) string {
 // is the only credential there, so a token isn't looked at, and a request that sends one is refused.
 func (g *Gate) certified(r *http.Request) (*scope.Scope, error) {
 	if r.Header.Get(TokenHeader) != "" {
-		return nil, refuse(http.StatusBadRequest, CodeAuthRejected, "this listener takes a client certificate, not a token: don't send %s", TokenHeader)
+		return nil, authFailed(http.StatusBadRequest, because("token-on-certificate-listener"), r.Header.Get(ScopeHeader), "this listener takes a client certificate, not a token: don't send %s", TokenHeader)
 	}
 
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
@@ -401,11 +428,11 @@ func (g *Gate) certified(r *http.Request) (*scope.Scope, error) {
 
 	name, err := certificateScope(r.TLS.PeerCertificates[0])
 	if err != nil {
-		return nil, refuse(http.StatusUnauthorized, CodeAuthRejected, "the client certificate names no scope: %s", err)
+		return nil, authFailed(http.StatusUnauthorized, because("unknown-scope"), "", "the client certificate names no scope: %s", err)
 	}
 
 	if named := r.Header.Get(ScopeHeader); named != "" && named != name {
-		return nil, refuse(http.StatusForbidden, CodeAuthRejected, "this client certificate is scope %s's: a request with it can't name another", name)
+		return nil, authFailed(http.StatusForbidden, because("names-another"), named, "this client certificate is scope %s's: a request with it can't name another", name)
 	}
 
 	// Pinned, not expired, and from a CA still the listener's, on each request: a connection kept
@@ -414,12 +441,18 @@ func (g *Gate) certified(r *http.Request) (*scope.Scope, error) {
 	c, verified := credentialOf(r.TLS)
 
 	if err != nil || !verified || !g.tls.admits(c, s) {
-		refused := refuse(http.StatusUnauthorized, CodeAuthRejected, "no such scope, or not its certificate")
-		if err == nil && verified && s.Pinned(c.key) {
-			refused.logged = []any{"why", "the client certificate expired, or its CA is no longer the listener's"}
+		cause := func() string {
+			switch {
+			case err != nil:
+				return g.scopes.Missing(name)
+			case verified && s.Pinned(c.key):
+				return "certificate-expired" // or its CA is no longer the listener's
+			default:
+				return "certificate-not-pinned"
+			}
 		}
 
-		return nil, refused
+		return nil, authFailed(http.StatusUnauthorized, cause, name, "no such scope, or not its certificate")
 	}
 
 	return s, nil
