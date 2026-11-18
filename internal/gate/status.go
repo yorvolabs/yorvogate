@@ -46,8 +46,8 @@ type scopeStatus struct {
 // SHA-256, absent until it has none; a wait that ends without it answers 408 and "matched": false.
 func (g *Gate) own(w http.ResponseWriter, r *http.Request, entry *slog.Logger) {
 	if g.listener.Mode != config.Trusted {
-		entry.Warn("refused", "status", http.StatusForbidden, "reason", "YorvoGate's own endpoints")
-		answer(w, http.StatusForbidden, "", "YorvoGate's own endpoints are a trusted listener's only")
+		entry.Warn("refused", "status", http.StatusForbidden, "code", CodeListenerDenies, "reason", "YorvoGate's own endpoints", "decision_ms", decisionMS(r.Context()))
+		answer(w, http.StatusForbidden, CodeListenerDenies, "YorvoGate's own endpoints are a trusted listener's only")
 
 		return
 	}

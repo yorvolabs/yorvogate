@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/yorvolabs/yorvogate/internal/config"
@@ -164,6 +165,29 @@ func older(a, b string) bool {
 	bj, _ := strconv.Atoi(bn)
 
 	return aj < bj
+}
+
+// Suspect is told of a request Docker didn't answer (err: why), and marks Docker down only on
+// evidence that it's Docker, not the request: a dial it refused (or no socket: it's restarting), or
+// a _ping that fails now too. Docker hanging up on one request (a scope's malformed one, say) leaves
+// its _ping answering, so no scope can make every other's requests wait.
+func (d *Defaults) Suspect(err error) {
+	if d == nil || err == nil {
+		return
+	}
+
+	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT) {
+		d.MarkDown()
+
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if d.docker.ping(ctx) != nil {
+		d.MarkDown()
+	}
 }
 
 // MarkDown is told when Docker didn't answer: until its defaults are read again (Watch, about every

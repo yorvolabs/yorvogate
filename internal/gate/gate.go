@@ -112,7 +112,7 @@ func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.
 	g := &Gate{config: c, listener: l, upstream: upstream, registry: scopes, defaults: defaults, log: log.With("listener", l.Name)}
 	// A trusted listener's own lookups too: scope status lists a scope's taken names
 	g.docker = NewDocker(c.UpstreamSocket())
-	g.docker.onDown = defaults.MarkDown
+	g.docker.onDown = defaults.Suspect
 
 	if l.Mode == config.Scoped {
 		g.scopes = scopes.Store(l.Name)
@@ -244,9 +244,13 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Docker not answering: counted, and it marks Docker down, so no request after it meets the
 	// defaults read before (daemon.go)
-	forward = forward.WithContext(context.WithValue(forward.Context(), dockerFailedKey{}, func() {
+	forward = forward.WithContext(context.WithValue(forward.Context(), dockerFailedKey{}, func(err error) {
 		g.metrics.dockerFailed(g.listener.Name)
-		g.defaults.MarkDown()
+
+		// A client that went isn't Docker down
+		if r.Context().Err() == nil {
+			g.defaults.Suspect(err)
+		}
 	}))
 
 	switch {
@@ -302,7 +306,8 @@ func (a *answerTimer) WriteHeader(code int) {
 
 func (a *answerTimer) Unwrap() http.ResponseWriter { return a.ResponseWriter }
 
-// dockerFailedKey holds, in a forwarded request's context, what to do when Docker doesn't answer it.
+// dockerFailedKey holds, in a forwarded request's context, what to do when Docker doesn't answer it
+// (with why).
 type dockerFailedKey struct{}
 
 // undecided is the refusal of a request that couldn't be decided on. A client of a listener with an

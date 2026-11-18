@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -179,11 +182,11 @@ func TestMetrics(t *testing.T) {
 		values := checkExposition(t, text)
 
 		for series, want := range map[string]float64{
-			`yorvogate_requests_total{listener="sites",endpoint="container.list",outcome="allowed"}`:  1,
+			`yorvogate_requests_total{listener="sites",endpoint="container.list",outcome="allowed"}`:   1,
 			`yorvogate_requests_total{listener="sites",endpoint="container.create",outcome="refused"}`: 1,
 			`yorvogate_auth_failures_total{listener="sites",cause="wrong-token"}`:                      1,
-			`yorvogate_docker_up{}`:                                                                    1,
-			`yorvogate_docker_defaults_safe{}`:                                                         1,
+			`yorvogate_docker_up{}`:            1,
+			`yorvogate_docker_defaults_safe{}`: 1,
 		} {
 			if values[series] != want {
 				t.Errorf("scope_labels %v: %s = %v, want %v", scopeLabels, series, values[series], want)
@@ -341,5 +344,26 @@ func TestAuthFailedLinesAreLimited(t *testing.T) {
 	// The next minute: what was dropped is said once
 	if _, dropped := a.allow("203.0.113.9:1", now.Add(time.Minute)); dropped != 100+50+10000-authLinesGlobal {
 		t.Errorf("dropped: %d", dropped)
+	}
+}
+
+// Docker hanging up on one request (while its _ping answers) isn't Docker down: no other scope's
+// requests are made to wait, so no scope can stall the others by provoking it.
+func TestOneRequestDockerDropsIsntDockerDown(t *testing.T) {
+	d := startDocker(t)
+	log, _ := checkedLog(t)
+	_, defaults := gateAndDefaults(t, d, "sites", log)
+
+	defaults.Suspect(io.ErrUnexpectedEOF) // Docker's _ping answers
+
+	if _, err := defaults.current(); err != nil {
+		t.Errorf("a dropped request marked Docker down: %v", err)
+	}
+
+	// But a refused dial is Docker gone
+	defaults.Suspect(&net.OpError{Op: "dial", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)})
+
+	if _, err := defaults.current(); err == nil {
+		t.Error("a refused dial left Docker up")
 	}
 }

@@ -53,3 +53,9 @@ refused() {
 	fi
 }
 
+# keep_log copies a gate's log to the folder run.sh mounts (/out), named for its suite: the
+# conformance job then checks every line against the log's schema (TestConformanceLogs).
+keep_log() { # file name
+	[ -d /out ] && [ -f "$1" ] && cp "$1" "/out/$2.log"
+	return 0
+}

@@ -13,6 +13,10 @@ api:                                    # Docker API versions accepted (optional
 body_limit: 1048576                     # the largest body read whole, in bytes (4096 to 64 MiB)
 load_limit: 8589934592                  # the largest image archive a scope loads (1 MiB to 256 GiB)
 state_file: /var/lib/yorvogate/state.json  # scopes' last valid claims, kept across restarts (optional; see below)
+# admin:                                # metrics, health and readiness (optional; see Monitoring)
+#   address: unix:///run/yorvogate/admin.sock  # or tcp://127.0.0.1:9100: loopback only
+#   socket_group: "2002"                # for a unix socket
+#   scope_labels: false                 # true: refusals counted per scope too
 # spool:                                # image loads in flight, every scope's together (optional; see The image spool)
 #   dir: /var/lib/yorvogate/spool       # on disk; by default spool/ beside state_file
 #   limit: 8589934592                   # the bytes they keep there together (by default load_limit)
@@ -523,6 +527,41 @@ A refusal that collects several problems (a container's, network's or volume's c
 | `scope.not-found` | The object isn't the scope's: answered as one that doesn't exist. |
 | `scope.object-not-own` | What the request joins or mounts (a container, network or volume) isn't the scope's. |
 | `stream.upgrade-only` | A stream allowed only as an HTTP upgrade. |
+
+## Monitoring
+
+The optional `admin` listener answers an operator's monitoring, never Docker's API. It's a unix socket (`socket_group` as for any listener), or a loopback TCP address only (`tcp://127.0.0.1:9100`, `tcp://[::1]:9100`). Prefer the unix socket: in a container with no network (`network_mode: none`), loopback TCP is reachable only from inside it. Its answers hold no secret, and name no scope unless `scope_labels` is on. GET only:
+
+- **`/healthz`**: `ok` while the process serves. Use it for liveness: to restart YorvoGate, and for what starts after it (Compose's `depends_on` with `condition: service_healthy`).
+- **`/readyz`**: 200 when scoped requests can be served now, else 503, with each check and why not ([schema](../schemas/yorvogate-readiness.v1.schema.json)):
+
+  ```
+  {"ready": false, "checks": {"docker": "ok", "defaults": "ok", "api_versions": "Docker serves API 1.57 to 1.60, YorvoGate 1.44 to 1.56: no version is both's", "scopes": "ok", "spool": "ok"}}
+  ```
+
+  The checks: Docker answers its `_ping` (asked at most once a second, whatever scrapes), its defaults are read and safe, its API versions overlap YorvoGate's, every scopes folder can be read, the spool's folder can be written. Use it to route and to alert. **Never restart on it**: a Docker that's down, or whose defaults are unsafe, isn't fixed by restarting YorvoGate.
+- **`/metrics`**, in Prometheus's text format:
+
+| Metric | Type | Labels |
+|---|---|---|
+| `yorvogate_requests_total` | counter | `listener`, `endpoint` (the [endpoint's name](#what-a-scope-may-do), or `unknown`), `outcome` (`allowed`, `refused`) |
+| `yorvogate_refusals_total` | counter | `listener`, `code` ([reason codes](#reason-codes)), and `scope` with `scope_labels` |
+| `yorvogate_auth_failures_total` | counter | `listener`, `cause` (as the log's `auth_failure`) |
+| `yorvogate_docker_errors_total` | counter | `listener`: requests Docker didn't answer |
+| `yorvogate_auth_log_dropped_total` | counter | `auth failed` log lines dropped by their limits (below) |
+| `yorvogate_decision_seconds` | histogram | `listener`: how long YorvoGate took to decide |
+| `yorvogate_docker_seconds` | histogram | `listener`: how long Docker took to start its answer (streams excluded) |
+| `yorvogate_streams_open` | gauge | `listener` |
+| `yorvogate_spool_bytes`, `yorvogate_spool_loads` | gauge | `of` (`used`, `limit`) |
+| `yorvogate_scopes` | gauge | `listener`, `state` (`loaded`, `refused`, `reserved`) |
+| `yorvogate_docker_up`, `yorvogate_docker_defaults_safe` | gauge | — |
+| `yorvogate_build_info` | gauge | `version`, `api_min`, `api_max` |
+
+Every label's values are bounded, so the series don't grow with traffic. Without `scope_labels`, they don't grow with scopes either. With it, refusals are counted per scope and code, which is what to look at per site. To scrape the unix socket, give Prometheus the socket (or a sidecar such as socat), or use loopback TCP on the host. Alerts worth having: `yorvogate_docker_up == 0`, `yorvogate_docker_defaults_safe == 0`, a rise of `yorvogate_refusals_total` for a code, and `/readyz` failing for minutes.
+
+**When Docker doesn't answer** (it's restarting), YorvoGate treats Docker's defaults as unread from that request on. Scoped requests are refused (503, `daemon.defaults-unread`) until it has read them again, which it tries about every second. So no request is forwarded under the defaults of the Docker before a restart, even one shorter than the 60-second read.
+
+**`auth failed` lines are limited:** at most 10 a minute from one source (an IPv6 source counts by its /64) and 600 a minute in all. The rest are counted (`yorvogate_auth_log_dropped_total`), and one `auth failed lines dropped` line says how many, once a minute. The refusals themselves, and `yorvogate_auth_failures_total`, are never limited.
 
 ## Logs
 

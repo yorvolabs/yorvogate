@@ -19,9 +19,9 @@ import (
 type Docker struct {
 	client *http.Client
 	host   hostPlatform
-	// Told when Docker didn't answer a lookup (a gate's: Docker's defaults are then read again
-	// before anything is forwarded)
-	onDown func()
+	// Told when Docker didn't answer a lookup, and why (a gate's: Docker's defaults are read again
+	// before anything is forwarded, when it's Docker that's down)
+	onDown func(error)
 }
 
 // NewDocker asks Docker through its unix socket.
@@ -186,7 +186,7 @@ func (d *Docker) fetch(ctx context.Context, version, path string, into any) (boo
 	res, err := d.client.Do(req)
 	if err != nil {
 		if d.onDown != nil && ctx.Err() == nil {
-			d.onDown()
+			d.onDown(err)
 		}
 
 		return false, fmt.Errorf("asking Docker: %w", err)

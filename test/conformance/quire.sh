@@ -268,6 +268,7 @@ works "the orchestrator removes the database" orchestrator rm -f ygq-db-jane
 if [ -z "$(direct ps -aq --filter label=com.docker.compose.project=ygq-jane)" ]; then ok "nothing of jane's is left"; else ko "jane's containers are left"; fi
 
 say ""
+keep_log "$dir/yorvogate.log" quire
 say "$passed passed, $failed failed"
 grep '"refused"' "$dir/yorvogate.log" | grep -i 'status":5' | tail -3
 [ "$failed" = 0 ]

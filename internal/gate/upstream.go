@@ -47,6 +47,8 @@ func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
 			pr.Out.Host = "docker"
 		},
 		Transport: transport,
+		// What the proxy itself says (a body cut short), as a JSON line like every other
+		ErrorLog: slog.NewLogLogger(log.Handler(), slog.LevelWarn),
 		// A rule may change Docker's answer before the client sees it (a list or an inspection with
 		// other scopes' objects left out).
 		ModifyResponse: func(res *http.Response) error {
@@ -96,8 +98,8 @@ func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Error("Docker didn't answer", "method", r.Method, "path", r.URL.Path, "error", err)
 
-			if failed, ok := r.Context().Value(dockerFailedKey{}).(func()); ok {
-				failed()
+			if failed, ok := r.Context().Value(dockerFailedKey{}).(func(error)); ok {
+				failed(err)
 			}
 
 			answer(w, http.StatusBadGateway, CodeDockerUnreachable, "Docker didn't answer")
