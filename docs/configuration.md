@@ -13,6 +13,12 @@ api:                                    # Docker API versions accepted (optional
 body_limit: 1048576                     # the largest body read whole, in bytes (4096 to 64 MiB)
 load_limit: 8589934592                  # the largest image archive a scope loads (1 MiB to 256 GiB)
 state_file: /var/lib/yorvogate/state.json  # scopes' last valid claims, kept across restarts (optional; see below)
+# spool:                                # image loads in flight, every scope's together (optional; see The image spool)
+#   dir: /var/lib/yorvogate/spool       # on disk; by default spool/ beside state_file
+#   limit: 8589934592                   # the bytes they keep there together (by default load_limit)
+#   loads: 2                            # how many run at once (by default half the CPUs, at least 1)
+#   ratio: 16                           # what an archive may decompress to: at most 16 times its size (0: off)
+#   unpacked: 34359738368               # ...and at most this, whatever its size (by default 4 × load_limit)
 # daemon: {without_lsm: true}           # accept a Docker with neither AppArmor nor SELinux (see Docker's defaults)
 
 listeners:                              # at least one
@@ -176,7 +182,7 @@ Which registries the daemon may reach for a scope, and which platforms a scope m
 | Images: inspect, history, save, distribution | By name or ID, when the image has a name the scope may see (not in another's protected namespace). An image with no name left, such as the one a rebuild replaced, is no one's. A distribution inspection reaches only a registry in [`pulls.registries`](#pulls-scoped-listeners) |
 | Images: pull | By name, from a registry in [`pulls.registries`](#pulls-scoped-listeners), of the host's platform or one in `pulls.platforms`, not into another's protected namespace; never an import (`fromSrc`) |
 | Images: tag, delete | Only names in its own image namespaces (its scope file's `images`): any other name may be another's to run |
-| Images: load | The archive is kept on disk (up to `load_limit`) while every name it gives, whichever image store Docker has, is checked: only names in its own namespaces. That's `manifest.json`'s tags and `repositories` (the classic store), and each image `index.json` lists, by its `io.containerd.image.name` or else its `org.opencontainers.image.ref.name` as it is, a bare one too (the containerd store). The archive must also hold every blob its `index.json` and `manifest.json` reach (nested indexes, manifests, configs, layers, attestations), each matching its digest and size: an archive that refers to content it doesn't hold is refused, naming the first digest. A pulled multi-platform image saved without `--platform` names platforms it lacks, so save it with `docker save --platform linux/<arch>`, or pull every platform first. Plain, gzip and bzip2 archives (xz and zstd are refused) |
+| Images: load | The archive is kept in [the image spool](#the-image-spool) (up to `load_limit`, within the spool's bounds) while every name it gives, whichever image store Docker has, is checked: only names in its own namespaces. That's `manifest.json`'s tags and `repositories` (the classic store), and each image `index.json` lists, by its `io.containerd.image.name` or else its `org.opencontainers.image.ref.name` as it is, a bare one too (the containerd store). The archive must also hold every blob its `index.json` and `manifest.json` reach (nested indexes, manifests, configs, layers, attestations), each matching its digest and size: an archive that refers to content it doesn't hold is refused, naming the first digest. A pulled multi-platform image saved without `--platform` names platforms it lacks, so save it with `docker save --platform linux/<arch>`, or pull every platform first. Plain, gzip and bzip2 archives (xz and zstd are refused) |
 | Images: search | On a registry in [`pulls.registries`](#pulls-scoped-listeners) |
 | Everything else | No: push, prune, commit, import, build, events, auth, plugins, swarm, BuildKit sessions |
 
@@ -285,6 +291,16 @@ The way out, when there's one, is a proxy the orchestrator runs: on a shared int
 - It only keeps names from other scopes. It's read only to refuse a scope a name, label or image another scope held, never to let a scope do anything its own file doesn't allow: an edited state file can deny a scope names, never give one any.
 - A record goes when its scope file does. While a scopes folder doesn't exist at the start, every record is kept.
 - A state file that's missing, or that YorvoGate can't trust (others can write it, or it isn't valid), holds nothing. `yorvogate check` and the logs say so, and `check` warns when there's no `state_file` at all.
+
+## The image spool
+
+A scope's image archive is kept on disk while it's checked, then forwarded from there. Every load, every scope's on every listener together, shares one spool, so no scope can take the disk, memory or CPU the others need:
+
+- **Its folder** (`spool.dir`). It must be on disk, not a tmpfs, and YorvoGate's own: it's made (0700) at the start, and what a previous run left there is removed. By default it's `spool/` beside `state_file`, so the state file's volume holds it, else `/var/lib/yorvogate/spool`. `serve` doesn't start, and `check` refuses, when it can't be made or written and a scoped listener could load images. With `read_only: true`, mount a volume there or at the state file's folder.
+- **Its bytes** (`spool.limit`, by default `load_limit`): what every load in flight keeps there together, reserved as the archive comes (all at once when the client says its size). A load that doesn't fit now is refused with 503 and `Retry-After`. One that could never fit, larger than `spool.limit` by itself, is refused with 413. `load_limit` bounds one archive, `spool.limit` all of them: with both at 8 GiB, one 8 GiB load or several smaller ones run at once.
+- **Its turns** (`spool.loads`, by default half the CPUs, at least one): how many loads run at once, each scope one at a time. A load waits at most 30 seconds for its turn, having read nothing, then is refused with 503 and `Retry-After`.
+- **What an archive decompresses to.** A gzip or bzip2 archive is refused (413) once it has decompressed to more than `spool.ratio` times its own size (by default 16, at least 64 MiB; 0 turns it off), or to more than `spool.unpacked` (by default 4 × `load_limit`), and once it has more than 100,000 entries. It's refused as soon as it passes them, before any name is checked. A `docker save` gzipped is a few times its size, so only an archive built to decompress far (or an image of mostly empty files: raise `spool.ratio`) is refused.
+- **Time.** An upload that sends nothing for 60 seconds is ended (400), and checking an archive may take at most 10 minutes. Either way, its file, bytes and turn are freed.
 
 ## Docker's defaults
 

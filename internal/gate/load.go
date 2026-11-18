@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/bzip2"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 // loadLimiter lets a scope load one image archive at a time. Reading an archive decompresses it,
@@ -41,6 +43,13 @@ func newLoadLimiter() *loadLimiter {
 // acquire blocks until the scope has no other load in flight, and returns a function that releases
 // the slot. A load is counted before it waits, so a waiting one keeps the entry.
 func (l *loadLimiter) acquire(scope string) func() {
+	release, _ := l.acquireBy(context.Background(), nil, scope)
+
+	return release
+}
+
+// acquireBy is acquire, giving up when expired fires or ctx ends (then it holds nothing).
+func (l *loadLimiter) acquireBy(ctx context.Context, expired <-chan time.Time, scope string) (func(), error) {
 	l.mu.Lock()
 	slot, ok := l.sem[scope]
 	if !ok {
@@ -50,11 +59,7 @@ func (l *loadLimiter) acquire(scope string) func() {
 	slot.holders++
 	l.mu.Unlock()
 
-	slot.ch <- struct{}{}
-
-	return func() {
-		<-slot.ch
-
+	leave := func() {
 		l.mu.Lock()
 		slot.holders--
 		if slot.holders == 0 {
@@ -62,6 +67,23 @@ func (l *loadLimiter) acquire(scope string) func() {
 		}
 		l.mu.Unlock()
 	}
+
+	select {
+	case slot.ch <- struct{}{}:
+	case <-expired:
+		leave()
+
+		return nil, errors.New("the scope's other load didn't end in time")
+	case <-ctx.Done():
+		leave()
+
+		return nil, ctx.Err()
+	}
+
+	return func() {
+		<-slot.ch
+		leave()
+	}, nil
 }
 
 // loading is how many scopes have a load in flight or waiting.
@@ -74,38 +96,73 @@ func (l *loadLimiter) loading() int {
 
 // load checks an image archive before Docker loads it: the names it gives its images must be in the
 // scope's own namespaces, or loading it would replace what another scope (or anything else) runs
-// under that name. The archive is kept on disk while it's read, then forwarded from there.
+// under that name. The archive is kept in the spool while it's read, then forwarded from there.
+//
+// What a load may hold is bounded before it holds it: its turn (spool.loads, one per scope), its
+// bytes on disk (spool.limit, reserved as they come), what the archive decompresses to and how many
+// entries it has (refused as soon as it passes them, before any name is checked), and time (an
+// upload that goes silent, a check that runs long).
 func (s *scoped) load() error {
-	release := s.loads.acquire(s.scope.Name)
+	if s.length > s.loadLimit {
+		return refuse(http.StatusRequestEntityTooLarge, "image.load: the archive is larger than %d bytes", s.loadLimit)
+	}
 
-	file, err := os.CreateTemp("", "yorvogate-load-*")
+	held := &reservation{spool: s.spool}
+	if s.length > s.spool.limit {
+		return held.reserve(s.length)
+	}
+
+	release, err := s.spool.turn(s.ctx, s.scope.Name)
 	if err != nil {
-		release()
-
 		return err
 	}
 
 	s.cleanup = func() {
+		held.release()
 		release()
+	}
+
+	// Its whole size at once when it says it, or as it comes
+	if s.length > 0 {
+		if err := held.reserve(s.length); err != nil {
+			return err
+		}
+	}
+
+	file, err := s.spool.spoolFile()
+	if err != nil {
+		return err
+	}
+
+	s.cleanup = func() {
 		_ = file.Close()
 		_ = os.Remove(file.Name())
+		held.release()
+		release()
 	}
 
-	n, err := io.Copy(file, io.LimitReader(s.stream, s.loadLimit+1))
+	onSpool(s.scope.Name)
+
+	stream := newStalled(s.stream, s.stream.Close, readDeadline(s.ctx))
+	defer stream.stop()
+
+	n, err := s.spoolTo(file, stream, held)
 	if err != nil {
-		return refuse(http.StatusBadRequest, "image.load: the archive couldn't be read: %v", err)
-	}
-
-	if n > s.loadLimit {
-		return refuse(http.StatusRequestEntityTooLarge, "image.load: the archive is larger than %d bytes", s.loadLimit)
+		return err
 	}
 
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 
-	names, held, err := archiveNames(file)
-	if err != nil {
+	names, contents, err := archiveNames(file, archiveBounds{unpacked: s.unpacked(n), deadline: time.Now().Add(loadCheck)})
+
+	var bound *boundError
+
+	switch {
+	case errors.As(err, &bound):
+		return refuse(http.StatusRequestEntityTooLarge, "image.load: %v", bound)
+	case err != nil:
 		return refuse(http.StatusBadRequest, "image.load: %v", err)
 	}
 
@@ -117,7 +174,7 @@ func (s *scoped) load() error {
 
 	// And it holds everything it refers to, each blob with its digest: else its names could be given
 	// to content Docker already has, which may be another scope's.
-	if err := held.complete(); err != nil {
+	if err := contents.complete(); err != nil {
 		return refuse(http.StatusBadRequest, "image.load: %v", err)
 	}
 
@@ -130,6 +187,87 @@ func (s *scoped) load() error {
 	return nil
 }
 
+// spoolTo copies the archive into its file, reserving each piece of the budget before it's written
+// (unless the whole was reserved at once). It gives the archive's size.
+func (s *scoped) spoolTo(file *os.File, stream io.Reader, held *reservation) (int64, error) {
+	buf := make([]byte, 256<<10)
+	reserved := s.length > 0
+
+	var n int64
+
+	for {
+		got, err := stream.Read(buf)
+		if got > 0 {
+			if n+int64(got) > s.loadLimit {
+				return n, refuse(http.StatusRequestEntityTooLarge, "image.load: the archive is larger than %d bytes", s.loadLimit)
+			}
+
+			if !reserved {
+				if err := held.reserve(int64(got)); err != nil {
+					return n, err
+				}
+			}
+
+			if _, err := file.Write(buf[:got]); err != nil {
+				return n, err
+			}
+
+			n += int64(got)
+		}
+
+		switch {
+		case errors.Is(err, io.EOF):
+			return n, nil
+		case errors.Is(err, errStalled):
+			return n, refuse(http.StatusBadRequest, "image.load: %v (nothing for %v)", err, loadStall)
+		case err != nil:
+			return n, refuse(http.StatusBadRequest, "image.load: the archive couldn't be read: %v", err)
+		}
+	}
+}
+
+// unpacked is what an archive of n bytes may decompress to.
+func (s *scoped) unpacked(n int64) int64 {
+	return s.spoolConfig.UnpackedLimit(n)
+}
+
+// The most entries an archive may have: a docker save writes about one per blob, and a few more (four
+// per layer on the classic store).
+const maxEntries = 100000
+
+// archiveBounds are what reading an archive may cost.
+type archiveBounds struct {
+	unpacked int64
+	deadline time.Time
+}
+
+// boundError is an archive past one of its bounds.
+type boundError struct{ reason string }
+
+func (e *boundError) Error() string { return e.reason }
+
+// bounded counts what the decompressed archive gives, and fails once it passes its bound, or the
+// check its deadline.
+type bounded struct {
+	r      io.Reader
+	bounds archiveBounds
+	read   int64
+}
+
+func (b *bounded) Read(p []byte) (int, error) {
+	n, err := b.r.Read(p)
+	b.read += int64(n)
+
+	switch {
+	case b.read > b.bounds.unpacked:
+		return n, &boundError{fmt.Sprintf("the archive decompresses to more than %d bytes (spool.unpacked, spool.ratio)", b.bounds.unpacked)}
+	case !b.bounds.deadline.IsZero() && time.Now().After(b.bounds.deadline):
+		return n, &boundError{fmt.Sprintf("the archive took longer than %v to check", loadCheck)}
+	}
+
+	return n, err
+}
+
 // archiveNames reads the names an image archive gives its images, wherever a Docker reads them,
 // whichever its image store: a Docker archive's manifest.json (RepoTags) and repositories (the
 // classic store's legacy format, until Docker 28), an OCI archive's index.json (the containerd
@@ -138,7 +276,7 @@ func (s *scoped) load() error {
 //
 // It also reads every plain file, hashing it (contents), so the caller can check the archive holds
 // everything it refers to.
-func archiveNames(r io.Reader) ([]string, *contents, error) {
+func archiveNames(r io.Reader, bounds archiveBounds) ([]string, *contents, error) {
 	buffered := bufio.NewReader(r)
 	magic, _ := buffered.Peek(6)
 
@@ -158,7 +296,12 @@ func archiveNames(r io.Reader) ([]string, *contents, error) {
 		return nil, nil, errors.New("xz and zstd archives aren't allowed (send it plain, or gzip)")
 	}
 
+	if bounds.unpacked > 0 {
+		archive = &bounded{r: archive, bounds: bounds}
+	}
+
 	reader := tar.NewReader(archive)
+	entries := 0
 	held := newContents()
 	paths := map[string]bool{}
 	var names []string
@@ -170,7 +313,17 @@ func archiveNames(r io.Reader) ([]string, *contents, error) {
 		}
 
 		if err != nil {
+			var bound *boundError
+			if errors.As(err, &bound) {
+				return nil, nil, bound
+			}
+
 			return nil, nil, fmt.Errorf("not an image archive: %w", err)
+		}
+
+		// Before its entry is kept: the maps of what the archive holds grow by one per entry.
+		if entries++; entries > maxEntries {
+			return nil, nil, &boundError{fmt.Sprintf("the archive has more than %d entries", maxEntries)}
 		}
 
 		// A name is relative and goes nowhere up: an extractor that joins "/manifest.json" or
@@ -203,6 +356,11 @@ func archiveNames(r io.Reader) ([]string, *contents, error) {
 		}
 
 		if err := held.add(name, header.Size, reader); err != nil {
+			var bound *boundError
+			if errors.As(err, &bound) {
+				return nil, nil, bound
+			}
+
 			return nil, nil, err
 		}
 

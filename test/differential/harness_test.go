@@ -89,6 +89,7 @@ func startGate(t testing.TB, upstream string) (string, *scope.Registry) {
 
 	c, err := config.Parse([]byte(daemon + `
 upstream: unix://` + upstream + `
+spool: {dir: ` + t.TempDir() + `}
 listeners:
   - name: sites
     address: tcp://127.0.0.1:2376

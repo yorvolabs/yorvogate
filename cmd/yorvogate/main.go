@@ -193,6 +193,12 @@ func check(path string, docker bool, stdout io.Writer) error {
 		return err
 	}
 
+	// Where image loads are kept while they're checked: serve makes it, so check asks only whether it
+	// could (refused the same way).
+	if err := gate.CheckSpool(c); err != nil {
+		return err
+	}
+
 	for _, d := range c.Deprecations() {
 		fmt.Fprintf(stdout, "warning: %s\n", d)
 	}
@@ -397,6 +403,10 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 
 	certificates, err := gate.LoadTLS(c, log)
 	if err != nil {
+		return err
+	}
+
+	if err := gate.PrepareSpool(c); err != nil {
 		return err
 	}
 

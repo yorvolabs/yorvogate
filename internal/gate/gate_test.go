@@ -569,6 +569,7 @@ func gateAndDefaults(t testing.TB, d *docker, listener string, log *slog.Logger)
 upstream: unix://` + d.socket + `
 body_limit: 4096
 load_limit: 1048576
+spool: {dir: ` + t.TempDir() + `}
 listeners:
   - name: server
     address: tcp://127.0.0.1:2375
