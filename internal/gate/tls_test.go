@@ -176,7 +176,7 @@ listeners:
 	defaults := readDefaults(c)
 
 	for i, l := range c.Listeners {
-		g := New(c, l, NewUpstream(c, log), registry, defaults, log)
+		g := New(c, l, NewUpstream(c, log), registry, defaults, NewSpool(c), log)
 		g.UseTLS(m.set.For(l.Name))
 		m.gates = append(m.gates, g)
 
@@ -483,7 +483,7 @@ func TestATrustedListenersPinnedClient(t *testing.T) {
 
 	raw, _ := net.Listen("tcp", "127.0.0.1:0")
 	log := slog.New(slog.DiscardHandler)
-	g := New(c, c.Listeners[0], NewUpstream(c, log), Registry(c), readDefaults(c), log)
+	g := New(c, c.Listeners[0], NewUpstream(c, log), Registry(c), readDefaults(c), NewSpool(c), log)
 	g.UseTLS(set.For("admin"))
 	server := NewServer(g)
 	go func() { _ = server.Serve(tls.NewListener(raw, set.For("admin").Config())) }()
@@ -736,7 +736,7 @@ func TestATrustedClientIsIssuedDirectly(t *testing.T) {
 
 	raw, _ := net.Listen("tcp", "127.0.0.1:0")
 	log := slog.New(slog.DiscardHandler)
-	g := New(c, c.Listeners[1], NewUpstream(c, log), Registry(c), readDefaults(c), log)
+	g := New(c, c.Listeners[1], NewUpstream(c, log), Registry(c), readDefaults(c), NewSpool(c), log)
 	g.UseTLS(set.For("admin"))
 	server := NewServer(g)
 	go func() { _ = server.Serve(tls.NewListener(raw, set.For("admin").Config())) }()

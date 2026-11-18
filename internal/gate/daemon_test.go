@@ -230,7 +230,7 @@ func TestUnsafeDefaultsRefuseEveryScopedRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	unread := httptest.NewServer(New(c, c.Listeners[0], NewUpstream(c, log), registry, NewDefaults(c), log))
+	unread := httptest.NewServer(New(c, c.Listeners[0], NewUpstream(c, log), registry, NewDefaults(c), NewSpool(c), log))
 	t.Cleanup(unread.Close)
 
 	if status, answer := send(t, unread, "GET", "/_ping", "", asJane); status != http.StatusServiceUnavailable || !strings.Contains(message(t, answer), "haven't been read yet") {

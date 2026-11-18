@@ -193,6 +193,12 @@ func check(path string, docker bool, stdout io.Writer) error {
 		return err
 	}
 
+	// Where image loads are kept while they're checked: serve makes it, so check asks only whether it
+	// could (refused the same way).
+	if err := gate.CheckSpool(c); err != nil {
+		return err
+	}
+
 	for _, d := range c.Deprecations() {
 		fmt.Fprintf(stdout, "warning: %s\n", d)
 	}
@@ -400,6 +406,10 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		return err
 	}
 
+	if err := gate.PrepareSpool(c); err != nil {
+		return err
+	}
+
 	for _, warn := range stateWarnings(c, registry, false) {
 		log.Warn("scopes", "warning", warn)
 	}
@@ -419,6 +429,8 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	defer signal.Stop(hup)
 
 	upstream := gate.NewUpstream(c, log)
+	// One spool for every listener: image loads are bounded across them all
+	spool := gate.NewSpool(c)
 
 	// Docker's defaults, read while scoped listeners serve: until they're read, and while they're
 	// unsafe, scoped requests are refused.
@@ -454,7 +466,7 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	defer stop()
 
 	for _, l := range c.Listeners {
-		g := gate.New(c, l, upstream, registry, defaults, log)
+		g := gate.New(c, l, upstream, registry, defaults, spool, log)
 
 		if l.SocketBound() {
 			sockets, err := gate.NewSockets(g, log)

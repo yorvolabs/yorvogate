@@ -291,3 +291,48 @@ func TestRequirePeerUIDsIsForAUnixAddress(t *testing.T) {
 		}
 	}
 }
+
+// The image spool's defaults follow load_limit and the state file; its values are bounded, and a
+// ratio of 0 turns that bound off.
+func TestTheSpool(t *testing.T) {
+	c, err := Parse([]byte(valid))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if s := c.Spool; s.Dir != DefaultSpoolDir || s.Limit != DefaultLoadLimit || s.Loads < 1 || *s.Ratio != DefaultSpoolRatio || s.Unpacked != 4*DefaultLoadLimit {
+		t.Errorf("defaults: %+v (ratio %d)", s, *s.Ratio)
+	}
+
+	// An archive may decompress to 16 times its size, at least 64 MiB, at most spool.unpacked
+	for size, want := range map[int64]int64{1 << 20: MinUnpacked, 1 << 30: 16 << 30, 8 << 30: 32 << 30} {
+		if got := c.Spool.UnpackedLimit(size); got != want {
+			t.Errorf("an archive of %d bytes may decompress to %d, want %d", size, got, want)
+		}
+	}
+
+	c, err = Parse([]byte(strings.Replace(valid, "listeners:", "state_file: /var/lib/quire-gate/state.json\nload_limit: 2147483648\nspool: {ratio: 0, loads: 3}\nlisteners:", 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if s := c.Spool; s.Dir != "/var/lib/quire-gate/spool" || s.Limit != 2<<30 || s.Loads != 3 || s.Unpacked != 8<<30 || s.UnpackedLimit(1<<20) != 8<<30 {
+		t.Errorf("beside the state file, no ratio: %+v", s)
+	}
+
+	for name, spool := range map[string]string{
+		"a relative folder":     "{dir: spool}",
+		"a folder not clean":    "{dir: /var/lib/../spool}",
+		"a limit below 1 MiB":   "{limit: 1000}",
+		"no loads at once":      "{loads: -1}",
+		"too many loads":        "{loads: 65}",
+		"a ratio of 1":          "{ratio: 1}",
+		"a negative ratio":      "{ratio: -16}",
+		"unpacked below 64 MiB": "{unpacked: 1048576}",
+		"an unknown key":        "{size: 1}",
+	} {
+		if _, err := Parse([]byte(strings.Replace(valid, "listeners:", "spool: "+spool+"\nlisteners:", 1))); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+}

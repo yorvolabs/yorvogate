@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 
@@ -62,6 +63,8 @@ type Config struct {
 	// valid when the gate starts still keeps its names from the other scopes. YorvoGate's own file,
 	// outside every scopes folder; optional (without it, claims are held only while the process runs).
 	StateFile string `yaml:"state_file"`
+	// Spool is where image archives a scope loads are kept while they're checked, and how much.
+	Spool Spool `yaml:"spool"`
 	// Daemon is what YorvoGate accepts of Docker's own defaults.
 	Daemon Daemon `yaml:"daemon"`
 
@@ -74,6 +77,34 @@ type Daemon struct {
 	// a host without either); without it, scoped listeners refuse every request on such a Docker.
 	WithoutLSM bool `yaml:"without_lsm"`
 }
+
+// Spool bounds what image loads hold at once, across every scope: the folder their archives are
+// kept in, the bytes all of them may keep there together, how many run at once, and how far an
+// archive may decompress while it's checked.
+type Spool struct {
+	// Dir is the folder, on disk. By default spool/ beside the state file, or /var/lib/yorvogate/spool.
+	Dir string `yaml:"dir"`
+	// Limit is the bytes every load in flight may keep together (by default load_limit).
+	Limit int64 `yaml:"limit"`
+	// Loads is how many loads run at once, every scope's together (by default half the CPUs, at
+	// least one); each scope has one at a time.
+	Loads int `yaml:"loads"`
+	// Ratio bounds what an archive decompresses to: at most Ratio times its own size (at least
+	// 64 MiB). 0 turns it off; by default 16.
+	Ratio *int `yaml:"ratio"`
+	// Unpacked bounds what any archive decompresses to, whatever its size (by default 4 × load_limit, at least 64 MiB).
+	Unpacked int64 `yaml:"unpacked"`
+}
+
+// DefaultSpoolDir is the spool's folder when there's no state file (a variable, for tests).
+var DefaultSpoolDir = "/var/lib/yorvogate/spool"
+
+const (
+	// DefaultSpoolRatio is how many times its size an archive may decompress to.
+	DefaultSpoolRatio = 16
+	// MinUnpacked is what any archive may decompress to, whatever the ratio.
+	MinUnpacked = 64 << 20
+)
 
 // APIRange is a range of Docker API versions.
 type APIRange struct {
@@ -286,6 +317,10 @@ func (c *Config) check() error {
 
 	if c.LoadLimit < 1<<20 || c.LoadLimit > 256<<30 {
 		return errors.New("load_limit: between 1 MiB and 256 GiB")
+	}
+
+	if err := c.Spool.settle(c); err != nil {
+		return err
 	}
 
 	if len(c.Listeners) == 0 {
@@ -626,4 +661,61 @@ func groupList() string {
 	}
 
 	return strings.Join(names, ", ")
+}
+
+// settle fills in the spool's defaults and checks its values.
+func (s *Spool) settle(c *Config) error {
+	switch {
+	case s.Dir == "" && c.StateFile != "":
+		s.Dir = filepath.Join(filepath.Dir(c.StateFile), "spool")
+	case s.Dir == "":
+		s.Dir = DefaultSpoolDir
+	case !filepath.IsAbs(s.Dir) || filepath.Clean(s.Dir) != s.Dir:
+		return errors.New("spool.dir: an absolute, clean path")
+	}
+
+	if s.Limit == 0 {
+		s.Limit = c.LoadLimit
+	}
+
+	if s.Limit < 1<<20 || s.Limit > 1<<40 {
+		return errors.New("spool.limit: between 1 MiB and 1 TiB")
+	}
+
+	if s.Loads == 0 {
+		s.Loads = max(1, runtime.GOMAXPROCS(0)/2)
+	}
+
+	if s.Loads < 1 || s.Loads > 64 {
+		return errors.New("spool.loads: between 1 and 64")
+	}
+
+	if s.Ratio == nil {
+		ratio := DefaultSpoolRatio
+		s.Ratio = &ratio
+	}
+
+	if *s.Ratio != 0 && (*s.Ratio < 2 || *s.Ratio > 1000) {
+		return errors.New("spool.ratio: 0 (off), or between 2 and 1000")
+	}
+
+	if s.Unpacked == 0 {
+		s.Unpacked = max(MinUnpacked, 4*c.LoadLimit)
+	}
+
+	if s.Unpacked < MinUnpacked || s.Unpacked > 1<<42 {
+		return errors.New("spool.unpacked: between 64 MiB and 4 TiB")
+	}
+
+	return nil
+}
+
+// UnpackedLimit is what an archive of size bytes may decompress to.
+func (s *Spool) UnpackedLimit(size int64) int64 {
+	limit := s.Unpacked
+	if s.Ratio != nil && *s.Ratio > 0 {
+		limit = min(limit, max(MinUnpacked, size*int64(*s.Ratio)))
+	}
+
+	return limit
 }

@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +40,7 @@ type Gate struct {
 	scopes   *scope.Store
 	docker   *Docker
 	upstream *Upstream
-	loads    *loadLimiter
+	spool    *Spool
 	// Docker's defaults as last read: while they're unsafe, or unread, every scoped request is refused
 	defaults *Defaults
 	// A token or mTLS listener's requests being answered, ended when their allowance goes
@@ -84,13 +85,14 @@ func Registry(c *config.Config) *scope.Registry {
 	return scope.NewRegistry(folders, c.StateFile)
 }
 
-// New makes the handler of a listener; a scoped one's scopes are the registry's.
-func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.Registry, defaults *Defaults, log *slog.Logger) *Gate {
+// New makes the handler of a listener; a scoped one's scopes are the registry's, and its image loads
+// the process's spool.
+func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.Registry, defaults *Defaults, spool *Spool, log *slog.Logger) *Gate {
 	g := &Gate{config: c, listener: l, upstream: upstream, registry: scopes, defaults: defaults, log: log.With("listener", l.Name)}
 	if l.Mode == config.Scoped {
 		g.scopes = scopes.Store(l.Name)
 		g.docker = NewDocker(c.UpstreamSocket())
-		g.loads = newLoadLimiter()
+		g.spool = spool
 	}
 
 	return g
@@ -107,6 +109,8 @@ type refusal struct {
 	status int
 	reason string
 	logged []any
+	// Seconds to wait before retrying, when the refusal is only for now
+	retryAfter int
 }
 
 func (r *refusal) Error() string { return r.reason }
@@ -117,6 +121,7 @@ func refuse(status int, format string, args ...any) *refusal {
 
 // ServeHTTP decides on a request, and forwards it if it's allowed.
 func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(context.WithValue(r.Context(), controllerKey{}, http.NewResponseController(w)))
 	entry := g.log.With("method", r.Method, "path", r.URL.EscapedPath())
 
 	if strings.HasPrefix(r.URL.EscapedPath(), "/_yorvogate/") {
@@ -137,6 +142,9 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		entry.Warn("refused", append([]any{"status", refused.status, "reason", refused.reason}, refused.logged...)...)
+		if refused.retryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(refused.retryAfter))
+		}
 		answer(w, refused.status, refused.reason)
 
 		return
@@ -236,7 +244,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			ctx: ctx, req: req, scope: s, token: tokenDigest(g.listener, r), policy: g.listener.Containers, pulls: g.listener.Pulls, daemon: daemon, docker: g.docker,
 			builderProfiles: g.listener.BuilderAppArmorProfiles, anyBuilder: g.listener.AllowPrivilegedBuilders,
 			path: r.URL.EscapedPath(), query: r.URL.Query(), upgrading: upgrading(r),
-			stream: r.Body, hasBody: r.ContentLength != 0, loadLimit: g.config.LoadLimit, loads: g.loads,
+			stream: r.Body, hasBody: r.ContentLength != 0, length: r.ContentLength, loadLimit: g.config.LoadLimit, spool: g.spool, spoolConfig: &g.config.Spool,
 		}
 		if req.Version != nil {
 			decision.version = req.Version.String()

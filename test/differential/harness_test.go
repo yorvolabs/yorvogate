@@ -89,6 +89,7 @@ func startGate(t testing.TB, upstream string) (string, *scope.Registry) {
 
 	c, err := config.Parse([]byte(daemon + `
 upstream: unix://` + upstream + `
+spool: {dir: ` + t.TempDir() + `}
 listeners:
   - name: sites
     address: tcp://127.0.0.1:2376
@@ -116,7 +117,7 @@ listeners:
 		t.Fatalf("Docker's defaults, as the gate reads them: %v", unsafe)
 	}
 
-	g := gate.New(c, c.Listeners[0], gate.NewUpstream(c, log), registry, defaults, log)
+	g := gate.New(c, c.Listeners[0], gate.NewUpstream(c, log), registry, defaults, gate.NewSpool(c), log)
 	front := httptest.NewServer(gate.NewServer(g).Handler)
 	t.Cleanup(front.Close)
 

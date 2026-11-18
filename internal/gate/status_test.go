@@ -65,8 +65,8 @@ func statusGate(t *testing.T) (*httptest.Server, *httptest.Server, string, func(
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	upstream := NewUpstream(c, log)
-	trusted := httptest.NewServer(New(c, c.Listeners[0], upstream, registry, readDefaults(c), log))
-	scoped := httptest.NewServer(New(c, c.Listeners[1], upstream, registry, readDefaults(c), log))
+	trusted := httptest.NewServer(New(c, c.Listeners[0], upstream, registry, readDefaults(c), NewSpool(c), log))
+	scoped := httptest.NewServer(New(c, c.Listeners[1], upstream, registry, readDefaults(c), NewSpool(c), log))
 	t.Cleanup(trusted.Close)
 	t.Cleanup(scoped.Close)
 

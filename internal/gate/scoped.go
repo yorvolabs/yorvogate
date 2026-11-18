@@ -45,11 +45,14 @@ type scoped struct {
 	upgrading bool
 
 	// A stream's body (an image archive), the most read of it, and what's forwarded in its place
-	stream io.Reader
+	stream io.ReadCloser
+	// The body's length when the client gave it (-1 when it's chunked)
+	length int64
 	// Whether the request came with a body (one of unknown length included)
 	hasBody       bool
 	loadLimit     int64
-	loads         *loadLimiter
+	spool         *Spool
+	spoolConfig   *config.Spool
 	forwardBody   io.ReadCloser
 	forwardLength int64
 	// Done once the request is forwarded (e.g. an archive's copy removed)

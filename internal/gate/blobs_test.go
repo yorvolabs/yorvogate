@@ -182,7 +182,7 @@ func TestAnArchivesJSONIsBounded(t *testing.T) {
 	img := anImage("quire-sites/jane/app:1")
 	big := `{"manifests":[],"padding":"` + strings.Repeat("x", maxJSON) + `"}`
 
-	if _, _, err := archiveNames(bytes.NewReader(archive(t, append(append([]entry{}, img.blobs...), entry{name: "index.json", content: big})...))); err == nil || !strings.Contains(err.Error(), "larger than") {
+	if _, _, err := archiveNames(bytes.NewReader(archive(t, append(append([]entry{}, img.blobs...), entry{name: "index.json", content: big})...)), archiveBounds{}); err == nil || !strings.Contains(err.Error(), "larger than") {
 		t.Errorf("an oversize index.json: %v", err)
 	}
 
@@ -191,13 +191,13 @@ func TestAnArchivesJSONIsBounded(t *testing.T) {
 		many = append(many, entry{name: fmt.Sprintf("blobs/sha256/%064x", i), content: "{" + strings.Repeat(" ", maxJSON-2) + "}"})
 	}
 
-	if _, _, err := archiveNames(bytes.NewReader(archive(t, many...))); err == nil || !strings.Contains(err.Error(), "together") {
+	if _, _, err := archiveNames(bytes.NewReader(archive(t, many...)), archiveBounds{}); err == nil || !strings.Contains(err.Error(), "together") {
 		t.Errorf("too much JSON: %v", err)
 	}
 
 	// A manifest an index lists that's larger than what's kept: refused, not skipped
 	huge := `{"mediaType":"` + ociManifest + `","padding":"` + strings.Repeat("x", maxJSON) + `"}`
-	_, held, err := archiveNames(bytes.NewReader(archive(t, blob(huge), entry{name: "index.json", content: asJSON(map[string]any{"manifests": []any{ref(ociManifest, huge, nil)}})})))
+	_, held, err := archiveNames(bytes.NewReader(archive(t, blob(huge), entry{name: "index.json", content: asJSON(map[string]any{"manifests": []any{ref(ociManifest, huge, nil)}})})), archiveBounds{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestAnArchivesPathsAreRelative(t *testing.T) {
 	}
 
 	// "./" and a dot segment that stays inside are still fine
-	if _, _, err := archiveNames(bytes.NewReader(archive(t, entry{name: "./oci-layout", content: "{}"}, entry{name: "blobs/./sha256/" + sha("y"), content: "y"}))); err != nil {
+	if _, _, err := archiveNames(bytes.NewReader(archive(t, entry{name: "./oci-layout", content: "{}"}, entry{name: "blobs/./sha256/" + sha("y"), content: "y"})), archiveBounds{}); err != nil {
 		t.Errorf("./ and ./ inside: %v", err)
 	}
 }

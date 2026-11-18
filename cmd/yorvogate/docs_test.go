@@ -75,6 +75,9 @@ func TestEveryExampleIsValid(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "yorvogate.yaml")
 		// An example's TLS files are this test's: a certificate, its key and a client CA that load
 		content = strings.ReplaceAll(content, "/etc/yorvogate/tls/", tlsFiles(t)+"/")
+		// ...and its state file's folder, where the image spool is by default: this host's /var/lib
+		// isn't YorvoGate's to write
+		content = strings.ReplaceAll(content, "/var/lib/yorvogate/", t.TempDir()+"/")
 		_ = os.WriteFile(path, []byte(content), 0o600)
 
 		var out, errs bytes.Buffer
