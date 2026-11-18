@@ -126,8 +126,12 @@ func refuse(status int, code Code, format string, args ...any) *refusal {
 
 // ServeHTTP decides on a request, and forwards it if it's allowed.
 func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r = r.WithContext(context.WithValue(r.Context(), controllerKey{}, http.NewResponseController(w)))
-	entry := g.log.With("method", r.Method, "path", r.URL.EscapedPath())
+	ctx := context.WithValue(r.Context(), controllerKey{}, http.NewResponseController(w))
+	r = r.WithContext(context.WithValue(ctx, startKey{}, time.Now()))
+
+	id, fields := requestFields(r)
+	w.Header().Set(RequestIDHeader, id)
+	entry := g.log.With(fields...)
 
 	if strings.HasPrefix(r.URL.EscapedPath(), "/_yorvogate/") {
 		g.own(w, r, entry)
@@ -146,7 +150,12 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			refused = g.undecided(err)
 		}
 
-		entry.Warn("refused", append([]any{"status", refused.status, "reason", refused.reason}, refused.logged...)...)
+		logged := []any{"status", refused.status, "code", refused.code, "reason", refused.reason, "decision_ms", decisionMS(r.Context())}
+		if len(refused.codes) > 1 {
+			logged = append(logged, "codes", refused.codes)
+		}
+
+		entry.Warn("refused", append(logged, refused.logged...)...)
 		if refused.retryAfter > 0 {
 			w.Header().Set("Retry-After", strconv.Itoa(refused.retryAfter))
 		}
@@ -213,7 +222,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			return nil, nil, err
 		}
 
-		entry.Info("allowed", "endpoint", req.Endpoint.Name)
+		entry.Info("allowed", "endpoint", req.Endpoint.Name, "decision_ms", decisionMS(r.Context()))
 
 		// A trusted client's body goes as it came (streams included).
 		return withoutGateHeaders(r), nil, nil
@@ -280,7 +289,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			entry = entry.With("headers_not_forwarded", dropped)
 		}
 
-		entry.Info("allowed", "endpoint", req.Endpoint.Name)
+		entry.Info("allowed", "endpoint", req.Endpoint.Name, "decision_ms", decisionMS(r.Context()))
 		// The headers Docker gets are those listed, copied: none other goes (forwardedHeaders).
 		out := r.Clone(r.Context())
 		out.Header = headers
