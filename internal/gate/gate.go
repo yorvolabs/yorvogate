@@ -203,6 +203,18 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer answered()
 	}
 
+	if upgrading(forward) {
+		fields := []any{}
+		if decision != nil {
+			fields = append(fields, "scope", decision.scope.Name, "endpoint", decision.req.Endpoint.Name)
+		}
+
+		stream := entry.With(fields...)
+		g.forwardStream(w, forward, func(msg string, fields ...any) { stream.Info(msg, fields...) })
+
+		return
+	}
+
 	g.upstream.Forward(w, forward)
 }
 

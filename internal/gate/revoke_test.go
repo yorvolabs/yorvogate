@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +33,14 @@ var asBlog = map[string]string{"X-YorvoGate-Scope": "blog", "X-YorvoGate-Token":
 // server, its gate, and the scope files' folder.
 func tokenGate(t *testing.T, d *docker) (*httptest.Server, *Gate, string) {
 	t.Helper()
+	server, g, scopes, _ := tokenGateLogged(t, d)
+
+	return server, g, scopes
+}
+
+// tokenGateLogged is tokenGate, with its log checked and kept.
+func tokenGateLogged(t *testing.T, d *docker) (*httptest.Server, *Gate, string, *logChecker) {
+	t.Helper()
 	scopes := t.TempDir()
 	writeScope(t, scopes, "jane", tokenScope("jane", token))
 	writeScope(t, scopes, "blog", tokenScope("blog", blogToken))
@@ -48,12 +55,12 @@ func tokenGate(t *testing.T, d *docker) (*httptest.Server, *Gate, string) {
 		t.Fatal(err)
 	}
 
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	log, lines := checkedLog(t)
 	g := New(c, c.Listeners[0], NewUpstream(c, log), registry, readDefaults(c), NewSpool(c), log)
 	server := httptest.NewServer(g)
 	t.Cleanup(server.Close)
 
-	return server, g, scopes
+	return server, g, scopes, lines
 }
 
 // gates are the gates of running subtests, by name, for a change that revokes on its own.
@@ -245,5 +252,39 @@ func TestARequestDecidedBeforeAReloadIsCheckedAgain(t *testing.T) {
 
 	if open := len(g.streams.open); open != 0 {
 		t.Errorf("%d requests still tracked once answered", open)
+	}
+}
+
+// A stream is logged when it opens and when it closes: how long, the bytes each way, and whether it
+// ended (its client or Docker closed it) or was revoked (its scope no longer allows it).
+func TestStreamsAreLoggedOpenAndClosed(t *testing.T) {
+	d := startDocker(t)
+	server, g, scopes, lines := tokenGateLogged(t, d)
+
+	jane, janeReader := execStream(t, server, "exec-jane", asJane)
+	blog, blogReader := execStream(t, server, "exec-blog", asBlog)
+	echoes(t, blog, blogReader)
+
+	lines.waitFor(t, func(l map[string]any) bool {
+		return l["msg"] == "stream opened" && l["scope"] == "jane" && l["endpoint"] == "exec.start"
+	})
+
+	_ = os.Remove(filepath.Join(scopes, "jane.json"))
+	revoke(t, g)
+
+	if !ended(t, jane, janeReader) {
+		t.Fatal("jane's stream is still open")
+	}
+
+	closed := lines.waitFor(t, func(l map[string]any) bool { return l["msg"] == "stream closed" && l["scope"] == "jane" })
+	if closed["by"] != "revoked" {
+		t.Errorf("jane's: %v", closed)
+	}
+
+	_ = blog.Close()
+
+	closed = lines.waitFor(t, func(l map[string]any) bool { return l["msg"] == "stream closed" && l["scope"] == "blog" })
+	if closed["by"] != "ended" || closed["bytes_in"].(float64) < 5 || closed["bytes_out"].(float64) < 5 || closed["duration_ms"].(float64) <= 0 {
+		t.Errorf("blog's: %v", closed)
 	}
 }

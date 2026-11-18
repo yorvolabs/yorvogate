@@ -30,7 +30,7 @@
     "duration_ms": {"type": "number", "minimum": 0},
     "bytes_in": {"type": "integer", "minimum": 0},
     "bytes_out": {"type": "integer", "minimum": 0},
-    "by": {"enum": ["client", "docker", "revoked", "shutdown"]}
+    "by": {"enum": ["ended", "revoked"], "description": "ended: by the client or Docker; revoked: its scope no longer allows it."}
   },
   "allOf": [
     {"if": {"properties": {"msg": {"enum": ["allowed", "refused"]}}, "required": ["msg"]},

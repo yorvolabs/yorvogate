@@ -2,10 +2,12 @@ package gate
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -27,6 +29,8 @@ type logChecker struct {
 	buf   []byte
 	done  bool
 	lines []string
+	// Told of each line (a test waits on it)
+	more chan struct{}
 }
 
 func (c *logChecker) Write(p []byte) (int, error) {
@@ -44,6 +48,11 @@ func (c *logChecker) Write(p []byte) (int, error) {
 		line := string(c.buf[:i])
 		c.buf = c.buf[i+1:]
 		c.lines = append(c.lines, line)
+
+		select {
+		case c.more <- struct{}{}:
+		default:
+		}
 
 		if c.done {
 			continue
@@ -78,8 +87,31 @@ func (c *logChecker) Lines() []string {
 
 // checkedLog is a logger whose every line is checked, for the test's whole run.
 func checkedLog(t testing.TB) (*slog.Logger, *logChecker) {
-	c := &logChecker{t: t}
+	c := &logChecker{t: t, more: make(chan struct{}, 1)}
 	t.Cleanup(func() { c.mu.Lock(); c.done = true; c.mu.Unlock() })
 
 	return slog.New(slog.NewJSONHandler(c, &slog.HandlerOptions{Level: slog.LevelDebug})), c
+}
+
+// waitFor is the first line (decoded) that matches, waiting for it up to 5 s.
+func (c *logChecker) waitFor(t *testing.T, match func(map[string]any) bool) map[string]any {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+
+	for {
+		for _, l := range c.Lines() {
+			var line map[string]any
+			if json.Unmarshal([]byte(l), &line) == nil && match(line) {
+				return line
+			}
+		}
+
+		select {
+		case <-c.more:
+		case <-timeout:
+			t.Fatal("no such log line in 5 s")
+
+			return nil
+		}
+	}
 }

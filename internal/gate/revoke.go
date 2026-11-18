@@ -2,6 +2,7 @@ package gate
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -21,6 +22,9 @@ type streams struct {
 	open map[*stream]struct{}
 }
 
+// errRevoked is why a request was ended: its scope no longer allows it.
+var errRevoked = errors.New("its scope no longer allows it")
+
 type stream struct {
 	scope string // "" on a trusted listener
 	token string // the digest of the token it was allowed with
@@ -29,14 +33,14 @@ type stream struct {
 	uidKnown bool
 	// A client certificate's stream (an mTLS listener): what it was taken with
 	cert *credential
-	end  context.CancelFunc
+	end  func()
 }
 
 // track gives the request to forward, ended at once if its allowance goes, and what to call once
 // it's answered. allowed is its scope, nil on a trusted listener.
 func (s *streams) track(store *scope.Store, files *TLSFiles, allowed *scope.Scope, token string, r *http.Request) (*http.Request, func()) {
-	ctx, cancel := context.WithCancel(r.Context())
-	st := &stream{end: cancel, token: token}
+	ctx, cancel := context.WithCancelCause(r.Context())
+	st := &stream{end: func() { cancel(errRevoked) }, token: token}
 	st.uid, st.uidKnown = peerOf(r.Context())
 
 	if allowed != nil {
@@ -57,11 +61,11 @@ func (s *streams) track(store *scope.Store, files *TLSFiles, allowed *scope.Scop
 	// A reload between the request's decision and here would have missed it: it's checked again,
 	// now that a Revoke after any reload sees it.
 	if !st.current(store, files) {
-		cancel()
+		st.end()
 	}
 
 	return r.WithContext(ctx), func() {
-		cancel()
+		cancel(nil)
 		s.mu.Lock()
 		delete(s.open, st)
 		s.mu.Unlock()
