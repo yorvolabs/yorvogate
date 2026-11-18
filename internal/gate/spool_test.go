@@ -41,6 +41,7 @@ func spoolGate(t *testing.T, d *docker, spool string) (*httptest.Server, string)
 	}
 
 	c, err := config.Parse([]byte(`
+version: 1
 upstream: unix://` + d.socket + `
 load_limit: 2097152
 spool:
@@ -415,7 +416,7 @@ func TestTheSpoolsFolder(t *testing.T) {
 	}
 
 	parse := func(dir string) *config.Config {
-		c, err := config.Parse([]byte("upstream: unix:///var/run/docker.sock\nspool: {dir: " + dir + "}\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: /etc/s}\n"))
+		c, err := config.Parse([]byte("version: 1\nupstream: unix:///var/run/docker.sock\nspool: {dir: " + dir + "}\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: /etc/s}\n"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -467,7 +468,7 @@ func TestTheSpoolsFolder(t *testing.T) {
 	}
 
 	// A trusted listener alone loads nothing through the spool: no folder needed
-	c, err := config.Parse([]byte("upstream: unix:///var/run/docker.sock\nspool: {dir: " + locked + "}\nlisteners:\n  - {name: server, address: 'tcp://127.0.0.1:2375', mode: trusted, allow: {images: write}}\n"))
+	c, err := config.Parse([]byte("version: 1\nupstream: unix:///var/run/docker.sock\nspool: {dir: " + locked + "}\nlisteners:\n  - {name: server, address: 'tcp://127.0.0.1:2375', mode: trusted, allow: {images: write}}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
