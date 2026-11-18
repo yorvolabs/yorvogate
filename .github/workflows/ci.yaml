@@ -160,6 +160,14 @@ jobs:
           . test/conformance/quire/SOURCE
           curl -fsSL "https://raw.githubusercontent.com/${repository#https://github.com/}/$commit/$path" -o /tmp/quire.yaml
           diff -u /tmp/quire.yaml test/conformance/quire/yorvogate.yaml
+      # Nightly, the copy is also the file Quire Server runs now: a change on its main means the pin
+      # (and the policy quire.sh tests) is behind what Quire deploys.
+      - name: The copy is the file on Quire Server's main
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          . test/conformance/quire/SOURCE
+          curl -fsSL "https://raw.githubusercontent.com/${repository#https://github.com/}/main/$path" -o /tmp/quire-main.yaml
+          diff -u test/conformance/quire/yorvogate.yaml /tmp/quire-main.yaml || { echo "::error::Quire Server's $path changed on main since $commit: copy it to test/conformance/quire and move the pin"; exit 1; }
 
   dist:
     name: A release's files

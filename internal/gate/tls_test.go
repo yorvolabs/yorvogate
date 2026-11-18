@@ -146,7 +146,7 @@ func mtlsGate(t *testing.T, d *docker, trustedClients string) *mtls {
 	m.write(t, "clients.pem", m.clients.pem)
 	m.write(t, "admins.pem", m.admins.pem)
 
-	c, err := config.Parse([]byte("upstream: unix://" + d.socket + `
+	c, err := config.Parse([]byte("version: 1\nupstream: unix://" + d.socket + `
 listeners:
   - name: sites
     address: tcp://0.0.0.0:2376
@@ -471,7 +471,7 @@ func TestATrustedListenersPinnedClient(t *testing.T) {
 	m := mtlsGate(t, d, "")
 	admin, _, _ := m.admins.issue(t, client("anyone"))
 
-	c, err := config.Parse([]byte("upstream: unix://" + d.socket + "\nlisteners:\n  - name: admin\n    address: tcp://0.0.0.0:2375\n    mode: trusted\n    allow: {system: read}\n    tls: {certificate: " + m.dir + "/server.pem, key: " + m.dir + "/server.key, client_ca: " + m.dir + "/admins.pem}\n    clients: [{sha256: " + pin(admin) + "}]\n"))
+	c, err := config.Parse([]byte("version: 1\nupstream: unix://" + d.socket + "\nlisteners:\n  - name: admin\n    address: tcp://0.0.0.0:2375\n    mode: trusted\n    allow: {system: read}\n    tls: {certificate: " + m.dir + "/server.pem, key: " + m.dir + "/server.key, client_ca: " + m.dir + "/admins.pem}\n    clients: [{sha256: " + pin(admin) + "}]\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -512,7 +512,7 @@ func TestTrustLevelsDontShareACA(t *testing.T) {
 	reissued.pem = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	m.write(t, "shared.pem", append(append([]byte{}, m.admins.pem...), reissued.pem...))
 
-	c, err := config.Parse([]byte("upstream: unix://" + d.socket + "\nlisteners:\n  - name: sites\n    address: tcp://0.0.0.0:2376\n    mode: scoped\n    scopes: " + m.scopes + "\n    tls: {certificate: " + m.dir + "/server.pem, key: " + m.dir + "/server.key, client_ca: " + m.dir + "/clients.pem}\n  - name: admin\n    address: tcp://0.0.0.0:2375\n    mode: trusted\n    allow: {system: read}\n    tls: {certificate: " + m.dir + "/server.pem, key: " + m.dir + "/server.key, client_ca: " + m.dir + "/shared.pem}\n"))
+	c, err := config.Parse([]byte("version: 1\nupstream: unix://" + d.socket + "\nlisteners:\n  - name: sites\n    address: tcp://0.0.0.0:2376\n    mode: scoped\n    scopes: " + m.scopes + "\n    tls: {certificate: " + m.dir + "/server.pem, key: " + m.dir + "/server.key, client_ca: " + m.dir + "/clients.pem}\n  - name: admin\n    address: tcp://0.0.0.0:2375\n    mode: trusted\n    allow: {system: read}\n    tls: {certificate: " + m.dir + "/server.pem, key: " + m.dir + "/server.key, client_ca: " + m.dir + "/shared.pem}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -615,7 +615,7 @@ func TestTLSFilesThatDontLoad(t *testing.T) {
 	d := startDocker(t)
 	m := mtlsGate(t, d, "")
 	listener := func(cert, key, ca string) *config.Config {
-		c, err := config.Parse([]byte("upstream: unix://" + d.socket + "\nlisteners:\n  - name: admin\n    address: tcp://0.0.0.0:2375\n    mode: trusted\n    allow: {system: read}\n    tls: {certificate: " + cert + ", key: " + key + ", client_ca: " + ca + "}\n"))
+		c, err := config.Parse([]byte("version: 1\nupstream: unix://" + d.socket + "\nlisteners:\n  - name: admin\n    address: tcp://0.0.0.0:2375\n    mode: trusted\n    allow: {system: read}\n    tls: {certificate: " + cert + ", key: " + key + ", client_ca: " + ca + "}\n"))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -674,7 +674,7 @@ func sending(c tls.Certificate, intermediates ...*pki) tls.Certificate {
 func (m *mtls) twoLevels(t *testing.T, d *docker, scoped, trusted string) *config.Config {
 	t.Helper()
 
-	c, err := config.Parse([]byte("upstream: unix://" + d.socket + "\nlisteners:\n  - name: sites\n    address: tcp://0.0.0.0:2376\n    mode: scoped\n    scopes: " + m.scopes + "\n    tls: {certificate: " + m.dir + "/server.pem, key: " + m.dir + "/server.key, client_ca: " + m.dir + "/" + scoped + "}\n  - name: admin\n    address: tcp://0.0.0.0:2375\n    mode: trusted\n    allow: {system: read}\n    tls: {certificate: " + m.dir + "/server.pem, key: " + m.dir + "/server.key, client_ca: " + m.dir + "/" + trusted + "}\n"))
+	c, err := config.Parse([]byte("version: 1\nupstream: unix://" + d.socket + "\nlisteners:\n  - name: sites\n    address: tcp://0.0.0.0:2376\n    mode: scoped\n    scopes: " + m.scopes + "\n    tls: {certificate: " + m.dir + "/server.pem, key: " + m.dir + "/server.key, client_ca: " + m.dir + "/" + scoped + "}\n  - name: admin\n    address: tcp://0.0.0.0:2375\n    mode: trusted\n    allow: {system: read}\n    tls: {certificate: " + m.dir + "/server.pem, key: " + m.dir + "/server.key, client_ca: " + m.dir + "/" + trusted + "}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

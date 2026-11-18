@@ -12,7 +12,17 @@
 #     actually receives, so a gap in the policy isn't root on the host.
 #
 # Only the agent mounts the sockets. The settings below mirror ComposePolicy: a test keeps them equal.
+# The configuration's format (YorvoGate 0.3 and later). The scope files the agent writes stay without
+# one in this release: 0.2.2, which a server update rolls back to, refuses a field it doesn't know, and
+# a rollback doesn't rewrite them. They get "version" once no release it can roll back to runs 0.2.
+version: 1
 upstream: unix:///var/run/docker.sock
+# Each scope's last valid claims, kept across the gate's restarts, so a site's scope file that isn't
+# valid when the gate starts keeps its names from a site whose prefix they start with. On a volume of
+# the gate's own (gate_state), which only the gate mounts. Not the image's /var/lib/yorvogate: that's
+# its own user's, and the gate runs as root without capabilities (compose.yaml), which can't write in
+# another user's folder; a folder the image doesn't have is made root's for the volume.
+state_file: /var/lib/quire-gate/state.json
 
 listeners:
   - name: trusted

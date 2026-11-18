@@ -3,7 +3,7 @@
 One YAML file (`--config`, by default `/etc/yorvogate/yorvogate.yaml`). It's read strictly: an unknown key, a second document or an invalid value stops YorvoGate with the reason, never a default in its place. `yorvogate check --config …` reads it and every scope file without starting; with `--docker`, it also reads [Docker's defaults](#dockers-defaults).
 
 ```yaml
-version: 1                              # the format (required from 0.4)
+version: 1                              # the format (required)
 upstream: unix:///var/run/docker.sock   # Docker's socket (required)
 
 api:                                    # Docker API versions accepted (optional)
@@ -243,7 +243,7 @@ An endpoint YorvoGate doesn't know is in no group, and refused on every listener
 }
 ```
 
-- `version`: the format, `1`. A scope file without one is read as version 1, with a warning; YorvoGate 0.4 refuses it. See [formats and versions](#formats-and-versions).
+- `version`: the format, `1`. A scope file without one is read as version 1, with a warning; a later YorvoGate refuses it (the first minor after Quire Server writes a version in every scope file). See [formats and versions](#formats-and-versions).
 - `token_sha256`: the SHA-256 of the scope's token, 64 lowercase hex digits. The client sends the token itself. Optional where each scope has its own socket ([scope sockets](#scope-sockets)), and where its client certificate is the scope ([mTLS](#tls-and-client-certificates)), or when `tokens` has one.
 - `tokens` (optional): more tokens, each `{"sha256": "<its SHA-256>", "expires": "<RFC 3339, optional>"}`. At most 8 with `token_sha256`, and no digest listed twice. Each is the scope until it expires; past `expires` it's refused like a wrong token, and what it had open ends at the next read. See [rotating a token](#rotating-a-token).
 - `peer_uids` (optional, on a unix address): the user IDs whose connections may be the scope. See [peer users](#peer-users).
@@ -436,7 +436,8 @@ The configuration and the scope files each say their format: `version: 1` (YAML)
 
 - Before 1.0, a change that breaks a format ships only in a minor release (0.4, 0.5), never in a patch release (0.3.1).
 - An old format keeps working for at least one minor release after its successor, with a warning from `yorvogate check` and in the logs.
-- Files without `version` are read as version 1 in 0.3, with that warning, and refused from 0.4.
+- A configuration without `version` was read as version 1 in 0.3, with that warning, and is refused from 0.4. A scope file without one is still read as version 1, with the warning: an orchestrator may roll back to a release that refuses the field. It's refused from the first minor release after Quire Server writes a version in every scope file, which the CHANGELOG announces.
+- Each format's version moves on its own: a new configuration format doesn't change the scope files', or the reverse.
 
 ## Migrating from 0.1.0
 

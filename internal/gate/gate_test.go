@@ -566,6 +566,7 @@ func gateAndDefaults(t testing.TB, d *docker, listener string, log *slog.Logger)
 	}
 
 	c, err := config.Parse([]byte(`
+version: 1
 upstream: unix://` + d.socket + `
 body_limit: 4096
 load_limit: 1048576

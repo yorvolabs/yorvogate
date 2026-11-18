@@ -38,7 +38,7 @@ func tokenGate(t *testing.T, d *docker) (*httptest.Server, *Gate, string) {
 	writeScope(t, scopes, "jane", tokenScope("jane", token))
 	writeScope(t, scopes, "blog", tokenScope("blog", blogToken))
 
-	c, err := config.Parse([]byte("upstream: unix://" + d.socket + "\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: " + scopes + "}\n"))
+	c, err := config.Parse([]byte("version: 1\nupstream: unix://" + d.socket + "\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: " + scopes + "}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

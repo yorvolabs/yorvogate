@@ -3,4 +3,4 @@
 # To follow Quire Server: copy its gate/yorvogate.yaml here and set commit to the commit it's from.
 repository=https://github.com/quirecms/server
 path=gate/yorvogate.yaml
-commit=225797838ef18cb9d1093400d7b3bc063597e869
+commit=f556195f636a17ad48ca3fe6a67fdf04e94f88a9

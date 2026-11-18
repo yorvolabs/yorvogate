@@ -378,8 +378,9 @@ func (v *folderView) get(name string) (*Scope, error) {
 	return nil, errMissing
 }
 
-// Unversioned names the valid scopes whose files have no version: read as version 1 until 0.4, which
-// refuses them.
+// Unversioned names the valid scopes whose files have no version: read as version 1, with a warning,
+// until a later release refuses them (ADR-0005: the first minor after Quire Server writes a version
+// in every scope file).
 func (s *Store) Unversioned() []string {
 	snap := s.registry.snapshot.Load()
 	if snap == nil {
@@ -541,14 +542,15 @@ func (s *Scope) checkPeers(f Folder) error {
 	return nil
 }
 
-// formatVersion is the scope files' format (config.FormatVersion: the two move together).
-const formatVersion = 1
+// FormatVersion is the scope files' format. It's frozen apart from the configuration's
+// (config.FormatVersion): each changes only when its own format does.
+const FormatVersion = 1
 
 func (s *Scope) check(f Folder) error {
 	tokenless := f.Tokenless
 
-	if s.Version != nil && *s.Version != formatVersion {
-		return fmt.Errorf("version: %d isn't a format this build reads (%d)", *s.Version, formatVersion)
+	if s.Version != nil && *s.Version != FormatVersion {
+		return fmt.Errorf("version: %d isn't a format this build reads (%d)", *s.Version, FormatVersion)
 	}
 
 	switch {

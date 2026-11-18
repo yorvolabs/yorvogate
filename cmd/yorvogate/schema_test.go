@@ -87,13 +87,14 @@ func TestTheSchemasAcceptTheExamples(t *testing.T) {
 // What YorvoGate refuses, the schemas refuse too (for what a schema can say).
 func TestTheSchemasRefuseMistakes(t *testing.T) {
 	cs, ss := compile(t, configSchema), compile(t, scopeSchema)
-	base := "upstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'unix:///run/s.sock', mode: scoped, scopes: /etc/s}\n"
+	base := "version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sites, address: 'unix:///run/s.sock', mode: scoped, scopes: /etc/s}\n"
 
 	for name, content := range map[string]string{
-		"a newer format":              "version: 2\n" + base,
+		"a newer format":              strings.Replace(base, "version: 1", "version: 2", 1),
+		"no version":                  strings.Replace(base, "version: 1\n", "", 1),
 		"an unknown key":              "tls: true\n" + base,
 		"upstream over TCP":           strings.Replace(base, "unix:///var/run/docker.sock", "tcp://127.0.0.1:2375", 1),
-		"no listeners":                "upstream: unix:///var/run/docker.sock\nlisteners: []\n",
+		"no listeners":                "version: 1\nupstream: unix:///var/run/docker.sock\nlisteners: []\n",
 		"an unknown mode":             strings.Replace(base, "mode: scoped", "mode: open", 1),
 		"scoped with allow":           strings.Replace(base, "scopes: /etc/s", "scopes: /etc/s, allow: {system: read}", 1),
 		"trusted with scopes":         strings.Replace(base, "mode: scoped", "mode: trusted, allow: {system: read}", 1),

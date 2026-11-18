@@ -70,6 +70,7 @@ func TestJudgeDockersDefaults(t *testing.T) {
 // A default runtime is allowed when it's runc or every scoped listener lists it.
 func TestADefaultRuntimeEveryScopedListenerAllows(t *testing.T) {
 	c, err := config.Parse([]byte(`
+version: 1
 upstream: unix:///var/run/docker.sock
 listeners:
   - {name: a, address: 'tcp://127.0.0.1:2381', mode: scoped, scopes: /etc/a, containers: {runtimes: [runsc, kata]}}
@@ -220,7 +221,7 @@ func TestUnsafeDefaultsRefuseEveryScopedRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c, err := config.Parse([]byte("upstream: unix://" + d.socket + "\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: " + scopes + "}\n"))
+	c, err := config.Parse([]byte("version: 1\nupstream: unix://" + d.socket + "\nlisteners:\n  - {name: sites, address: 'tcp://127.0.0.1:2376', mode: scoped, scopes: " + scopes + "}\n"))
 	if err != nil {
 		t.Fatal(err)
 	}

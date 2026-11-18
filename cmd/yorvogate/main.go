@@ -359,7 +359,7 @@ func unversioned(names []string) string {
 		list = append(slices.Clone(list[:5]), fmt.Sprintf("and %d more", len(names)-5))
 	}
 
-	return fmt.Sprintf("%d scope files have no version (%s): they're read as version %d, and YorvoGate 0.4 refuses them without one (add \"version\": %d)", len(names), strings.Join(list, ", "), config.FormatVersion, config.FormatVersion)
+	return fmt.Sprintf("%d scope files have no version (%s): they're read as version %d, and a later YorvoGate refuses them without one (add \"version\": %d)", len(names), strings.Join(list, ", "), scope.FormatVersion, scope.FormatVersion)
 }
 
 // stateWarnings tells what isn't held across a restart.

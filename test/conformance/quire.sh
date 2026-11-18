@@ -44,7 +44,7 @@ cleanup
 
 say "== Docker $(direct version --format '{{.Server.Version}}'), Compose $(docker compose version --short), buildx $(docker buildx version | cut -d' ' -f2), AppArmor profile: ${apparmor:-none}"
 say "== Setting up: YorvoGate with an orchestrator's listener and sites' sockets"
-mkdir -p "$dir/scopes" "$dir/sockets" "$dir/orchestrator"
+mkdir -p "$dir/scopes" "$dir/sockets" "$dir/orchestrator" "$dir/state"
 
 # Sites jane and jane-blog, as Quire writes their scope files: each its Compose project, its images in
 # quire-sites/<project>/; jane with its builder and the shared networks, with Compose's aliases
@@ -70,10 +70,11 @@ chmod 600 "$dir/scopes/"*.json
 sed -e "s|unix:///run/yorvogate/trusted/trusted.sock|unix://$dir/orchestrator.sock|" \
 	-e "s|scope_sockets: /run/yorvogate/sites|scope_sockets: $dir/sockets|" \
 	-e "s|scopes: /etc/yorvogate/sites|scopes: $dir/scopes|" \
+	-e "s|state_file: /var/lib/quire-gate/|state_file: $dir/state/|" \
 	"$(dirname "$0")/quire/yorvogate.yaml" > "$dir/yorvogate.yaml"
 without_lsm "$dir/yorvogate.yaml"
-if grep -v '^[[:space:]]*#' "$dir/yorvogate.yaml" | grep -q '/run/yorvogate\|/etc/yorvogate'; then
-	ko "Quire Server's configuration has a path this test doesn't move" "$(grep -v '^[[:space:]]*#' "$dir/yorvogate.yaml" | grep '/run/yorvogate\|/etc/yorvogate')"
+if grep -v '^[[:space:]]*#' "$dir/yorvogate.yaml" | grep -q '/run/yorvogate\|/etc/yorvogate\|/var/lib/'; then
+	ko "Quire Server's configuration has a path this test doesn't move" "$(grep -v '^[[:space:]]*#' "$dir/yorvogate.yaml" | grep '/run/yorvogate\|/etc/yorvogate\|/var/lib/')"
 fi
 
 ${YORVOGATE:-/yorvogate/yorvogate} serve --config "$dir/yorvogate.yaml" 2> "$dir/yorvogate.log" &
