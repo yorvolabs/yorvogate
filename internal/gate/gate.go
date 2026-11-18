@@ -109,22 +109,49 @@ func (g *Gate) UseTLS(files *TLSFiles) {
 // refusal is a request not forwarded: its HTTP status and why, and what's only logged.
 type refusal struct {
 	status int
+	code   Code
 	reason string
+	// Every problem's code, when several were collected (code is the first's)
+	codes  []Code
 	logged []any
 	// Seconds to wait before retrying, when the refusal is only for now
 	retryAfter int
+	// An authentication failure's cause, logged once the client has its answer (so the answer's time
+	// doesn't depend on it): its fields
+	cause func() []any
 }
+
+// authFailed is an authentication's refusal: auth.rejected, whatever the cause, logged afterwards.
+func authFailed(status int, cause func() string, claimed string, format string, args ...any) *refusal {
+	r := refuse(status, CodeAuthRejected, format, args...)
+	r.cause = func() []any {
+		fields := []any{"auth_failure", cause()}
+		if claimed != "" {
+			fields = append(fields, "claimed_scope", cut(claimed, 64))
+		}
+
+		return fields
+	}
+
+	return r
+}
+
+func because(cause string) func() string { return func() string { return cause } }
 
 func (r *refusal) Error() string { return r.reason }
 
-func refuse(status int, format string, args ...any) *refusal {
-	return &refusal{status: status, reason: fmt.Sprintf(format, args...)}
+func refuse(status int, code Code, format string, args ...any) *refusal {
+	return &refusal{status: status, code: code, reason: fmt.Sprintf(format, args...)}
 }
 
 // ServeHTTP decides on a request, and forwards it if it's allowed.
 func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r = r.WithContext(context.WithValue(r.Context(), controllerKey{}, http.NewResponseController(w)))
-	entry := g.log.With("method", r.Method, "path", r.URL.EscapedPath())
+	ctx := context.WithValue(r.Context(), controllerKey{}, http.NewResponseController(w))
+	r = r.WithContext(context.WithValue(ctx, startKey{}, time.Now()))
+
+	id, fields := requestFields(r)
+	w.Header().Set(RequestIDHeader, id)
+	entry := g.log.With(fields...)
 
 	if strings.HasPrefix(r.URL.EscapedPath(), "/_yorvogate/") {
 		g.own(w, r, entry)
@@ -143,11 +170,30 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			refused = g.undecided(err)
 		}
 
-		entry.Warn("refused", append([]any{"status", refused.status, "reason", refused.reason}, refused.logged...)...)
+		logged := []any{"status", refused.status, "code", refused.code, "reason", refused.reason, "decision_ms", decisionMS(r.Context())}
+		if len(refused.codes) > 1 {
+			logged = append(logged, "codes", refused.codes)
+		}
+
+		entry.Warn("refused", append(logged, refused.logged...)...)
 		if refused.retryAfter > 0 {
 			w.Header().Set("Retry-After", strconv.Itoa(refused.retryAfter))
 		}
-		answer(w, refused.status, refused.reason)
+
+		// An authentication failure closes its connection: its cause is logged after the answer, and
+		// a next request on the same connection would wait for that, so its time would tell the cause.
+		// (It also bounds what a client that doesn't authenticate can do with one connection.)
+		if refused.cause != nil {
+			w.Header().Set("Connection", "close")
+		}
+
+		answer(w, refused.status, refused.code, refused.reason)
+
+		// Why authentication failed, once the client has its answer
+		if refused.cause != nil {
+			_ = http.NewResponseController(w).Flush()
+			entry.Warn("auth failed", refused.cause()...)
+		}
 
 		return
 	}
@@ -165,6 +211,18 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		defer answered()
 	}
 
+	if upgrading(forward) {
+		fields := []any{}
+		if decision != nil {
+			fields = append(fields, "scope", decision.scope.Name, "endpoint", decision.req.Endpoint.Name)
+		}
+
+		stream := entry.With(fields...)
+		g.forwardStream(w, forward, func(msg string, fields ...any) { stream.Info(msg, fields...) })
+
+		return
+	}
+
 	g.upstream.Forward(w, forward)
 }
 
@@ -173,10 +231,10 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // scope file's path); the log is.
 func (g *Gate) undecided(err error) *refusal {
 	if g.listener.Mode == config.Scoped && !g.listener.SocketBound() {
-		return &refusal{status: http.StatusInternalServerError, reason: "the request couldn't be decided on", logged: []any{"error", err.Error()}}
+		return &refusal{status: http.StatusInternalServerError, code: CodeUndecided, reason: "the request couldn't be decided on", logged: []any{"error", err.Error()}}
 	}
 
-	return refuse(http.StatusInternalServerError, "the request couldn't be decided on: %v", err)
+	return refuse(http.StatusInternalServerError, CodeUndecided, "the request couldn't be decided on: %v", err)
 }
 
 // decided returns the request to forward (with what YorvoGate checked as its body) and, on a scoped
@@ -185,7 +243,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 	// A trusted client's certificate first: an expired one gets nothing but this, whatever it asks
 	if g.listener.Mode == config.Trusted && g.listener.MutualTLS() {
 		if c, ok := credentialOf(r.TLS); !ok || !g.tls.admits(c, nil) {
-			return nil, nil, refuse(http.StatusUnauthorized, "the client certificate has expired, or its CA is no longer this listener's: connect again with a current one")
+			return nil, nil, authFailed(http.StatusUnauthorized, because("certificate-expired"), "", "the client certificate has expired, or its CA is no longer this listener's: connect again with a current one")
 		}
 	}
 
@@ -194,23 +252,23 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 	req, err := route.Parse(r.Method, r.URL.EscapedPath(), lowest, highest)
 	if err != nil {
 		if errors.Is(err, route.ErrUnknown) {
-			return nil, nil, refuse(http.StatusForbidden, "%v", err)
+			return nil, nil, refuse(http.StatusForbidden, CodeUnknownEndpoint, "%v", err)
 		}
 
-		return nil, nil, refuse(http.StatusBadRequest, "%v", err)
+		return nil, nil, refuse(http.StatusBadRequest, CodeInvalidRoute, "%v", err)
 	}
 
 	switch g.listener.Mode {
 	case config.Trusted:
 		if !g.listener.Allows(req.Endpoint) {
-			return nil, nil, refuse(http.StatusForbidden, "%s isn't allowed on this listener", req.Endpoint.Name)
+			return nil, nil, refuse(http.StatusForbidden, CodeListenerDenies, "%s isn't allowed on this listener", req.Endpoint.Name)
 		}
 
 		if err := upgradeOnly(r, req.Endpoint); err != nil {
 			return nil, nil, err
 		}
 
-		entry.Info("allowed", "endpoint", req.Endpoint.Name)
+		entry.Info("allowed", "endpoint", req.Endpoint.Name, "decision_ms", decisionMS(r.Context()))
 
 		// A trusted client's body goes as it came (streams included).
 		return withoutGateHeaders(r), nil, nil
@@ -277,7 +335,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			entry = entry.With("headers_not_forwarded", dropped)
 		}
 
-		entry.Info("allowed", "endpoint", req.Endpoint.Name)
+		entry.Info("allowed", "endpoint", req.Endpoint.Name, "decision_ms", decisionMS(r.Context()))
 		// The headers Docker gets are those listed, copied: none other goes (forwardedHeaders).
 		out := r.Clone(r.Context())
 		out.Header = headers
@@ -311,7 +369,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 		return withBody(out, checked), decision, nil
 	}
 
-	return nil, nil, refuse(http.StatusInternalServerError, "the listener has no mode")
+	return nil, nil, refuse(http.StatusInternalServerError, CodeUndecided, "the listener has no mode")
 }
 
 // boundKey carries, in the context of a request that came on a scope's own socket, the scope's name.
@@ -325,11 +383,12 @@ func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 	}
 
 	if !g.listener.SocketBound() {
-		s, err := g.scopes.Authenticate(r.Header.Get(ScopeHeader), r.Header.Get(TokenHeader))
+		claimed, sent := r.Header.Get(ScopeHeader), r.Header.Get(TokenHeader)
+		s, err := g.scopes.Authenticate(claimed, sent)
 		// A scope file that isn't valid is refused as a scope that isn't there, and in the same
-		// work: why is in the reload's log, not each request's.
+		// work: why is logged after the answer.
 		if errors.Is(err, scope.ErrUnknown) {
-			return nil, refuse(http.StatusUnauthorized, "no such scope, or not its token")
+			return nil, authFailed(http.StatusUnauthorized, func() string { return g.scopes.WhyRejected(claimed, sent) }, claimed, "no such scope, or not its token")
 		}
 
 		if err != nil {
@@ -339,10 +398,10 @@ func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 		// Its token proved, the connection's user must be one the scope lists, when it lists any
 		if uid, known := peerOf(r.Context()); !s.PeerAllowed(uid, known) {
 			if !known {
-				return nil, refuse(http.StatusForbidden, "scope %s takes only connections from its peer_uids, and this connection's user isn't known", s.Name)
+				return nil, authFailed(http.StatusForbidden, because("peer-not-allowed"), s.Name, "scope %s takes only connections from its peer_uids, and this connection's user isn't known", s.Name)
 			}
 
-			return nil, refuse(http.StatusForbidden, "this connection's user (UID %d) isn't one of scope %s's peer_uids", uid, s.Name)
+			return nil, authFailed(http.StatusForbidden, because("peer-not-allowed"), s.Name, "this connection's user (UID %d) isn't one of scope %s's peer_uids", uid, s.Name)
 		}
 
 		return s, nil
@@ -350,16 +409,16 @@ func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 
 	name, ok := r.Context().Value(boundKey{}).(string)
 	if !ok {
-		return nil, refuse(http.StatusInternalServerError, "the request didn't come on a scope's socket")
+		return nil, refuse(http.StatusInternalServerError, CodeUndecided, "the request didn't come on a scope's socket")
 	}
 
 	if named := r.Header.Get(ScopeHeader); named != "" && named != name {
-		return nil, refuse(http.StatusForbidden, "this socket is scope %s's: a request on it can't name another", name)
+		return nil, authFailed(http.StatusForbidden, because("names-another"), named, "this socket is scope %s's: a request on it can't name another", name)
 	}
 
 	s, err := g.scopes.Get(name)
 	if err != nil {
-		return nil, refuse(http.StatusForbidden, "scope %s isn't valid now: its socket closes", name)
+		return nil, authFailed(http.StatusForbidden, because("scope-file-invalid"), name, "scope %s isn't valid now: its socket closes", name)
 	}
 
 	return s, nil
@@ -380,20 +439,20 @@ func tokenDigest(l config.Listener, r *http.Request) string {
 // is the only credential there, so a token isn't looked at, and a request that sends one is refused.
 func (g *Gate) certified(r *http.Request) (*scope.Scope, error) {
 	if r.Header.Get(TokenHeader) != "" {
-		return nil, refuse(http.StatusBadRequest, "this listener takes a client certificate, not a token: don't send %s", TokenHeader)
+		return nil, authFailed(http.StatusBadRequest, because("token-on-certificate-listener"), r.Header.Get(ScopeHeader), "this listener takes a client certificate, not a token: don't send %s", TokenHeader)
 	}
 
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		return nil, refuse(http.StatusInternalServerError, "the request came without a client certificate")
+		return nil, refuse(http.StatusInternalServerError, CodeUndecided, "the request came without a client certificate")
 	}
 
 	name, err := certificateScope(r.TLS.PeerCertificates[0])
 	if err != nil {
-		return nil, refuse(http.StatusUnauthorized, "the client certificate names no scope: %s", err)
+		return nil, authFailed(http.StatusUnauthorized, because("unknown-scope"), "", "the client certificate names no scope: %s", err)
 	}
 
 	if named := r.Header.Get(ScopeHeader); named != "" && named != name {
-		return nil, refuse(http.StatusForbidden, "this client certificate is scope %s's: a request with it can't name another", name)
+		return nil, authFailed(http.StatusForbidden, because("names-another"), named, "this client certificate is scope %s's: a request with it can't name another", name)
 	}
 
 	// Pinned, not expired, and from a CA still the listener's, on each request: a connection kept
@@ -402,12 +461,18 @@ func (g *Gate) certified(r *http.Request) (*scope.Scope, error) {
 	c, verified := credentialOf(r.TLS)
 
 	if err != nil || !verified || !g.tls.admits(c, s) {
-		refused := refuse(http.StatusUnauthorized, "no such scope, or not its certificate")
-		if err == nil && verified && s.Pinned(c.key) {
-			refused.logged = []any{"why", "the client certificate expired, or its CA is no longer the listener's"}
+		cause := func() string {
+			switch {
+			case err != nil:
+				return g.scopes.Missing(name)
+			case verified && s.Pinned(c.key):
+				return "certificate-expired" // or its CA is no longer the listener's
+			default:
+				return "certificate-not-pinned"
+			}
 		}
 
-		return nil, refused
+		return nil, authFailed(http.StatusUnauthorized, cause, name, "no such scope, or not its certificate")
 	}
 
 	return s, nil
@@ -431,10 +496,10 @@ func (g *Gate) readBody(r *http.Request, e *route.Endpoint) ([]byte, error) {
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			return nil, refuse(http.StatusRequestEntityTooLarge, "the request's body is larger than %d bytes", g.config.BodyLimit)
+			return nil, refuse(http.StatusRequestEntityTooLarge, CodeBodyTooLarge, "the request's body is larger than %d bytes", g.config.BodyLimit)
 		}
 
-		return nil, refuse(http.StatusBadRequest, "the request's body couldn't be read: %v", err)
+		return nil, refuse(http.StatusBadRequest, CodeBodyUnreadable, "the request's body couldn't be read: %v", err)
 	}
 
 	return body, nil
@@ -444,7 +509,7 @@ func (g *Gate) readBody(r *http.Request, e *route.Endpoint) ([]byte, error) {
 // only once Docker has switched protocols.
 func upgradeOnly(r *http.Request, e *route.Endpoint) error {
 	if e.Upgrade && !upgrading(r) {
-		return refuse(http.StatusBadRequest, "%s is a stream: it's allowed only as an HTTP upgrade", e.Name)
+		return refuse(http.StatusBadRequest, CodeUpgradeOnly, "%s is a stream: it's allowed only as an HTTP upgrade", e.Name)
 	}
 
 	return nil
@@ -500,16 +565,17 @@ func notAForm(r *http.Request) error {
 	}
 
 	if len(types) > 1 {
-		return refuse(http.StatusBadRequest, "the request has more than one Content-Type")
+		return refuse(http.StatusBadRequest, CodeHeaderContentType, "the request has more than one Content-Type")
 	}
 
 	media, _, err := mime.ParseMediaType(types[0])
 	if err != nil {
-		return refuse(http.StatusBadRequest, "the request's Content-Type %q isn't valid: %v", types[0], err)
+		// The client's value isn't repeated: what a client sends in its headers isn't logged
+		return refuse(http.StatusBadRequest, CodeHeaderContentType, "the request's Content-Type isn't a valid media type")
 	}
 
 	if media == "application/x-www-form-urlencoded" || strings.HasPrefix(media, "multipart/") {
-		return refuse(http.StatusUnsupportedMediaType, "a form body (%s) isn't allowed: Docker would read parameters from it that YorvoGate doesn't check", media)
+		return refuse(http.StatusUnsupportedMediaType, CodeFormBody, "a form body (application/x-www-form-urlencoded or multipart/*) isn't allowed: Docker would read parameters from it that YorvoGate doesn't check")
 	}
 
 	return nil
@@ -534,8 +600,15 @@ func withBody(r *http.Request, body []byte) *http.Request {
 }
 
 // answer refuses as Docker answers errors, so its clients show why.
-func answer(w http.ResponseWriter, status int, reason string) {
+// Besides Docker's message, a refusal of a Docker request says its code (reasons.go), which
+// Docker's clients ignore and programs read.
+func answer(w http.ResponseWriter, status int, code Code, reason string) {
+	body := map[string]string{"message": "yorvogate: " + reason}
+	if code != "" {
+		body["code"] = string(code)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]string{"message": "yorvogate: " + reason})
+	_ = json.NewEncoder(w).Encode(body)
 }

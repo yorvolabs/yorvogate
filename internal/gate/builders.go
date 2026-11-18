@@ -28,11 +28,11 @@ func (s *scoped) createDialStdio(body []byte) ([]byte, error) {
 	}
 
 	if !dialStdio(req.Cmd) {
-		return nil, refuse(http.StatusForbidden, "exec.create: in builder %s, only buildctl dial-stdio is allowed", s.builderName)
+		return nil, refuse(http.StatusForbidden, CodeBuilder, "exec.create: in builder %s, only buildctl dial-stdio is allowed", s.builderName)
 	}
 
 	if f := unset(req, dialStdioCreate); len(f) > 0 {
-		return nil, refuse(http.StatusForbidden, "exec.create: in builder %s, %s isn't allowed", s.builderName, strings.Join(f, ", "))
+		return nil, refuse(http.StatusForbidden, CodeBuilder, "exec.create: in builder %s, %s isn't allowed", s.builderName, strings.Join(f, ", "))
 	}
 
 	return json.Marshal(req)
@@ -45,7 +45,7 @@ func builderUser(c *object, user string) bool {
 
 // notOnBuilder refuses anything else on a builder.
 func (s *scoped) notOnBuilder() error {
-	return refuse(http.StatusForbidden, "%s isn't allowed on builder %s: a builder may only be inspected, and reached with buildctl dial-stdio", s.req.Endpoint.Name, s.builderName)
+	return refuse(http.StatusForbidden, CodeBuilder, "%s isn't allowed on builder %s: a builder may only be inspected, and reached with buildctl dial-stdio", s.req.Endpoint.Name, s.builderName)
 }
 
 // ownContainer checks that the container the path names is the scope's own (a builder isn't).
@@ -83,7 +83,7 @@ func (s *scoped) builder(c *object) error {
 	}
 
 	if len(problems) > 0 {
-		return refuse(http.StatusForbidden, "builder %s isn't configured as a builder must be: %s", c.Name, strings.Join(problems, "; "))
+		return refuse(http.StatusForbidden, CodeBuilder, "builder %s isn't configured as a builder must be: %s", c.Name, strings.Join(problems, "; "))
 	}
 
 	return nil

@@ -319,6 +319,62 @@ func (s *Store) Authenticate(name, token string) (*Scope, error) {
 	return scope, nil
 }
 
+// Why an authentication failed (the log's auth_failure): decided after the client was answered, from
+// what Authenticate saw, never in its constant-time work.
+const (
+	NoCredentials    = "no-credentials"
+	UnknownScope     = "unknown-scope"
+	ScopeFileInvalid = "scope-file-invalid"
+	WrongToken       = "wrong-token"
+	TokenExpired     = "token-expired"
+)
+
+// Missing says why a scope by that name isn't in effect, for the log: its file isn't valid, or there's
+// none.
+func (s *Store) Missing(name string) string {
+	if view := s.view(); view != nil && view.unknown[name] != nil {
+		return ScopeFileInvalid
+	}
+
+	return UnknownScope
+}
+
+// WhyRejected says why Authenticate refused a scope and token, for the log: call it only once the
+// client has its answer. Its own work depends on the cause; Authenticate's doesn't.
+func (s *Store) WhyRejected(name, token string) string {
+	if name == "" || token == "" {
+		return NoCredentials
+	}
+
+	view := s.view()
+	if !validName.MatchString(name) || view == nil {
+		return UnknownScope
+	}
+
+	scope, err := view.get(name)
+	if err != nil {
+		if view.unknown[name] != nil {
+			return ScopeFileInvalid
+		}
+
+		return UnknownScope
+	}
+
+	got := sha256.Sum256([]byte(token))
+	tokens := scope.Tokens
+	if scope.TokenSHA256 != "" {
+		tokens = append([]Token{{SHA256: scope.TokenSHA256}}, tokens...)
+	}
+
+	for _, t := range tokens {
+		if want, _ := hex.DecodeString(t.SHA256); compareTokens(want, got[:]) == 1 && t.expired(clock()) {
+			return TokenExpired
+		}
+	}
+
+	return WrongToken
+}
+
 // noToken is the digest a token is compared with when its scope has none: random, so no token
 // matches it.
 var noToken = func() string {

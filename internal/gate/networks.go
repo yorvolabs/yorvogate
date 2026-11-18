@@ -2,7 +2,6 @@ package gate
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -18,15 +17,15 @@ func (s *scoped) createNetwork(body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	var problems []string
-	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	var found problems
+	add := found.add
 
 	for _, f := range unset(req, networkCreate) {
-		add("%s isn't allowed", f)
+		add(CodeFieldNotAllowed, "%s isn't allowed", f)
 	}
 
 	if !s.scope.Names(req.Name) {
-		add("the name %q isn't one of scope %s's (%s)", req.Name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
+		add(CodeNameNotOwn, "the name %q isn't one of scope %s's (%s)", req.Name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
 	} else if err := s.notTaken("network", req.Name, s.docker.Network); err != nil {
 		return nil, err
 	}
@@ -34,52 +33,52 @@ func (s *scoped) createNetwork(body []byte) ([]byte, error) {
 	s.ownLabels(req.Labels, add)
 
 	if req.Driver != "" && req.Driver != "bridge" {
-		add("the driver %q isn't allowed (only bridge)", req.Driver)
+		add(CodeNetwork, "the driver %q isn't allowed (only bridge)", req.Driver)
 	}
 
 	if req.Scope != "" && req.Scope != "local" {
-		add("the scope %q isn't allowed (only local)", req.Scope)
+		add(CodeNetwork, "the scope %q isn't allowed (only local)", req.Scope)
 	}
 
 	if s.egressFree() && !req.Internal {
-		add("scope %s may create only internal networks (egress: none): set Internal (Compose: networks.<name>.internal: true)", s.scope.Name)
+		add(CodeEgress, "scope %s may create only internal networks (egress: none): set Internal (Compose: networks.<name>.internal: true)", s.scope.Name)
 	}
 
 	var configs []network.IPAMConfig
 	if req.IPAM != nil {
 		for _, f := range unset(req.IPAM, ipam) {
-			add("IPAM.%s isn't allowed", f)
+			add(CodeFieldNotAllowed, "IPAM.%s isn't allowed", f)
 		}
 
 		if req.IPAM.Driver != "" && req.IPAM.Driver != "default" {
-			add("the IPAM driver %q isn't allowed (a plugin runs on the host)", req.IPAM.Driver)
+			add(CodeNetwork, "the IPAM driver %q isn't allowed (a plugin runs on the host)", req.IPAM.Driver)
 		}
 
 		configs = req.IPAM.Config
 	}
 
 	if s.scope.HasSubnets() && len(configs) == 0 {
-		add("its subnet must be named, inside the scope's")
+		add(CodeNetwork, "its subnet must be named, inside the scope's")
 	}
 
 	for _, c := range configs {
 		for _, f := range unset(c, ipamConfig) {
-			add("IPAM.Config.%s isn't allowed", f)
+			add(CodeFieldNotAllowed, "IPAM.Config.%s isn't allowed", f)
 		}
 
 		if !c.Subnet.IsValid() && s.scope.HasSubnets() {
-			add("each IPAM config names its subnet")
+			add(CodeNetwork, "each IPAM config names its subnet")
 
 			continue
 		}
 
 		if c.Subnet.IsValid() && !s.scope.Contains(c.Subnet) {
-			add("the subnet %s isn't inside the scope's", c.Subnet)
+			add(CodeNetwork, "the subnet %s isn't inside the scope's", c.Subnet)
 		}
 	}
 
-	if len(problems) > 0 {
-		return nil, refuse(http.StatusForbidden, "network.create: %s", strings.Join(problems, "; "))
+	if len(found) > 0 {
+		return nil, found.refusal(http.StatusForbidden, "network.create")
 	}
 
 	return json.Marshal(req)
@@ -95,7 +94,7 @@ func (s *scoped) ownNetwork() error {
 	}
 
 	if n == nil || !s.scope.Owns(n.Labels) {
-		return refuse(http.StatusNotFound, "network %s not found", id)
+		return refuse(http.StatusNotFound, CodeNotFound, "network %s not found", id)
 	}
 
 	s.with("id", n.ID)
@@ -111,15 +110,15 @@ func (s *scoped) createVolume(body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	var problems []string
-	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	var found problems
+	add := found.add
 
 	for _, f := range unset(req, volumeCreate) {
-		add("%s isn't allowed", f)
+		add(CodeFieldNotAllowed, "%s isn't allowed", f)
 	}
 
 	if !s.scope.Names(req.Name) {
-		add("the name %q isn't one of scope %s's (%s)", req.Name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
+		add(CodeNameNotOwn, "the name %q isn't one of scope %s's (%s)", req.Name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
 	} else if err := s.notTaken("volume", req.Name, s.docker.Volume); err != nil {
 		return nil, err
 	}
@@ -127,11 +126,11 @@ func (s *scoped) createVolume(body []byte) ([]byte, error) {
 	s.ownLabels(req.Labels, add)
 
 	if !plainLocal(req.Driver, req.DriverOpts) {
-		add("the driver %q isn't allowed (only local, without options)", req.Driver)
+		add(CodeMount, "the driver %q isn't allowed (only local, without options)", req.Driver)
 	}
 
-	if len(problems) > 0 {
-		return nil, refuse(http.StatusForbidden, "volume.create: %s", strings.Join(problems, "; "))
+	if len(found) > 0 {
+		return nil, found.refusal(http.StatusForbidden, "volume.create")
 	}
 
 	return json.Marshal(req)

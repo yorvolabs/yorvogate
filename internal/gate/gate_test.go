@@ -587,8 +587,9 @@ const scopeFile = `{
 // gate serves one listener in front of the fake Docker.
 func gate(t testing.TB, d *docker, listener string) *httptest.Server {
 	t.Helper()
+	log, _ := checkedLog(t)
 
-	return gateLogging(t, d, listener, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return gateLogging(t, d, listener, log)
 }
 
 // gateLogging is gate, logging to log.

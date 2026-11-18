@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"regexp"
@@ -222,5 +223,61 @@ func TestTheSchemaReadsAliasesAsYorvoGateDoes(t *testing.T) {
 		if (ss.Validate(asJSON(t, strings.Replace(jane, "ALIAS", string(quoted), 1))) == nil) != valid {
 			t.Errorf("%q: the schema says %v", alias, !valid)
 		}
+	}
+}
+
+// The schemas of what YorvoGate gives (scope status, the log) are open for additions at every level
+// (ADR-0005, amendment 1): no object closed without saying why (x-closed-because), every closed list
+// marked (x-list: closed, its enum), and every open list marked (x-list: open, never an enum, so an
+// older schema doesn't refuse a newer value). Inputs' schemas stay closed.
+func TestTheOutputSchemasAreOpen(t *testing.T) {
+	for _, path := range []string{"../../schemas/yorvogate-scope-status.v1.schema.json", "../../schemas/yorvogate-log.v1.schema.json"} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var schema any
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+
+		var walk func(at string, node any)
+		walk = func(at string, node any) {
+			switch n := node.(type) {
+			case map[string]any:
+				if _, isObject := n["properties"]; isObject {
+					if open, set := n["additionalProperties"].(bool); set && !open && n["x-closed-because"] == nil {
+						t.Errorf("%s %s: an object closed without x-closed-because", path, at)
+					}
+				}
+
+				_, isEnum := n["enum"]
+				switch n["x-list"] {
+				case "open":
+					if isEnum {
+						t.Errorf("%s %s: an open list is an enum (an older schema would refuse a newer value)", path, at)
+					}
+				case "closed":
+				default:
+					if isEnum {
+						t.Errorf("%s %s: an enum not marked x-list: closed or open", path, at)
+					}
+				}
+
+				for k, v := range n {
+					// An if's enum matches values (a condition), it doesn't list what's allowed
+					if k != "if" {
+						walk(at+"/"+k, v)
+					}
+				}
+			case []any:
+				for i, v := range n {
+					walk(fmt.Sprintf("%s/%d", at, i), v)
+				}
+			}
+		}
+
+		walk("", schema)
 	}
 }

@@ -440,7 +440,9 @@ The configuration and the scope files each say their format: `version: 1` (YAML)
 - An old format keeps working for at least one minor release after its successor, with a warning from `yorvogate check` and in the logs.
 - A configuration without `version` was read as version 1 in 0.3, with that warning, and is refused from 0.4. A scope file without one is still read as version 1, with the warning: an orchestrator may roll back to a release that refuses the field. It's refused from the first minor release after Quire Server writes a version in every scope file, which the CHANGELOG announces.
 - Each format's version moves on its own: a new configuration format doesn't change the scope files', or the reverse.
-- What YorvoGate reads (the configuration, scope files) is closed: a field it doesn't know is refused. What it answers (scope status) is open: optional fields may be added within a version, and a client should ignore those it doesn't know. A field removed or changed in meaning is a new version.
+- What YorvoGate reads (the configuration, scope files) is closed: a field it doesn't know is refused. What it gives (scope status, refusals, the log) is open for additions at every level: a release may add optional fields within a version, and values to an open list. A client should ignore fields it doesn't know, and treat an unknown value of an open list as the list's general case.
+- Each list of values says whether it's open or closed (`x-list` in the schemas). Open lists are reason codes, the log's `msg`, `auth_failure` and `by`, and `taken`'s `kind`. A closed list is a scope's `state`: a new state is a new version, since orchestrators wait on knowing every one.
+- A new version comes with a field removed or renamed, a field made required or given another type, a change of meaning, a value added to a closed list, or a cause moved to another value of an open list (a refusal keeps its code once it has one).
 
 ## Migrating from 0.1.0
 
@@ -456,6 +458,88 @@ Run `yorvogate check` with the new version on your configuration and scope folde
 - **Image answers** (list, inspect, history) name an image only by the tags and digests the scope may see.
 - New, optional: [`scope_sockets`](#scope-sockets) (a socket per scope, where `token_sha256` becomes optional) and `socket_group` on any listener with unix sockets.
 
+## Reason codes
+
+Every refusal of a Docker request says why twice: in Docker's `message`, for people, which may change between releases, and in `code`, for programs, which doesn't. Docker's clients show the message and ignore the code:
+
+```
+{"message": "yorvogate: container.create jane-php-1: adding the capability SYS_ADMIN isn't allowed (allowed: NET_BIND_SERVICE, CHOWN)", "code": "policy.capability"}
+```
+
+A refusal that collects several problems (a container's, network's or volume's configuration, an update, a network connect) has the first one's code, and the log line lists every problem's code (`codes`). An authentication failure always has `auth.rejected`, whatever its cause, so a client learns nothing of which scopes exist; the log says the cause (`auth_failure`, below). The codes, and what each means:
+
+| Code | Meaning |
+|---|---|
+| `auth.rejected` | No such scope, or not its credentials (token, certificate, socket or peer user). Every authentication failure has this code; its cause is only logged. |
+| `body.field-not-allowed` | A field of the body is set that a scope may not set. |
+| `body.invalid` | The body isn't one value of what Docker reads there. |
+| `body.missing` | The endpoint takes a body, and none came. |
+| `body.too-large` | The body is larger than body_limit. |
+| `body.unexpected` | The endpoint takes no body, and one came. |
+| `body.unreadable` | The body couldn't be read (it stopped, or came too slowly). |
+| `daemon.defaults-unread` | Docker's defaults haven't been read yet: scoped requests wait for them. |
+| `daemon.defaults-unsafe` | Docker's defaults would widen what scopes may do (or couldn't be read). |
+| `daemon.unavailable` | Something of Docker's own that a check needs couldn't be read (its platform). |
+| `daemon.unreachable` | Docker didn't answer a request YorvoGate forwarded. |
+| `gate.undecided` | YorvoGate couldn't decide on the request (an error of its own, or Docker's while it looked something up). |
+| `header.content-type` | The Content-Type isn't one value, or isn't valid. |
+| `header.form-body` | A form body, whose parameters Docker would read over the checked query. |
+| `header.too-long` | A header is longer than YorvoGate forwards. |
+| `header.twice` | A header YorvoGate reads or forwards is given more than once. |
+| `listener.not-allowed` | The endpoint isn't one of the trusted listener's groups. |
+| `load.busy` | Too many image loads at once: retry (Retry-After). |
+| `load.entries` | The archive has more entries than an image archive may. |
+| `load.invalid` | The archive isn't an image archive YorvoGate reads, or holds names or blobs it may not. |
+| `load.spool-full` | The image spool is full now: retry (Retry-After). |
+| `load.stalled` | The archive stopped arriving. |
+| `load.too-large` | The image archive is larger than load_limit, or than the spool (spool.limit). |
+| `load.unpacked` | The archive decompresses to more than its bound (spool.ratio, spool.unpacked), or took too long to check. |
+| `load.unreadable` | The archive couldn't be read. |
+| `policy.builder` | A builder that isn't configured as a builder must be, or a use of it beyond buildctl dial-stdio. |
+| `policy.capability` | A capability beyond the listener's, or not dropping all where it must. |
+| `policy.egress` | A network that isn't internal, for a scope without egress. |
+| `policy.exec` | An exec that isn't allowed (privileged). |
+| `policy.host-access` | It would reach the host: privileged, a host path, devices, published ports. |
+| `policy.image` | An image reference that isn't valid, or missing. |
+| `policy.limit` | A resource limit missing, above the listener's, or one that's unlimited. |
+| `policy.logging` | A log driver or log option that isn't allowed. |
+| `policy.mount` | A mount or volume that isn't allowed (its type, source, driver, options or subpath). |
+| `policy.namespace` | A namespace mode that isn't allowed (the host's, or one Docker would read as the host's). |
+| `policy.network` | A network, alias, address, driver or subnet that isn't allowed. |
+| `policy.platform` | A platform that isn't the host's, nor one the listener allows. |
+| `policy.registry` | A registry the listener's scopes may not pull from. |
+| `policy.runtime` | A runtime or isolation that isn't allowed. |
+| `policy.security` | A security option, or no-new-privileges, that isn't the listener's. |
+| `query.invalid` | A query parameter's value isn't valid (filters that aren't JSON lists). |
+| `query.not-allowed` | A query parameter that isn't allowed, or that YorvoGate doesn't forward, for the endpoint. |
+| `query.twice` | A query parameter is given more than once. |
+| `route.invalid` | The path isn't canonical, or its API version isn't one YorvoGate serves. |
+| `route.unknown-endpoint` | An endpoint YorvoGate doesn't know (a newer Docker's, or none of Docker's). |
+| `scope.endpoint-not-allowed` | The endpoint isn't one a scope may use. |
+| `scope.image-not-own` | The image name isn't in the scope's image namespaces. |
+| `scope.label-not-own` | The object doesn't carry the scope's owner label, or carries another scope's. |
+| `scope.name-not-own` | The name isn't under the scope's prefixes. |
+| `scope.name-taken` | The name is under the scope's prefixes, but another owner's object has it. |
+| `scope.not-found` | The object isn't the scope's: answered as one that doesn't exist. |
+| `scope.object-not-own` | What the request joins or mounts (a container, network or volume) isn't the scope's. |
+| `stream.upgrade-only` | A stream allowed only as an HTTP upgrade. |
+
 ## Logs
 
-One JSON line per decision on standard error: `listener`, `method`, `path`, `scope` (scoped listeners), `endpoint`, the headers that weren't forwarded (`headers_not_forwarded`, names only), and for a refusal its `status` and `reason`.
+One JSON line per decision on standard error, in a published format ([schema](../schemas/yorvogate-log.v1.schema.json), `"log_version": 1` in each line). The format is open for additions: a later release may add optional fields within log version 1, so ignore fields you don't know. A field removed, or one whose meaning changes, is a new `log_version`. `code` is the contract for a refusal, and `reason` is free text for people.
+
+```
+{"time":"…","level":"WARN","msg":"refused","log_version":1,"request_id":"5ffb2dfacc1b6c5b769473a8fffb9d0a","source":"uid=1000","method":"POST","path":"/v1.56/containers/create","listener":"sites","scope":"jane","status":403,"code":"policy.capability","reason":"container.create jane-php-1: adding the capability SYS_ADMIN isn't allowed (allowed: NET_BIND_SERVICE, CHOWN)","decision_ms":1.9}
+```
+
+- `msg`: `allowed` or `refused` for a decision, `auth failed` for why an authentication failed (below), `stream opened` and `stream closed` for a stream.
+- `request_id`: the request's ID, also in its answer's `X-Request-Id` header. A client's own `X-Request-Id` (1 to 64 of `A-Z a-z 0-9 . _ -`) is logged as `client_request_id`, so an orchestrator can find its operations. It's never the gate's ID, so one client can't make its lines look like another's.
+- `source`: where it came from. Over TCP, the peer's IP address and port. On a unix socket, `uid=<n>`, the connecting user as the kernel reports it.
+- `listener`, `method`, `path` (cut to 256 bytes), `endpoint`, `scope` (the authenticated scope), the headers that weren't forwarded (`headers_not_forwarded`, names only).
+- `decision_ms`: how long YorvoGate took to decide, a refusal's hold included (Docker's own time isn't in it).
+- For a refusal: its `status`, `code` ([reason codes](#reason-codes)), `codes` when it collected several problems, and `reason`.
+- **`auth failed`** follows an authentication's refusal, written after the client has its answer, so the answer's timing doesn't depend on the cause. `auth_failure` is one of `no-credentials`, `unknown-scope`, `scope-file-invalid`, `wrong-token`, `token-expired`, `peer-not-allowed`, `names-another`, `certificate-not-pinned`, `certificate-expired` and `token-on-certificate-listener`, with `claimed_scope` (cut to 64) and `source`. A client is told none of it: its answer is always `auth.rejected`, and the connection is closed (`Connection: close`), so a next request on it can't time the logging. A token is never logged, in any line.
+- **Streams** (a request upgraded to a connection of its own: attach, exec, a builder's dial-stdio): `stream opened`, then `stream closed` with `duration_ms`, `bytes_in`, `bytes_out` and `by`. `by` is `ended` (the client or Docker closed it: the two can't be told apart) or `revoked` (its scope no longer allows it). A `shutdown` value comes with draining streams at shutdown (0.4-c). Followed logs are an ordinary answer, logged as `allowed`.
+- Values a client chose are JSON-escaped, so a line can't be split or forged, and cut short.
+
+To keep refusals apart, for an audit trail or alerts, filter them where the log is shipped. For example `jq -c 'select(.msg == "refused" or .msg == "auth failed")'`, or with journald, `journalctl -u yorvogate -o cat | jq -c 'select(.level == "WARN")'`. Every refusal and every authentication failure is a WARN line, and nothing else is.

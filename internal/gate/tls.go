@@ -150,11 +150,14 @@ func (t *TLSFiles) Config() *tls.Config {
 	return &tls.Config{
 		MinVersion:             tls.VersionTLS13,
 		SessionTicketsDisabled: true,
+		NextProtos:             []string{"http/1.1"},
 		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
 			st := t.current.Load()
 			// No session tickets: a resumed session would skip the client certificate's
 			// verification against the CA as it is now
-			c := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{st.cert}, SessionTicketsDisabled: true}
+			// HTTP/1.1 only, as Docker's clients speak it: a connection is one request at a time,
+			// so an authentication failure's Connection: close ends what it could time
+			c := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{st.cert}, SessionTicketsDisabled: true, NextProtos: []string{"http/1.1"}}
 
 			if st.pool != nil {
 				c.ClientAuth = tls.RequireAndVerifyClientCert

@@ -800,6 +800,7 @@ func TestACertificateIsCheckedAfterItsHandshake(t *testing.T) {
 				var reused []bool
 				trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) { reused = append(reused, i.Reused) }}
 				keptAlive := &http.Client{Transport: &http.Transport{TLSClientConfig: m.tlsConfig(&cert), MaxConnsPerHost: 1}, Timeout: 5 * time.Second}
+				closed := false
 				send := func() int {
 					req, _ := http.NewRequestWithContext(httptrace.WithClientTrace(t.Context(), trace), "GET", "https://"+address+path, nil)
 					res, err := keptAlive.Do(req)
@@ -808,6 +809,7 @@ func TestACertificateIsCheckedAfterItsHandshake(t *testing.T) {
 					}
 					_, _ = io.Copy(io.Discard, res.Body)
 					_ = res.Body.Close()
+					closed = res.Close
 
 					return res.StatusCode
 				}
@@ -820,22 +822,23 @@ func TestACertificateIsCheckedAfterItsHandshake(t *testing.T) {
 
 				tc.change(m, cert)
 
+				// On a trusted listener, whatever it asks for: a path no endpoint has gets the same, not
+				// a 403 (a scoped listener maps the path first, as it does for a token)
+				if level == "trusted" {
+					path = "/v1.56/no/such/endpoint"
+				}
+
 				if status := send(); status != http.StatusUnauthorized {
 					t.Errorf("after, on the connection kept alive: %d", status)
 				}
 
-				// On a trusted listener, whatever it asks for: a path no endpoint has gets the same, not
-				// a 403 (a scoped listener maps the path first, as it does for a token)
-				wantReused := 2
-				if level == "trusted" {
-					path, wantReused = "/v1.56/no/such/endpoint", 3
-					if status := send(); status != http.StatusUnauthorized {
-						t.Errorf("after, a path no endpoint has: %d", status)
-					}
+				if len(reused) != 2 || !reused[1] {
+					t.Errorf("the connection wasn't kept alive: %v", reused)
 				}
 
-				if len(reused) != wantReused || !reused[len(reused)-1] {
-					t.Errorf("the connection wasn't kept alive: %v", reused)
+				// And the refusal closes it (its cause is logged after the answer)
+				if !closed {
+					t.Error("the connection stays open after the refusal")
 				}
 
 				g.Revoke()
@@ -874,5 +877,42 @@ func TestAScopedListenerAdmitsNoCertificateWithoutItsScope(t *testing.T) {
 
 	if (*TLSFiles)(nil).admits(of(admin, m.admins), scope) {
 		t.Error("a gate without its listener's files")
+	}
+}
+
+// A TLS listener speaks HTTP/1.1 only, whatever a client offers: Docker's clients speak it, and on
+// HTTP/2 an authentication failure's Connection: close wouldn't end the connection's other streams.
+func TestATLSListenerIsHTTP11Only(t *testing.T) {
+	d := startDocker(t)
+	m := mtlsGate(t, d, "")
+	jane, _, _ := m.clients.issue(t, client("jane"))
+	orchestrator, _, _ := m.admins.issue(t, client("orchestrator"))
+
+	for address, cert := range map[string]tls.Certificate{m.sites: jane, m.trusted: orchestrator} {
+		c := m.tlsConfig(&cert)
+		c.NextProtos = []string{"h2", "http/1.1"}
+
+		conn, err := tls.Dial("tcp", address, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if p := conn.ConnectionState().NegotiatedProtocol; p != "http/1.1" {
+			t.Errorf("%s: negotiated %q, want http/1.1", address, p)
+		}
+
+		_ = conn.Close()
+
+		// And Go's own client, which prefers h2 when it's offered, gets 1.1
+		h2 := &http.Client{Transport: &http.Transport{TLSClientConfig: c, ForceAttemptHTTP2: true}, Timeout: 5 * time.Second}
+		res, err := h2.Get("https://" + address + "/_ping")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+
+		if res.ProtoMajor != 1 {
+			t.Errorf("%s: answered over %s", address, res.Proto)
+		}
 	}
 }

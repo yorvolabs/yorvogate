@@ -47,20 +47,20 @@ type scopeStatus struct {
 func (g *Gate) own(w http.ResponseWriter, r *http.Request, entry *slog.Logger) {
 	if g.listener.Mode != config.Trusted {
 		entry.Warn("refused", "status", http.StatusForbidden, "reason", "YorvoGate's own endpoints")
-		answer(w, http.StatusForbidden, "YorvoGate's own endpoints are a trusted listener's only")
+		answer(w, http.StatusForbidden, "", "YorvoGate's own endpoints are a trusted listener's only")
 
 		return
 	}
 
 	m := statusPath.FindStringSubmatch(r.URL.EscapedPath())
 	if m == nil {
-		answer(w, http.StatusNotFound, "no such endpoint of YorvoGate's (/_yorvogate/v1/scopes/<name>)")
+		answer(w, http.StatusNotFound, "", "no such endpoint of YorvoGate's (/_yorvogate/v1/scopes/<name>)")
 
 		return
 	}
 
 	if r.Method != http.MethodGet {
-		answer(w, http.StatusMethodNotAllowed, "/_yorvogate/v1/scopes/<name> is GET only")
+		answer(w, http.StatusMethodNotAllowed, "", "/_yorvogate/v1/scopes/<name> is GET only")
 
 		return
 	}
@@ -68,7 +68,7 @@ func (g *Gate) own(w http.ResponseWriter, r *http.Request, entry *slog.Logger) {
 	query := r.URL.Query()
 	for key, values := range query {
 		if (key != "listener" && key != "sha256" && key != "absent") || len(values) > 1 {
-			answer(w, http.StatusBadRequest, "the parameters are listener, and sha256 or absent, each once")
+			answer(w, http.StatusBadRequest, "", "the parameters are listener, and sha256 or absent, each once")
 
 			return
 		}
@@ -79,7 +79,7 @@ func (g *Gate) own(w http.ResponseWriter, r *http.Request, entry *slog.Logger) {
 		if scoped := g.registry.Listeners(); len(scoped) == 1 {
 			listener = scoped[0]
 		} else {
-			answer(w, http.StatusBadRequest, "listener: which scoped listener ("+strings.Join(scoped, ", ")+")")
+			answer(w, http.StatusBadRequest, "", "listener: which scoped listener ("+strings.Join(scoped, ", ")+")")
 
 			return
 		}
@@ -87,7 +87,7 @@ func (g *Gate) own(w http.ResponseWriter, r *http.Request, entry *slog.Logger) {
 
 	want, absent := query.Get("sha256"), query.Has("absent")
 	if (want != "" && absent) || (query.Has("sha256") && !sha256Hex.MatchString(want)) || (absent && query.Get("absent") != "") {
-		answer(w, http.StatusBadRequest, "sha256 is the scope file's SHA-256 (64 lowercase hex), or absent alone; not both")
+		answer(w, http.StatusBadRequest, "", "sha256 is the scope file's SHA-256 (64 lowercase hex), or absent alone; not both")
 
 		return
 	}
@@ -102,7 +102,7 @@ func (g *Gate) own(w http.ResponseWriter, r *http.Request, entry *slog.Logger) {
 
 	status, next, ok := g.registry.Status(listener, m[1])
 	if !ok {
-		answer(w, http.StatusBadRequest, "listener: "+listener+" isn't a scoped listener")
+		answer(w, http.StatusBadRequest, "", "listener: "+listener+" isn't a scoped listener")
 
 		return
 	}
@@ -144,7 +144,7 @@ func (g *Gate) own(w http.ResponseWriter, r *http.Request, entry *slog.Logger) {
 		taken, err := g.taken(r.Context(), listener, m[1])
 		if err != nil {
 			entry.Error("scope status", "scope", m[1], "error", err.Error())
-			answer(w, http.StatusBadGateway, "the scope's taken names couldn't be listed: "+err.Error())
+			answer(w, http.StatusBadGateway, "", "the scope's taken names couldn't be listed: "+err.Error())
 
 			return
 		}
