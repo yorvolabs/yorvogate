@@ -95,6 +95,11 @@ func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Error("Docker didn't answer", "method", r.Method, "path", r.URL.Path, "error", err)
+
+			if failed, ok := r.Context().Value(dockerFailedKey{}).(func()); ok {
+				failed()
+			}
+
 			answer(w, http.StatusBadGateway, CodeDockerUnreachable, "Docker didn't answer")
 		},
 	}}

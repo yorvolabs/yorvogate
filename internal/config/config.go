@@ -65,6 +65,8 @@ type Config struct {
 	StateFile string `yaml:"state_file"`
 	// Spool is where image archives a scope loads are kept while they're checked, and how much.
 	Spool Spool `yaml:"spool"`
+	// Admin is the admin listener (metrics, health, readiness), when there's one.
+	Admin *Admin `yaml:"admin"`
 	// Daemon is what YorvoGate accepts of Docker's own defaults.
 	Daemon Daemon `yaml:"daemon"`
 
@@ -76,6 +78,20 @@ type Daemon struct {
 	// WithoutLSM accepts a Docker with neither AppArmor nor SELinux (Docker Desktop, rootless Docker,
 	// a host without either); without it, scoped listeners refuse every request on such a Docker.
 	WithoutLSM bool `yaml:"without_lsm"`
+}
+
+// Admin is the admin listener: an operator's monitoring (/metrics, /healthz, /readyz), never Docker's
+// API. On a unix socket, or a loopback TCP address only.
+type Admin struct {
+	Address     string `yaml:"address"`
+	SocketGroup string `yaml:"socket_group"`
+	// ScopeLabels adds a scope label to the refusal counter (one series per scope and code)
+	ScopeLabels bool `yaml:"scope_labels"`
+}
+
+// AdminListener is the admin listener as a listener, for the address checks every listener has.
+func (a *Admin) AdminListener() Listener {
+	return Listener{Name: "admin", Address: a.Address, SocketGroup: a.SocketGroup, Mode: Trusted}
 }
 
 // Spool bounds what image loads hold at once, across every scope: the folder their archives are
@@ -322,6 +338,12 @@ func (c *Config) check() error {
 
 	if err := c.Spool.settle(c); err != nil {
 		return err
+	}
+
+	if c.Admin != nil {
+		if err := c.Admin.check(c); err != nil {
+			return err
+		}
 	}
 
 	if len(c.Listeners) == 0 {
@@ -719,4 +741,30 @@ func (s *Spool) UnpackedLimit(size int64) int64 {
 	}
 
 	return limit
+}
+
+// check holds the admin listener to a unix socket, or loopback TCP: its answers are an operator's.
+func (a *Admin) check(c *Config) error {
+	switch {
+	case strings.HasPrefix(a.Address, "unix:///"):
+	case strings.HasPrefix(a.Address, "tcp://"):
+		host, _, err := net.SplitHostPort(strings.TrimPrefix(a.Address, "tcp://"))
+		if ip, perr := netip.ParseAddr(host); err != nil || perr != nil || !ip.IsLoopback() {
+			return fmt.Errorf("admin.address: %s isn't a loopback IP address and port (127.0.0.1:9100, [::1]:9100), or a unix socket", a.Address)
+		}
+
+		if a.SocketGroup != "" {
+			return errors.New("admin.socket_group: for a unix socket only")
+		}
+	default:
+		return fmt.Errorf("admin.address: unix:///absolute/path or tcp://<loopback>:<port>, not %q", a.Address)
+	}
+
+	for _, l := range c.Listeners {
+		if l.Address == a.Address {
+			return fmt.Errorf("admin.address: listener %s has it too", l.Name)
+		}
+	}
+
+	return nil
 }

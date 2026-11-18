@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yorvolabs/yorvogate/schemas/yorvogate-readiness.v1.schema.json",
+  "title": "YorvoGate readiness, format 1",
+  "description": "The admin listener's GET /readyz answer (docs/configuration.md#monitoring): 200 when ready, 503 when not. For routing and alerts, never for restarts (/healthz is the process's). Open for additions at every level (ADR-0005, amendment 1): a later release may add checks.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["ready", "checks"],
+  "properties": {
+    "ready": {"type": "boolean"},
+    "checks": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "description": "ok, or why not."},
+      "description": "Each check, ok or why not: docker, defaults, api_versions, scopes, spool (an open set)."
+    }
+  }
+}

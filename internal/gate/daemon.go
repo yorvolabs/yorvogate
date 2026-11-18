@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -27,12 +28,23 @@ const (
 	defaultsRetry = 10 * time.Second
 )
 
+// downRetry is how soon again while Docker is down (a variable, for tests).
+var downRetry = time.Second
+
 // Defaults is what YorvoGate last read of Docker's defaults, shared by every scoped listener.
 type Defaults struct {
 	docker  *Docker
 	runtime func(string) bool
 	noLSM   bool
 	state   atomic.Pointer[daemonState]
+	// The API versions the gate serves, to tell whether Docker's overlap
+	lowest, highest string
+	// Bumped when Docker is found down: a read begun before isn't kept (it may be the Docker before
+	// a restart)
+	generation atomic.Uint64
+	down       atomic.Bool
+	nudge      chan struct{}
+	ping       pinger
 }
 
 // daemonState is one read of Docker's defaults.
@@ -45,6 +57,11 @@ type daemonState struct {
 	runtime string
 	// Docker's default log driver: a container's log options are its own when it names none
 	logDriver string
+	// Docker's API versions, and why they don't overlap the gate's ("" when they do)
+	apiMin, apiMax string
+	apiMismatch    string
+	// Whether this read reached Docker at all
+	reached bool
 }
 
 // NewDefaults reads Docker's defaults for a configuration's scoped listeners: a default runtime is
@@ -58,9 +75,14 @@ func NewDefaults(c *config.Config) *Defaults {
 		}
 	}
 
+	lowest, highest := c.Versions()
+
 	return &Defaults{
-		docker: NewDocker(c.UpstreamSocket()),
-		noLSM:  c.Daemon.WithoutLSM,
+		docker:  NewDocker(c.UpstreamSocket()),
+		lowest:  lowest.String(),
+		highest: highest.String(),
+		nudge:   make(chan struct{}, 1),
+		noLSM:   c.Daemon.WithoutLSM,
 		runtime: func(r string) bool {
 			return r == "runc" || !slices.ContainsFunc(lists, func(l []string) bool { return !slices.Contains(l, r) })
 		},
@@ -75,7 +97,10 @@ type dockerInfo struct {
 }
 
 // Read reads Docker's defaults once. A read that fails is unsafe: what Docker would do isn't known.
+// A read that began before Docker was found down isn't kept.
 func (d *Defaults) Read(ctx context.Context) *daemonState {
+	generation := d.generation.Load()
+
 	var info dockerInfo
 
 	found, err := d.docker.fetch(ctx, config.Lowest.String(), "/info", &info)
@@ -88,11 +113,75 @@ func (d *Defaults) Read(ctx context.Context) *daemonState {
 		state.unsafe = []string{fmt.Sprintf("they couldn't be read (%v)", err)}
 	} else {
 		state = judge(info, d.runtime, d.noLSM)
+		state.reached = true
+		d.versions(ctx, state)
 	}
 
-	d.state.Store(state)
+	if d.generation.Load() == generation {
+		d.state.Store(state)
+
+		if state.reached {
+			d.down.Store(false)
+		}
+	}
 
 	return state
+}
+
+// versions notes Docker's API versions, and whether they overlap the gate's (ARC-0004).
+func (d *Defaults) versions(ctx context.Context, state *daemonState) {
+	var v struct {
+		APIVersion    string `json:"ApiVersion"`
+		MinAPIVersion string
+	}
+
+	if found, err := d.docker.fetch(ctx, config.Lowest.String(), "/version", &v); err != nil || !found || v.APIVersion == "" {
+		return
+	}
+
+	state.apiMin, state.apiMax = v.MinAPIVersion, v.APIVersion
+	if state.apiMin == "" {
+		state.apiMin = state.apiMax
+	}
+
+	if older(state.apiMax, d.lowest) || older(d.highest, state.apiMin) {
+		state.apiMismatch = fmt.Sprintf("Docker serves API %s to %s, YorvoGate %s to %s: no version is both's", state.apiMin, state.apiMax, d.lowest, d.highest)
+	}
+}
+
+// older tells whether API version a is older than b ("1.44" < "1.56").
+func older(a, b string) bool {
+	am, an, _ := strings.Cut(a, ".")
+	bm, bn, _ := strings.Cut(b, ".")
+	ai, _ := strconv.Atoi(am)
+	bi, _ := strconv.Atoi(bm)
+
+	if ai != bi {
+		return ai < bi
+	}
+
+	aj, _ := strconv.Atoi(an)
+	bj, _ := strconv.Atoi(bn)
+
+	return aj < bj
+}
+
+// MarkDown is told when Docker didn't answer: until its defaults are read again (Watch, about every
+// second while it's down), scoped requests are refused, so none meets the defaults of the Docker
+// before a restart.
+func (d *Defaults) MarkDown() {
+	if d == nil {
+		return
+	}
+
+	d.generation.Add(1)
+	d.down.Store(true)
+	d.state.Store(nil)
+
+	select {
+	case d.nudge <- struct{}{}:
+	default:
+	}
 }
 
 // Check reads Docker's defaults once, for `check --docker`: what would widen what scopes may do, and
@@ -103,9 +192,11 @@ func (d *Defaults) Check(ctx context.Context) (unsafe, notes []string) {
 	return state.unsafe, state.notes
 }
 
-// Watch reads Docker's defaults until the context ends, logging each change of what's unsafe.
+// Watch reads Docker's defaults until the context ends, logging each change of what's unsafe and of
+// whether Docker's API versions overlap the gate's. While Docker is down (or its defaults unread),
+// it reads about every second.
 func (d *Defaults) Watch(ctx context.Context, log *slog.Logger) {
-	last := "\x00"
+	last, lastAPI := "\x00", ""
 
 	for ctx.Err() == nil {
 		state := d.Read(ctx)
@@ -121,12 +212,26 @@ func (d *Defaults) Watch(ctx context.Context, log *slog.Logger) {
 			last = now
 		}
 
-		if len(state.unsafe) > 0 {
+		if state.reached && state.apiMismatch != lastAPI {
+			if state.apiMismatch != "" {
+				log.Warn("Docker's API versions don't overlap YorvoGate's: every request is refused", "reason", state.apiMismatch)
+			} else if lastAPI != "" {
+				log.Info("Docker's API versions overlap YorvoGate's again")
+			}
+
+			lastAPI = state.apiMismatch
+		}
+
+		switch {
+		case !state.reached || d.down.Load():
+			wait = downRetry
+		case len(state.unsafe) > 0:
 			wait = defaultsRetry
 		}
 
 		select {
 		case <-ctx.Done():
+		case <-d.nudge:
 		case <-time.After(wait):
 		}
 	}
@@ -136,6 +241,10 @@ func (d *Defaults) Watch(ctx context.Context, log *slog.Logger) {
 // unsafe, or haven't been read.
 func (d *Defaults) current() (*daemonState, error) {
 	state := d.state.Load()
+	if state == nil && d.down.Load() {
+		return nil, refuse(http.StatusServiceUnavailable, CodeDefaultsUnread, "Docker didn't answer: scoped requests wait until its defaults are read again")
+	}
+
 	if state == nil {
 		return nil, refuse(http.StatusServiceUnavailable, CodeDefaultsUnread, "Docker's defaults haven't been read yet: scoped requests wait for them")
 	}

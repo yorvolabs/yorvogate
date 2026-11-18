@@ -66,6 +66,15 @@ func decisionMS(ctx context.Context) float64 {
 	return float64(time.Since(started).Microseconds()) / 1000
 }
 
+// sinceStart is how long since the gate started on the request.
+func sinceStart(ctx context.Context) time.Duration {
+	if started, ok := ctx.Value(startKey{}).(time.Time); ok {
+		return time.Since(started)
+	}
+
+	return 0
+}
+
 // requestFields start a request's log line, and give its ID.
 func requestFields(r *http.Request) (string, []any) {
 	id := newRequestID()
