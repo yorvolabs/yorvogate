@@ -7,10 +7,17 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 ### Added
 
 - **`spool`: bounds on image loads, every scope's together.** An image archive a scope loads is kept in one folder (`spool.dir`, on disk, by default beside `state_file`), within one budget of bytes reserved as it arrives (`spool.limit`), a few loads at a time (`spool.loads`, each scope one at a time; a load waits at most 30 s for its turn). An archive is refused as soon as it decompresses to more than `spool.ratio` times its size or `spool.unpacked`, or has more than 10,000 entries, before any of its names is checked. An upload that goes silent for 60 s is ended. A load that doesn't fit now is told to retry (503, `Retry-After`); one that never could gets 413. See [the image spool](docs/configuration.md#the-image-spool).
+- **Taken names in scope status.** For a loaded scope, the status lists `taken`: the containers, networks and volumes under its prefixes that carry another owner's label, with whose they are. They were made before the scope's file was valid, typically by a scope whose prefix is shorter (site `jane` making `jane-shop-web-1` before site `jane-shop` existed). The scope's create of such a name is refused as taken (409), and `check --docker` warns. If the names can't be listed, the status answers 502. See [scope status](docs/configuration.md#scope-status).
+- **`check` warns when a unix listener's `socket_group` is root's** (`0` or `root`): YorvoGate must run as root to give its sockets that group, and every process in the group may connect.
 
 ### Changed
 
 - **Breaking: image archives are kept in `spool.dir`, not `$TMPDIR`, and YorvoGate needs that folder to start.** With a scoped listener, `serve` doesn't start, and `check` refuses, when `spool.dir` can't be made or written: by default `spool/` beside `state_file`, or `/var/lib/yorvogate/spool` without one. A container with `read_only: true` and no `state_file` needs a volume at `/var/lib/yorvogate`, or `spool.dir` set to one. A setup that mounted a volume at `/tmp` for loads can drop it once that's in place. Don't write `spool:` into a configuration that 0.3 may still read: 0.3 refuses the key.
+- **Breaking: a configuration without `version` is refused**, as 0.3 announced. Add `version: 1`. Scope files without one are still read as version 1, with a warning, until the first minor release after Quire Server writes a version in every scope file.
+- **Breaking: with `max_memory` set, `MemorySwap` is checked.** It must be unset (Docker's default: as much swap as memory), or between the memory limit and twice it. `-1` (unlimited swap) is refused, on `container.create` and `container.update`. An update that gives `MemorySwap` without `Memory` is checked against the container's current limit.
+- **Create and update check limits the same way.** On `container.update`, a limit left out stays the container's own (as Docker keeps it), and a limit given is checked as on create.
+- **A container that joins another of its scope's containers** (`PidMode`, `IpcMode` or `NetworkMode` `container:<name>`, or `VolumesFrom`) names it to Docker by the ID YorvoGate checked, not by its name.
+- The conformance suite runs on Quire Server's gate configuration at `f556195`, and a nightly job fails when the file on Quire Server's main differs from the pinned copy.
 
 ### Fixed
 
@@ -19,6 +26,9 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 ### Security
 
 - **One scope could exhaust the gate for every other with `image.load`** (0.2.0 to 0.3.0). The archive was decompressed and every entry hashed with no bound on what it decompressed to or how many entries it had, so a small gzip could take a core for minutes, or a header-only archive of millions of entries grow the gate's memory until it was stopped. Loads had no bound across scopes on disk (each scope up to `load_limit`, in `$TMPDIR`) or at once, and an upload could trickle for as long as its client liked. Each is now bounded (above).
+- **A scope could take a nested sibling's names before the sibling existed** (0.2.0 to 0.3.0): with names that nest (`jane-` and `jane-shop-`), the scope with the shorter prefix could create `jane-shop-web-1` with its own label while `jane-shop` had no valid file, then answer for it on a shared network routed by container name. Such names are now listed as `taken` and refused to the new scope (above). No name-only rule can tell them from the shorter scope's own services, so it's detected, not prevented: orchestrators should keep names from nesting.
+- **A required memory limit didn't bound swap** (0.2.0 to 0.3.0): `MemorySwap: -1` gave a container unlimited swap on a host that has swap.
+- **A container joined another by name** (0.2.0 to 0.3.0): between YorvoGate's check and Docker's lookup, the name could come to name another container, so the namespace or volumes joined weren't the ones checked. No scope can create a name in another's, so that took a container made in between through a trusted listener: narrow, now closed.
 
 ## [0.3.0] - 2026-11-12
 

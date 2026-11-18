@@ -22,7 +22,7 @@ What YorvoGate holds, so you can tell a vulnerability from a limit, and set it u
 
 **Registries are the operator's.** The daemon fetches from a registry only when the listener lists it ([`pulls.registries`](configuration.md#pulls-scoped-listeners), Docker Hub alone by default), whether a scope pulls from it, inspects a manifest on it or searches it. A loopback, link-local or private address is refused unless it's listed, and so is every other registry. A pull's platform is the host's unless another is listed.
 
-**Names are owned.** Docker names images globally: a scope that retags or loads an image as `postgres:18` would change what every other container that names it runs next. So a scope writes image names (tag, load, delete) only in its own namespaces, and reads none in another's protected namespace.
+**Names are owned.** Docker names images globally: a scope that retags or loads an image as `postgres:18` would change what every other container that names it runs next. So a scope writes image names (tag, load, delete) only in its own namespaces, and reads none in another's protected namespace. Container, network and volume names are a scope's by its longest prefix: once a scope's file is valid, no scope with a shorter prefix can create a name under its. Before that (a site not yet set up), or after its file is removed, the shorter prefix's scope can. What it made then is listed as `taken` in the new scope's [status](configuration.md#scope-status), and that scope's create of those names is refused, so a name made ahead never becomes another's without the operator seeing it. Orchestrators should keep scopes' names from nesting where they can.
 
 ## Compared with other gates
 

@@ -137,7 +137,7 @@ What a scope's containers may ask of the host. Whatever isn't listed is refused,
 | `log_options` | none | Options of the listed log drivers, each with the exact values allowed (`syslog-address: [udp://10.0.0.9:514]`); see [log options](#log-options) |
 | `max_log_buffer` | 4 MiB | The largest `max-buffer-size` a container's log may ask, in bytes |
 | `ulimits` | none | Ulimits that may be set, by name (e.g. `nofile`) |
-| `max_memory` | — | When set (bytes, at least 6 MiB): every container has a memory limit up to this |
+| `max_memory` | — | When set (bytes, at least 6 MiB): every container has a memory limit up to this, and its swap is bounded by it: `MemorySwap` (memory and swap together) unset, as Docker bounds it by default, or between the limit and twice it, never `-1` (unlimited). On `container.update`, a limit left out stays the container's own, and one given is checked the same way |
 | `max_pids` | — | When set: every container has a process limit up to this |
 | `protected_images` | none | Image name prefixes (ending with `/`) a scope may use only within its own `images` |
 | `egress` | — | `none`: every scope's containers and builders join only internal networks (see [egress](#egress)) |
@@ -429,6 +429,7 @@ GET /_yorvogate/v1/scopes/<name>?listener=<scoped listener>&absent
 - With `sha256`, the request waits (10 seconds at most) until that listener's scope file is the one with that SHA-256, whatever its state: write the file (by renaming a complete one over it), then ask with its SHA-256, and the answer is about that file and no older one. With `absent`, it waits until the scope has no file (`unknown`). YorvoGate scans the folders at once for such a request, rather than at its next scan.
 - A wait that ends without what it waited for answers **408** with `"matched": false` and the state as it is: treat it as a failure, never as the state you waited for. A match answers 200 with `"matched": true`.
 - `generation` counts the snapshots of the scope files since the start: it's for information, not proof that a write is in one.
+- `taken` (only when it's `loaded`, and only when there are any): the containers, networks and volumes under the scope's prefixes that carry another owner's label, each with its `kind`, `name` and `owner` (`scope <name>`, or `<label>=<value>` of an owner no scope has now). Another scope made them before this one's file was valid: a shorter prefix's scope while this one didn't exist yet (jane creating `jane-shop-web-1` before site `jane-shop`), or a scope since removed. The scope can't create those names: its create is refused as taken (409), without saying whose. **Treat `taken` as a conflict to stop on, not a state to wait out**: it doesn't clear by itself. Decide what to do with the other owner's objects (through a trusted listener), or give the scope other names. If the names can't be listed, the answer is 502, never one without them. `check --docker` warns of them too.
 
 ## Formats and versions
 
