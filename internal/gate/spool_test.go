@@ -415,6 +415,10 @@ func TestLoadStall(t *testing.T) {
 	loadStall = 150 * time.Millisecond
 	defer func() { loadStall = old }()
 
+	unspooled := make(chan string, 16)
+	unspooledHook.Store(ptr(func(scope string) { unspooled <- scope }))
+	defer unspooledHook.Store(nil)
+
 	pr, pw := io.Pipe()
 	defer pw.Close()
 
@@ -431,9 +435,7 @@ func TestLoadStall(t *testing.T) {
 		t.Errorf("the next load: %d %s", a.status, a.body)
 	}
 
-	if got := files(t, dir); len(got) != 0 {
-		t.Errorf("the spool kept %v", got)
-	}
+	emptied(t, dir, unspooled)
 }
 
 // check and serve refuse a spool folder they can't write, the same way; check changes nothing.
