@@ -879,3 +879,40 @@ func TestAScopedListenerAdmitsNoCertificateWithoutItsScope(t *testing.T) {
 		t.Error("a gate without its listener's files")
 	}
 }
+
+// A TLS listener speaks HTTP/1.1 only, whatever a client offers: Docker's clients speak it, and on
+// HTTP/2 an authentication failure's Connection: close wouldn't end the connection's other streams.
+func TestATLSListenerIsHTTP11Only(t *testing.T) {
+	d := startDocker(t)
+	m := mtlsGate(t, d, "")
+	jane, _, _ := m.clients.issue(t, client("jane"))
+	orchestrator, _, _ := m.admins.issue(t, client("orchestrator"))
+
+	for address, cert := range map[string]tls.Certificate{m.sites: jane, m.trusted: orchestrator} {
+		c := m.tlsConfig(&cert)
+		c.NextProtos = []string{"h2", "http/1.1"}
+
+		conn, err := tls.Dial("tcp", address, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if p := conn.ConnectionState().NegotiatedProtocol; p != "http/1.1" {
+			t.Errorf("%s: negotiated %q, want http/1.1", address, p)
+		}
+
+		_ = conn.Close()
+
+		// And Go's own client, which prefers h2 when it's offered, gets 1.1
+		h2 := &http.Client{Transport: &http.Transport{TLSClientConfig: c, ForceAttemptHTTP2: true}, Timeout: 5 * time.Second}
+		res, err := h2.Get("https://" + address + "/_ping")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+
+		if res.ProtoMajor != 1 {
+			t.Errorf("%s: answered over %s", address, res.Proto)
+		}
+	}
+}
