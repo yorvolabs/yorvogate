@@ -33,10 +33,13 @@ func TestADockerRestartIsNeverMetWithStaleDefaults(t *testing.T) {
 	log, _ := checkedLog(t)
 	server, defaults := gateAndDefaults(t, d, "sites", log)
 
+	// Watch has returned before downRetry is restored (the defers run last first)
 	ctx, stop := context.WithCancel(context.Background())
-	defer stop()
+	watched := make(chan struct{})
 
-	go defaults.Watch(ctx, log)
+	defer func() { stop(); <-watched }()
+
+	go func() { defaults.Watch(ctx, log); close(watched) }()
 
 	if status, answer := send(t, server, "GET", "/v1.56/containers/json", "", asJane); status != http.StatusOK {
 		t.Fatalf("before: %d %s", status, answer)
