@@ -570,11 +570,12 @@ func notAForm(r *http.Request) error {
 
 	media, _, err := mime.ParseMediaType(types[0])
 	if err != nil {
-		return refuse(http.StatusBadRequest, CodeHeaderContentType, "the request's Content-Type %q isn't valid: %v", types[0], err)
+		// The client's value isn't repeated: what a client sends in its headers isn't logged
+		return refuse(http.StatusBadRequest, CodeHeaderContentType, "the request's Content-Type isn't a valid media type")
 	}
 
 	if media == "application/x-www-form-urlencoded" || strings.HasPrefix(media, "multipart/") {
-		return refuse(http.StatusUnsupportedMediaType, CodeFormBody, "a form body (%s) isn't allowed: Docker would read parameters from it that YorvoGate doesn't check", media)
+		return refuse(http.StatusUnsupportedMediaType, CodeFormBody, "a form body (application/x-www-form-urlencoded or multipart/*) isn't allowed: Docker would read parameters from it that YorvoGate doesn't check")
 	}
 
 	return nil
