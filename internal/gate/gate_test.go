@@ -447,6 +447,11 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
+			// jane's php container has the memory limit compose() gives
+			if o.id == janePHP {
+				host["Memory"] = 512 << 20
+			}
+
 			answer = map[string]any{"Id": o.id, "Name": "/" + o.name, "Config": map[string]any{"Labels": o.labels}, "HostConfig": host, "NetworkSettings": map[string]any{"Networks": settings}}
 			if o.id == janeBuilder {
 				d.mu.Lock()

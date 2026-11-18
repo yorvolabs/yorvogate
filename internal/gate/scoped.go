@@ -57,6 +57,8 @@ type scoped struct {
 	forwardLength int64
 	// Done once the request is forwarded (e.g. an archive's copy removed)
 	cleanup func()
+	// The container the request is for, as the gate inspected it
+	target *object
 	// Changes Docker's answer before the client sees it (e.g. other scopes' objects left out)
 	answer func([]byte) ([]byte, error)
 }
@@ -232,6 +234,7 @@ func (s *scoped) container() (bool, error) {
 	}
 
 	s.with("id", c.ID)
+	s.target = c
 
 	if s.scope.Builds(c.Name) {
 		return true, s.builder(c)

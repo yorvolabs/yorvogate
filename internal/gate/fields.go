@@ -180,7 +180,7 @@ var (
 
 	// The limits Resources holds, in a container's host configuration and in an update
 	resourcesFree = freeAs(ownLimit, "CPUShares", "NanoCPUs", "BlkioWeight", "CPUPeriod", "CPUQuota", "CpusetCpus", "CpusetMems",
-		"MemoryReservation", "MemorySwap", "MemorySwappiness", "CPUCount", "CPUPercent", "IOMaximumIOps", "IOMaximumBandwidth")
+		"MemoryReservation", "MemorySwappiness", "CPUCount", "CPUPercent", "IOMaximumIOps", "IOMaximumBandwidth")
 	resourcesRefused = []map[string]decision{
 		refusedAs("its cgroup's place is the daemon's to choose", "CgroupParent"),
 		refusedLists(hostDevices, "BlkioWeightDevice", "BlkioDeviceReadBps", "BlkioDeviceWriteBps", "BlkioDeviceReadIOps",
@@ -198,7 +198,7 @@ var (
 		holding(checkedBy("host, logOptions", "LogConfig"), logConfig),
 		holding(checkedBy("host, mount", "Mounts"), mountSpec),
 		checkedBy("networking", "NetworkMode"),
-		checkedBy("resources (the listener's limits)", "Memory", "OomKillDisable", "PidsLimit"),
+		checkedBy("limits (the listener's limits)", "Memory", "MemorySwap", "OomKillDisable", "PidsLimit"),
 		holding(checkedBy("resources (the listener's ulimits)", "Ulimits"), ulimit),
 		refusedLists("publishes the host's ports", "PortBindings"),
 		refusedAs("publishes the host's ports", "PublishAllPorts"),
@@ -248,7 +248,7 @@ var (
 	updateConfig = decided("container.UpdateConfig", reflect.TypeFor[container.UpdateConfig](), append([]map[string]decision{
 		resourcesFree,
 		holding(freeAs(ownContainer, "RestartPolicy"), restartPolicy),
-		checkedBy("updateContainer (the listener's limits)", "Memory", "OomKillDisable", "PidsLimit"),
+		checkedBy("limits (the listener's limits)", "Memory", "MemorySwap", "OomKillDisable", "PidsLimit"),
 		holding(checkedBy("updateContainer (the listener's ulimits)", "Ulimits"), ulimit),
 	}, resourcesRefused...)...)
 

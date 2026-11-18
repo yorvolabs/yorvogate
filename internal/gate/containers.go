@@ -299,16 +299,40 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 	}
 }
 
-// resources checks limits: what the listener requires, and what reaches the host's devices or its
-// real-time scheduler.
+// resources checks a new container's limits: what the listener requires, and what reaches the host's
+// devices or its real-time scheduler.
 func (s *scoped) resources(r *container.Resources, add func(string, ...any)) {
+	s.limits(*r, true, 0, add)
+}
+
+// limits checks a container's limits against the listener's, the same way on create and on update.
+// On create, a required limit must be given. On an update, one left out (Memory 0, PidsLimit nil)
+// is the container's own, which Docker keeps, and only one given is checked. Swap (MemorySwap, which
+// is memory and swap together) is bounded by the memory limit as Docker bounds it by default: at
+// most twice it, never unlimited. An update that gives swap without memory is checked against the
+// container's memory now (current).
+func (s *scoped) limits(r container.Resources, creating bool, current int64, add func(string, ...any)) {
 	p := s.policy
 
-	if p.MaxMemory > 0 && (r.Memory <= 0 || r.Memory > p.MaxMemory) {
-		add("a memory limit up to %d bytes is required", p.MaxMemory)
+	if p.MaxMemory > 0 {
+		if (creating || r.Memory != 0) && (r.Memory <= 0 || r.Memory > p.MaxMemory) {
+			add("a memory limit up to %d bytes is required", p.MaxMemory)
+		}
+
+		memory := r.Memory
+		if memory == 0 {
+			memory = current
+		}
+
+		switch {
+		case r.MemorySwap < 0:
+			add("unlimited swap (MemorySwap -1) isn't allowed: memory and swap together are at most twice the memory limit")
+		case r.MemorySwap > 0 && memory > 0 && (r.MemorySwap < memory || r.MemorySwap > 2*memory):
+			add("MemorySwap (memory and swap together) must be between the memory limit and twice it (%d to %d bytes), or left unset", memory, 2*memory)
+		}
 	}
 
-	if p.MaxPids > 0 && (r.PidsLimit == nil || *r.PidsLimit <= 0 || *r.PidsLimit > p.MaxPids) {
+	if p.MaxPids > 0 && (creating || r.PidsLimit != nil) && (r.PidsLimit == nil || *r.PidsLimit <= 0 || *r.PidsLimit > p.MaxPids) {
 		add("a process limit up to %d is required", p.MaxPids)
 	}
 
@@ -527,6 +551,16 @@ func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(str
 }
 
 // updateContainer checks new limits for a running container, as create does.
+// currentMemory is the memory limit of the container an update is for, as Docker has it (0 when
+// there's none, or it wasn't inspected).
+func (s *scoped) currentMemory() int64 {
+	if c := s.target; c != nil && c.inspection != nil && c.inspection.HostConfig != nil {
+		return c.inspection.HostConfig.Memory
+	}
+
+	return 0
+}
+
 func (s *scoped) updateContainer(body []byte) ([]byte, error) {
 	var req container.UpdateConfig
 	if err := decode(body, &req); err != nil {
@@ -540,30 +574,7 @@ func (s *scoped) updateContainer(body []byte) ([]byte, error) {
 		add("%s isn't allowed", f)
 	}
 
-	r := req.Resources
-	if s.policy.MaxMemory > 0 && r.Memory != 0 && (r.Memory < 0 || r.Memory > s.policy.MaxMemory) {
-		add("a memory limit up to %d bytes is required", s.policy.MaxMemory)
-	}
-
-	if s.policy.MaxPids > 0 && r.PidsLimit != nil && (*r.PidsLimit <= 0 || *r.PidsLimit > s.policy.MaxPids) {
-		add("a process limit up to %d is required", s.policy.MaxPids)
-	}
-
-	if r.OomKillDisable != nil && *r.OomKillDisable {
-		add("disabling the OOM killer isn't allowed")
-	}
-
-	for _, u := range r.Ulimits {
-		if u != nil && !slices.Contains(s.policy.Ulimits, u.Name) {
-			add("the ulimit %s isn't allowed", u.Name)
-		}
-	}
-
-	for _, u := range r.Ulimits {
-		for _, f := range unset(u, ulimit) {
-			add("a ulimit's %s isn't allowed", f)
-		}
-	}
+	s.limits(req.Resources, false, s.currentMemory(), add)
 
 	if len(problems) > 0 {
 		return nil, refuse(http.StatusForbidden, "container.update: %s", strings.Join(problems, "; "))
