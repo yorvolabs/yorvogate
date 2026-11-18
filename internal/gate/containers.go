@@ -85,7 +85,7 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 		add("NetworkingConfig.%s isn't allowed", f)
 	}
 
-	s.networking(req.HostConfig.NetworkMode, req.NetworkingConfig, add)
+	s.networking(&req.HostConfig.NetworkMode, req.NetworkingConfig, add)
 
 	if len(problems) > 0 {
 		return nil, refuse(http.StatusForbidden, "container.create %s: %s", name, strings.Join(problems, "; "))
@@ -209,9 +209,21 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 		add("the host's namespaces aren't allowed")
 	}
 
-	for mode, other := range map[string]string{"PidMode": h.PidMode.Container(), "IpcMode": h.IpcMode.Container()} {
-		if other != "" && !s.ownsContainer(other) {
-			add("%s: container:%s isn't one of its own", mode, other)
+	// Another of its own containers' namespace, by the ID the check found: by its name, Docker would
+	// look it up again, and the name may be another container's by then.
+	if other := h.PidMode.Container(); other != "" {
+		if id, ok := s.ownContainerID(other); ok {
+			h.PidMode = container.PidMode("container:" + id)
+		} else {
+			add("PidMode: container:%s isn't one of its own", other)
+		}
+	}
+
+	if other := h.IpcMode.Container(); other != "" {
+		if id, ok := s.ownContainerID(other); ok {
+			h.IpcMode = container.IpcMode("container:" + id)
+		} else {
+			add("IpcMode: container:%s isn't one of its own", other)
 		}
 	}
 
@@ -280,10 +292,18 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 		add("the volume driver %q isn't allowed", h.VolumeDriver)
 	}
 
-	for _, from := range h.VolumesFrom {
-		other, _, _ := strings.Cut(from, ":")
-		if !s.ownsContainer(other) {
+	// By the ID the check found, as namespaces are (its :ro or :rw kept)
+	for i, from := range h.VolumesFrom {
+		other, mode, moded := strings.Cut(from, ":")
+		id, ok := s.ownContainerID(other)
+
+		switch {
+		case !ok:
 			add("VolumesFrom: %s isn't one of its own containers", other)
+		case moded:
+			h.VolumesFrom[i] = id + ":" + mode
+		default:
+			h.VolumesFrom[i] = id
 		}
 	}
 
@@ -432,7 +452,9 @@ func (s *scoped) volumeSource(source string) error {
 
 // networking checks the networks a container joins: its own, or the shared ones its scope names
 // (with only its own aliases and addresses there).
-func (s *scoped) networking(mode container.NetworkMode, nc *network.NetworkingConfig, add func(string, ...any)) {
+func (s *scoped) networking(pinned *container.NetworkMode, nc *network.NetworkingConfig, add func(string, ...any)) {
+	mode := *pinned
+
 	var endpoints map[string]*network.EndpointSettings
 	if nc != nil {
 		endpoints = nc.EndpointsConfig
@@ -448,6 +470,11 @@ func (s *scoped) networking(mode container.NetworkMode, nc *network.NetworkingCo
 	case strings.HasPrefix(string(mode), "container:"):
 		other := strings.TrimPrefix(string(mode), "container:")
 		c, err := s.docker.Container(s.ctx, s.version, other)
+
+		if err == nil && s.owned(c) {
+			// By the ID the check found, not the name Docker would look up again
+			*pinned = container.NetworkMode("container:" + string(c.ID))
+		}
 
 		switch {
 		case err != nil || !s.owned(c):
