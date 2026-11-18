@@ -580,3 +580,23 @@ func TestCheckNamesExpiringTokens(t *testing.T) {
 		t.Fatalf("%d %q %q", code, out.String(), errs.String())
 	}
 }
+
+// A unix listener whose socket_group is root's is named: the gate has to run as root for it, and
+// every process in that group may connect. A group of its own isn't.
+func TestCheckWarnsOnRootsSocketGroup(t *testing.T) {
+	dir := t.TempDir()
+	scopes := filepath.Join(dir, "scopes")
+	_ = os.Mkdir(scopes, 0o700)
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+
+	for group, warned := range map[string]bool{"'0'": true, "root": true, "'2001'": false, "sites": false} {
+		_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix:///var/run/docker.sock\nlisteners:\n  - {name: sockets, scope_sockets: "+filepath.Join(dir, "sock")+", socket_group: "+group+", mode: scoped, scopes: "+scopes+"}\n"), 0o600)
+
+		var out, errs bytes.Buffer
+		run([]string{"check", "--config", configFile}, &out, &errs)
+
+		if got := strings.Contains(out.String(), "is root's: YorvoGate must run as root"); got != warned {
+			t.Errorf("socket_group %s: warned %v, want %v (%q %q)", group, got, warned, out.String(), errs.String())
+		}
+	}
+}

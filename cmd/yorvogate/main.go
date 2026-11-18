@@ -104,6 +104,10 @@ func listenerWarnings(l config.Listener) []string {
 		w = append(w, "no socket_group: the listener's unix sockets fall back to the process's primary group, which may let more than the intended clients connect")
 	}
 
+	if l.Unix() && (l.SocketGroup == "0" || l.SocketGroup == "root") {
+		w = append(w, "socket_group "+l.SocketGroup+" is root's: YorvoGate must run as root to give its sockets that group, and every process in the root group may connect. Use a group of its own for each set of clients")
+	}
+
 	if l.AllowPrivilegedBuilders {
 		w = append(w, "allow_privileged_builders is on: a scope's builder is accepted whatever its configuration, so the scope can become root on the host")
 	}
