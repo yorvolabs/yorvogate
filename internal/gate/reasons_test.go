@@ -109,9 +109,12 @@ func TestEveryRefusalHasACodeOfTheList(t *testing.T) {
 
 				var arg ast.Expr
 
+				// Where the code is: refuse(status, code, where, allowed, …), add(code, where, allowed, …)
+				first := 0
+
 				switch {
 				case name == "refuse" && len(n.Args) >= 2:
-					arg = n.Args[1]
+					arg, first = n.Args[1], 1
 				case (name == "add") && len(n.Args) >= 2:
 					// A collected problem's code. Two adds take a string first: taken.go's own (kind,
 					// name, labels), and a builder's problems (builders.go), which are all one code
@@ -126,6 +129,8 @@ func TestEveryRefusalHasACodeOfTheList(t *testing.T) {
 				}
 
 				sites++
+
+				saysWhereAndWhat(t, fset, n, name, n.Args[first:])
 
 				if _, ok := isCode(arg); ok {
 					return true
@@ -172,6 +177,11 @@ func TestEveryRefusalHasACodeOfTheList(t *testing.T) {
 				if !coded {
 					t.Errorf("%s: a %s without a code of reasons.go's list", fset.Position(n.Pos()), typ.Name)
 				}
+
+				// A refusal is built by refuse or a collector only: so it has its problems
+				if typ.Name == "refusal" {
+					t.Errorf("%s: a refusal built by hand, without its problems: use refuse", fset.Position(n.Pos()))
+				}
 			}
 
 			return true
@@ -189,6 +199,66 @@ func TestEveryRefusalHasACodeOfTheList(t *testing.T) {
 	}
 
 	t.Logf("%d refusal sites, %d codes", sites, len(consts))
+}
+
+// saysWhereAndWhat holds a refusal site (its code, where, allowed) to saying both, explicitly: where
+// by at(…) or nowhere, what's allowed by an allow…(…) constructor or nothingAllowed, never a
+// variable that could hold anything; an authentication failure and an object that isn't the
+// scope's say neither (problems_test.go's neverSay). A where passed through a helper's parameter
+// (field, named, modeField) is checked where the helper is called.
+func saysWhereAndWhat(t *testing.T, fset *gotoken.FileSet, call *ast.CallExpr, name string, args []ast.Expr) {
+	t.Helper()
+
+	if len(args) < 3 {
+		t.Errorf("%s: %s(…) without where and allowed", fset.Position(call.Pos()), name)
+
+		return
+	}
+
+	code, where, allowed := args[0], args[1], args[2]
+
+	called := func(e ast.Expr) string {
+		if c, ok := e.(*ast.CallExpr); ok {
+			switch f := c.Fun.(type) {
+			case *ast.Ident:
+				return f.Name
+			case *ast.SelectorExpr:
+				return f.Sel.Name
+			case *ast.IndexExpr: // a generic's, instantiated
+				if id, ok := f.X.(*ast.Ident); ok {
+					return id.Name
+				}
+			}
+		}
+
+		return ""
+	}
+
+	ident := func(e ast.Expr) string {
+		if id, ok := e.(*ast.Ident); ok {
+			return id.Name
+		}
+
+		return ""
+	}
+
+	switch w := ident(where); {
+	case w == "nowhere", w == "field", w == "named", w == "modeField", called(where) == "at", called(where) == "field":
+	default:
+		t.Errorf("%s: %s(…)'s where isn't at(…) or nowhere", fset.Position(call.Pos()), name)
+	}
+
+	switch a := called(allowed); {
+	case ident(allowed) == "nothingAllowed", strings.HasPrefix(a, "allow"), a == "joinable":
+	default:
+		t.Errorf("%s: %s(…)'s allowed isn't an allow…(…) or nothingAllowed", fset.Position(call.Pos()), name)
+	}
+
+	if c := ident(code); c == "CodeAuthRejected" || c == "CodeNotFound" {
+		if ident(where) != "nowhere" || ident(allowed) != "nothingAllowed" {
+			t.Errorf("%s: %s says where or what's allowed: it may say neither", fset.Position(call.Pos()), c)
+		}
+	}
 }
 
 // The configuration docs list every code with its meaning, as Codes has them.

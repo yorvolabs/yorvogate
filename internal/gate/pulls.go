@@ -45,9 +45,9 @@ func searchRegistry(term string) string {
 }
 
 // registry checks that a request reaches only a registry of the listener's.
-func (s *scoped) registry(registry, what string) error {
+func (s *scoped) registry(registry, what string, field where) error {
 	if !s.pulls.Allows(registry) {
-		return refuse(http.StatusForbidden, CodeRegistry, "%s: the registry %s isn't one this listener's scopes may pull from (%s)", what, registry, s.pulls.RegistryList())
+		return refuse(http.StatusForbidden, CodeRegistry, field, allowUnder(s.pulls.RegistryValues()), "%s: the registry %s isn't one this listener's scopes may pull from (%s)", what, registry, s.pulls.RegistryList())
 	}
 
 	return nil
@@ -62,16 +62,16 @@ func (s *scoped) platform(asked string) error {
 
 	platform, err := config.Platform(asked)
 	if err != nil {
-		return refuse(http.StatusBadRequest, CodeImage, "image.create: %v", err)
+		return refuse(http.StatusBadRequest, CodeImage, at(inQuery, "platform"), nothingAllowed, "image.create: %v", err)
 	}
 
 	host, err := s.docker.Platform(s.ctx, s.version)
 	if err != nil {
-		return refuse(http.StatusServiceUnavailable, CodeDaemonUnknown, "image.create: the platform %s can't be checked: Docker's own platform couldn't be read (%v)", asked, err)
+		return refuse(http.StatusServiceUnavailable, CodeDaemonUnknown, nowhere, nothingAllowed, "image.create: the platform %s can't be checked: Docker's own platform couldn't be read (%v)", asked, err)
 	}
 
 	if platform != host && !s.pulls.AllowsPlatform(platform) {
-		return refuse(http.StatusForbidden, CodePlatform, "image.create: the platform %s isn't the host's (%s), nor one this listener's scopes may pull", asked, host)
+		return refuse(http.StatusForbidden, CodePlatform, at(inQuery, "platform"), allowOneOf(append([]string{host}, s.pulls.Platforms...)), "image.create: the platform %s isn't the host's (%s), nor one this listener's scopes may pull", asked, host)
 	}
 
 	return nil
@@ -79,7 +79,7 @@ func (s *scoped) platform(asked string) error {
 
 // search checks a search: on a registry of the listener's.
 func (s *scoped) search() error {
-	return s.registry(searchRegistry(s.query.Get("term")), "image.search")
+	return s.registry(searchRegistry(s.query.Get("term")), "image.search", at(inQuery, "term"))
 }
 
 // hostPlatform is Docker's own platform, read once it's read well.

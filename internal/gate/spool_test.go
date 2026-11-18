@@ -533,5 +533,3 @@ func TestLoadSlowButSteady(t *testing.T) {
 		t.Errorf("a slow, steady upload: %d %s", a.status, a.body)
 	}
 }
-
-func ptr[T any](v T) *T { return &v }

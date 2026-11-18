@@ -113,11 +113,11 @@ func (s *scoped) load() (err error) {
 	}()
 
 	if s.length > s.loadLimit {
-		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, "image.load: the archive is larger than %d bytes", s.loadLimit)
+		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, at(inBody, ""), allowAtMost(s.loadLimit, "bytes"), "image.load: the archive is larger than %d bytes", s.loadLimit)
 	}
 
 	if s.length > s.spool.limit {
-		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, "image.load: the archive is larger than the image spool (spool.limit, %d bytes)", s.spool.limit)
+		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, at(inBody, ""), allowAtMost(s.spool.limit, "bytes"), "image.load: the archive is larger than the image spool (spool.limit, %d bytes)", s.spool.limit)
 	}
 
 	held := &reservation{spool: s.spool, scope: s.scope.Name}
@@ -172,13 +172,13 @@ func (s *scoped) load() (err error) {
 
 	switch {
 	case errors.As(err, &bound):
-		return refuse(http.StatusRequestEntityTooLarge, bound.code, "image.load: %v", bound)
+		return refuse(http.StatusRequestEntityTooLarge, bound.code, at(inBody, ""), nothingAllowed, "image.load: %v", bound)
 	case err != nil:
-		return refuse(http.StatusBadRequest, CodeLoadInvalid, "image.load: %v", err)
+		return refuse(http.StatusBadRequest, CodeLoadInvalid, at(inBody, ""), nothingAllowed, "image.load: %v", err)
 	}
 
 	for _, name := range names {
-		if err := s.ownsImageName(name, "image.load"); err != nil {
+		if err := s.ownsImageName(name, "image.load", at(inBody, "")); err != nil {
 			return err
 		}
 	}
@@ -186,7 +186,7 @@ func (s *scoped) load() (err error) {
 	// And it holds everything it refers to, each blob with its digest: else its names could be given
 	// to content Docker already has, which may be another scope's.
 	if err := contents.complete(); err != nil {
-		return refuse(http.StatusBadRequest, CodeLoadInvalid, "image.load: %v", err)
+		return refuse(http.StatusBadRequest, CodeLoadInvalid, at(inBody, ""), nothingAllowed, "image.load: %v", err)
 	}
 
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
@@ -210,7 +210,7 @@ func (s *scoped) spoolTo(file *os.File, stream io.Reader, held *reservation) (in
 		got, err := stream.Read(buf)
 		if got > 0 {
 			if n+int64(got) > s.loadLimit {
-				return n, refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, "image.load: the archive is larger than %d bytes", s.loadLimit)
+				return n, refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, at(inBody, ""), allowAtMost(s.loadLimit, "bytes"), "image.load: the archive is larger than %d bytes", s.loadLimit)
 			}
 
 			if !reserved {
@@ -230,9 +230,9 @@ func (s *scoped) spoolTo(file *os.File, stream io.Reader, held *reservation) (in
 		case errors.Is(err, io.EOF):
 			return n, nil
 		case errors.Is(err, errStalled):
-			return n, refuse(http.StatusBadRequest, CodeLoadStalled, "image.load: %v (nothing for %v)", err, loadStall)
+			return n, refuse(http.StatusBadRequest, CodeLoadStalled, at(inBody, ""), nothingAllowed, "image.load: %v (nothing for %v)", err, loadStall)
 		case err != nil:
-			return n, refuse(http.StatusBadRequest, CodeLoadUnreadable, "image.load: the archive couldn't be read: %v", err)
+			return n, refuse(http.StatusBadRequest, CodeLoadUnreadable, at(inBody, ""), nothingAllowed, "image.load: the archive couldn't be read: %v", err)
 		}
 	}
 }

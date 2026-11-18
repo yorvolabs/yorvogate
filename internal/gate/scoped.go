@@ -68,11 +68,11 @@ func (s *scoped) decide(body []byte) ([]byte, error) {
 
 	d, ok := forScopes[name]
 	if !ok {
-		return nil, refuse(http.StatusForbidden, CodeScopeDenies, "%s isn't allowed for scope %s", name, s.scope.Name)
+		return nil, refuse(http.StatusForbidden, CodeScopeDenies, at(inPath, ""), allowNone(), "%s isn't allowed for scope %s", name, s.scope.Name)
 	}
 
 	if !s.req.Endpoint.Stream && !d.body && len(body) > 0 {
-		return nil, refuse(http.StatusBadRequest, CodeBodyMissing, "%s has no body", name)
+		return nil, refuse(http.StatusBadRequest, CodeBodyMissing, at(inBody, ""), allowUnset(), "%s has no body", name)
 	}
 
 	if err := d.parameters(name, s.query); err != nil {
@@ -107,7 +107,7 @@ func (s *scoped) rename() error {
 	}
 
 	if to := s.single("name"); !s.scope.Names(to) {
-		return refuse(http.StatusForbidden, CodeNameNotOwn, "container.rename: the name %q isn't one of scope %s's", to, s.scope.Name)
+		return refuse(http.StatusForbidden, CodeNameNotOwn, at(inQuery, "name"), allowPrefixed(s.scope.Prefixes), "container.rename: the name %q isn't one of scope %s's", to, s.scope.Name)
 	}
 
 	return nil
@@ -198,7 +198,7 @@ func (s *scoped) saveMany() error {
 
 // deleteImage: by name, not ID. By name, Docker removes that name; by ID, the image.
 func (s *scoped) deleteImage() error {
-	return s.ownsImageName(s.req.Params["name"], "image.delete")
+	return s.ownsImageName(s.req.Params["name"], "image.delete", at(inPath, "name"))
 }
 
 // distribution: Docker answers it from the registry, never from the images it has, and the answer
@@ -206,10 +206,10 @@ func (s *scoped) deleteImage() error {
 // It reaches only a registry of the listener's (pulls.go).
 func (s *scoped) distribution() error {
 	if err := s.image(s.req.Params["name"]); err != nil {
-		return refuse(http.StatusNotFound, CodeNotFound, "No such image: %s", s.req.Params["name"])
+		return refuse(http.StatusNotFound, CodeNotFound, nowhere, nothingAllowed, "No such image: %s", s.req.Params["name"])
 	}
 
-	return s.registry(ReferenceRegistry(s.req.Params["name"]), "distribution.inspect")
+	return s.registry(ReferenceRegistry(s.req.Params["name"]), "distribution.inspect", at(inPath, "name"))
 }
 
 // The streams whose body is an archive: one YorvoGate reads (image.load), or one that goes into the
@@ -229,7 +229,7 @@ func (s *scoped) container() (bool, error) {
 	}
 
 	if c == nil || !(s.owned(c) || s.scope.Builds(c.Name)) {
-		return false, refuse(http.StatusNotFound, CodeNotFound, "No such container: %s", id)
+		return false, refuse(http.StatusNotFound, CodeNotFound, nowhere, nothingAllowed, "No such container: %s", id)
 	}
 
 	s.with("id", c.ID)
@@ -270,7 +270,7 @@ func (s *scoped) exec() error {
 	}
 
 	if e == nil {
-		return refuse(http.StatusNotFound, CodeNotFound, "No such exec instance: %s", id)
+		return refuse(http.StatusNotFound, CodeNotFound, nowhere, nothingAllowed, "No such exec instance: %s", id)
 	}
 
 	c, err := s.docker.Container(s.ctx, s.version, e.ContainerID)
@@ -284,19 +284,19 @@ func (s *scoped) exec() error {
 		return s.runsInside(c, false)
 	case c != nil && s.scope.Builds(c.Name):
 		if s.req.Endpoint.Name != "exec.start" {
-			return refuse(http.StatusForbidden, CodeBuilder, "%s isn't allowed in builder %s: only buildctl dial-stdio, created and started", s.req.Endpoint.Name, c.Name)
+			return refuse(http.StatusForbidden, CodeBuilder, at(inPath, ""), allowNone(), "%s isn't allowed in builder %s: only buildctl dial-stdio, created and started", s.req.Endpoint.Name, c.Name)
 		}
 
 		// Docker reports an exec created without a user as the container's (the builder's own,
 		// which isn't root).
 		if p := e.ProcessConfig; p == nil || !dialStdio(append([]string{p.Entrypoint}, p.Arguments...)) || (p.Privileged != nil && *p.Privileged) || !builderUser(c, p.User) || p.Tty {
-			return refuse(http.StatusForbidden, CodeBuilder, "exec.start: in builder %s, only buildctl dial-stdio is started", c.Name)
+			return refuse(http.StatusForbidden, CodeBuilder, at(inPath, "id"), nothingAllowed, "exec.start: in builder %s, only buildctl dial-stdio is started", c.Name)
 		}
 
 		return s.builder(c)
 	}
 
-	return refuse(http.StatusNotFound, CodeNotFound, "No such exec instance: %s", id)
+	return refuse(http.StatusNotFound, CodeNotFound, nowhere, nothingAllowed, "No such exec instance: %s", id)
 }
 
 // connect checks a container joining a network: one of the scope's containers, its own network or a
@@ -308,7 +308,7 @@ func (s *scoped) connect(body []byte) ([]byte, error) {
 	}
 
 	if f := unset(req, networkConnect); len(f) > 0 {
-		return nil, refuse(http.StatusForbidden, CodeFieldNotAllowed, "network.connect: %s isn't allowed", strings.Join(f, ", "))
+		return nil, refusedFields(http.StatusForbidden, "network.connect", "", f)
 	}
 
 	name, err := s.network()
@@ -322,13 +322,13 @@ func (s *scoped) connect(body []byte) ([]byte, error) {
 	}
 
 	if !s.owned(c) {
-		return nil, refuse(http.StatusNotFound, CodeNotFound, "No such container: %s", req.Container)
+		return nil, refuse(http.StatusNotFound, CodeNotFound, nowhere, nothingAllowed, "No such container: %s", req.Container)
 	}
 
 	req.Container = string(c.ID)
 
 	var found problems
-	s.endpoint(name, req.EndpointConfig, found.add)
+	s.endpoint(name, req.EndpointConfig, at(inPath, "id"), "EndpointConfig.", found.add)
 
 	if len(found) > 0 {
 		return nil, found.refusal(http.StatusForbidden, "network.connect")
@@ -344,7 +344,7 @@ func (s *scoped) disconnect(body []byte) ([]byte, error) {
 	}
 
 	if f := unset(req, networkDisconnect); len(f) > 0 {
-		return nil, refuse(http.StatusForbidden, CodeFieldNotAllowed, "network.disconnect: %s isn't allowed", strings.Join(f, ", "))
+		return nil, refusedFields(http.StatusForbidden, "network.disconnect", "", f)
 	}
 
 	if _, err := s.network(); err != nil {
@@ -357,7 +357,7 @@ func (s *scoped) disconnect(body []byte) ([]byte, error) {
 	}
 
 	if !s.owned(c) {
-		return nil, refuse(http.StatusNotFound, CodeNotFound, "No such container: %s", req.Container)
+		return nil, refuse(http.StatusNotFound, CodeNotFound, nowhere, nothingAllowed, "No such container: %s", req.Container)
 	}
 
 	req.Container = string(c.ID)
@@ -376,11 +376,11 @@ func (s *scoped) network() (string, error) {
 	}
 
 	if n == nil {
-		return "", refuse(http.StatusNotFound, CodeNotFound, "network %s not found", id)
+		return "", refuse(http.StatusNotFound, CodeNotFound, nowhere, nothingAllowed, "network %s not found", id)
 	}
 
 	if _, shared := s.scope.Networks[n.Name]; !shared && !s.scope.Owns(n.Labels) {
-		return "", refuse(http.StatusNotFound, CodeNotFound, "network %s not found", id)
+		return "", refuse(http.StatusNotFound, CodeNotFound, nowhere, nothingAllowed, "network %s not found", id)
 	}
 
 	s.with("id", n.ID)
@@ -398,7 +398,7 @@ func (s *scoped) volume() error {
 	}
 
 	if v == nil || !s.scope.Owns(v.Labels) {
-		return refuse(http.StatusNotFound, CodeNotFound, "get %s: no such volume", name)
+		return refuse(http.StatusNotFound, CodeNotFound, nowhere, nothingAllowed, "get %s: no such volume", name)
 	}
 
 	s.with("name", v.ID)
@@ -413,7 +413,7 @@ func (s *scoped) ownOnly() error {
 	if given := s.query["filters"]; len(given) > 0 {
 		var raw map[string]json.RawMessage
 		if err := json.Unmarshal([]byte(given[0]), &raw); err != nil {
-			return refuse(http.StatusBadRequest, CodeQueryInvalid, "filters isn't JSON: %v", err)
+			return refuse(http.StatusBadRequest, CodeQueryInvalid, at(inQuery, "filters"), nothingAllowed, "filters isn't JSON: %v", err)
 		}
 
 		for key, value := range raw {
@@ -422,7 +422,7 @@ func (s *scoped) ownOnly() error {
 			if err := json.Unmarshal(value, &values); err != nil {
 				var set map[string]bool
 				if err := json.Unmarshal(value, &set); err != nil {
-					return refuse(http.StatusBadRequest, CodeQueryInvalid, "filters.%s isn't a list", key)
+					return refuse(http.StatusBadRequest, CodeQueryInvalid, at(inQuery, "filters"), nothingAllowed, "filters.%s isn't a list", key)
 				}
 
 				for v, on := range set {

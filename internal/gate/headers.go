@@ -72,11 +72,11 @@ func forwarded(given http.Header, endpoint string, upgrading bool) (http.Header,
 		}
 
 		if _, seen := out[canonical]; seen || len(values) > 1 {
-			return nil, nil, refuse(http.StatusBadRequest, CodeHeaderTwice, "the header %s is given more than once", canonical)
+			return nil, nil, refuse(http.StatusBadRequest, CodeHeaderTwice, at(inHeader, canonical), allowRequired(), "the header %s is given more than once", canonical)
 		}
 
 		if len(values[0]) > h.max {
-			return nil, nil, refuse(http.StatusBadRequest, CodeHeaderTooLong, "the header %s is longer than %d bytes", canonical, h.max)
+			return nil, nil, refuse(http.StatusBadRequest, CodeHeaderTooLong, at(inHeader, canonical), allowAtMost(int64(h.max), "bytes"), "the header %s is longer than %d bytes", canonical, h.max)
 		}
 
 		out[canonical] = []string{values[0]}

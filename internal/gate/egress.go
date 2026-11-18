@@ -30,14 +30,14 @@ func (s *scoped) egressFree() bool {
 var runsCode = []string{"container.start", "container.restart", "container.unpause", "container.attach", "container.attach-websocket", "exec.create", "exec.start"}
 
 // internal checks a network an egress-free scope's container joins, by name or ID.
-func (s *scoped) internal(network string, add func(Code, string, ...any)) {
+func (s *scoped) internal(network string, named where, add adder) {
 	n, err := s.docker.Network(s.ctx, s.version, network)
 
 	switch {
 	case err != nil:
-		add(CodeNetwork, "the network %s couldn't be checked: %v", network, err)
+		add(CodeNetwork, named, nothingAllowed, "the network %s couldn't be checked: %v", network, err)
 	case n == nil || !n.Internal:
-		add(CodeEgress, "the network %s isn't internal (egress: none)", network)
+		add(CodeEgress, named, nothingAllowed, "the network %s isn't internal (egress: none)", network)
 	}
 }
 
@@ -119,7 +119,7 @@ func (s *scoped) runsInside(c *object, builder bool) error {
 	}
 
 	if len(outside) > 0 {
-		return refuse(http.StatusForbidden, CodeEgress, "%s: the container %s is on a network that isn't internal (%s; egress: none): disconnect it, or recreate the container", s.req.Endpoint.Name, c.Name, strings.Join(outside, ", "))
+		return refuse(http.StatusForbidden, CodeEgress, at(inPath, "id"), nothingAllowed, "%s: the container %s is on a network that isn't internal (%s; egress: none): disconnect it, or recreate the container", s.req.Endpoint.Name, c.Name, strings.Join(outside, ", "))
 	}
 
 	return nil

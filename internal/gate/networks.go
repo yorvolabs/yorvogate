@@ -21,59 +21,61 @@ func (s *scoped) createNetwork(body []byte) ([]byte, error) {
 	add := found.add
 
 	for _, f := range unset(req, networkCreate) {
-		add(CodeFieldNotAllowed, "%s isn't allowed", f)
+		add(CodeFieldNotAllowed, at(inBody, f), allowUnset(), "%s isn't allowed", f)
 	}
 
 	if !s.scope.Names(req.Name) {
-		add(CodeNameNotOwn, "the name %q isn't one of scope %s's (%s)", req.Name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
-	} else if err := s.notTaken("network", req.Name, s.docker.Network); err != nil {
+		add(CodeNameNotOwn, at(inBody, "Name"), allowPrefixed(s.scope.Prefixes), "the name %q isn't one of scope %s's (%s)", req.Name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
+	} else if err := s.notTaken("network", req.Name, at(inBody, "Name"), s.docker.Network); err != nil {
 		return nil, err
 	}
 
-	s.ownLabels(req.Labels, add)
+	s.ownLabels(req.Labels, "Labels", add)
 
 	if req.Driver != "" && req.Driver != "bridge" {
-		add(CodeNetwork, "the driver %q isn't allowed (only bridge)", req.Driver)
+		add(CodeNetwork, at(inBody, "Driver"), allowOneOf([]string{"bridge"}), "the driver %q isn't allowed (only bridge)", req.Driver)
 	}
 
 	if req.Scope != "" && req.Scope != "local" {
-		add(CodeNetwork, "the scope %q isn't allowed (only local)", req.Scope)
+		add(CodeNetwork, at(inBody, "Scope"), allowOneOf([]string{"local"}), "the scope %q isn't allowed (only local)", req.Scope)
 	}
 
 	if s.egressFree() && !req.Internal {
-		add(CodeEgress, "scope %s may create only internal networks (egress: none): set Internal (Compose: networks.<name>.internal: true)", s.scope.Name)
+		add(CodeEgress, at(inBody, "Internal"), allowRequired(true), "scope %s may create only internal networks (egress: none): set Internal (Compose: networks.<name>.internal: true)", s.scope.Name)
 	}
 
 	var configs []network.IPAMConfig
 	if req.IPAM != nil {
 		for _, f := range unset(req.IPAM, ipam) {
-			add(CodeFieldNotAllowed, "IPAM.%s isn't allowed", f)
+			add(CodeFieldNotAllowed, at(inBody, "IPAM."+f), allowUnset(), "IPAM.%s isn't allowed", f)
 		}
 
 		if req.IPAM.Driver != "" && req.IPAM.Driver != "default" {
-			add(CodeNetwork, "the IPAM driver %q isn't allowed (a plugin runs on the host)", req.IPAM.Driver)
+			add(CodeNetwork, at(inBody, "IPAM.Driver"), allowOneOf([]string{"default"}), "the IPAM driver %q isn't allowed (a plugin runs on the host)", req.IPAM.Driver)
 		}
 
 		configs = req.IPAM.Config
 	}
 
 	if s.scope.HasSubnets() && len(configs) == 0 {
-		add(CodeNetwork, "its subnet must be named, inside the scope's")
+		add(CodeNetwork, at(inBody, index("IPAM.Config", 0)+".Subnet"), allowUnder(s.scope.Subnets), "its subnet must be named, inside the scope's")
 	}
 
-	for _, c := range configs {
+	for i, c := range configs {
+		base := index("IPAM.Config", i) + "."
+
 		for _, f := range unset(c, ipamConfig) {
-			add(CodeFieldNotAllowed, "IPAM.Config.%s isn't allowed", f)
+			add(CodeFieldNotAllowed, at(inBody, base+f), allowUnset(), "IPAM.Config.%s isn't allowed", f)
 		}
 
 		if !c.Subnet.IsValid() && s.scope.HasSubnets() {
-			add(CodeNetwork, "each IPAM config names its subnet")
+			add(CodeNetwork, at(inBody, base+"Subnet"), allowUnder(s.scope.Subnets), "each IPAM config names its subnet")
 
 			continue
 		}
 
 		if c.Subnet.IsValid() && !s.scope.Contains(c.Subnet) {
-			add(CodeNetwork, "the subnet %s isn't inside the scope's", c.Subnet)
+			add(CodeNetwork, at(inBody, base+"Subnet"), allowUnder(s.scope.Subnets), "the subnet %s isn't inside the scope's", c.Subnet)
 		}
 	}
 
@@ -94,7 +96,7 @@ func (s *scoped) ownNetwork() error {
 	}
 
 	if n == nil || !s.scope.Owns(n.Labels) {
-		return refuse(http.StatusNotFound, CodeNotFound, "network %s not found", id)
+		return refuse(http.StatusNotFound, CodeNotFound, nowhere, nothingAllowed, "network %s not found", id)
 	}
 
 	s.with("id", n.ID)
@@ -114,19 +116,19 @@ func (s *scoped) createVolume(body []byte) ([]byte, error) {
 	add := found.add
 
 	for _, f := range unset(req, volumeCreate) {
-		add(CodeFieldNotAllowed, "%s isn't allowed", f)
+		add(CodeFieldNotAllowed, at(inBody, f), allowUnset(), "%s isn't allowed", f)
 	}
 
 	if !s.scope.Names(req.Name) {
-		add(CodeNameNotOwn, "the name %q isn't one of scope %s's (%s)", req.Name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
-	} else if err := s.notTaken("volume", req.Name, s.docker.Volume); err != nil {
+		add(CodeNameNotOwn, at(inBody, "Name"), allowPrefixed(s.scope.Prefixes), "the name %q isn't one of scope %s's (%s)", req.Name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
+	} else if err := s.notTaken("volume", req.Name, at(inBody, "Name"), s.docker.Volume); err != nil {
 		return nil, err
 	}
 
-	s.ownLabels(req.Labels, add)
+	s.ownLabels(req.Labels, "Labels", add)
 
 	if !plainLocal(req.Driver, req.DriverOpts) {
-		add(CodeMount, "the driver %q isn't allowed (only local, without options)", req.Driver)
+		add(CodeMount, at(inBody, "Driver"), allowOneOf([]string{"local"}), "the driver %q isn't allowed (only local, without options)", req.Driver)
 	}
 
 	if len(found) > 0 {

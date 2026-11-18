@@ -68,11 +68,16 @@ func (p *Pulls) AllowsPlatform(platform string) bool {
 
 // RegistryList is the registries allowed, for a refusal to name.
 func (p *Pulls) RegistryList() string {
+	return strings.Join(p.RegistryValues(), ", ")
+}
+
+// RegistryValues is the registries allowed: those listed, or Docker Hub alone.
+func (p *Pulls) RegistryValues() []string {
 	if len(p.Registries) == 0 {
-		return DockerHub
+		return []string{DockerHub}
 	}
 
-	return strings.Join(p.Registries, ", ")
+	return p.Registries
 }
 
 // Registry is a registry's host as compared: lowercase, and Docker Hub's other names ("index.docker.io",
