@@ -475,3 +475,30 @@ func TestTheSpoolsFolder(t *testing.T) {
 		t.Error("a trusted listener alone needs a spool")
 	}
 }
+
+// The stall timeout is for silence, not the whole upload: one that keeps sending, slower than the
+// timeout in all, is loaded.
+func TestLoadSlowButSteady(t *testing.T) {
+	d := startDocker(t)
+	server, _ := spoolGate(t, d, "")
+
+	old := loadStall
+	loadStall = 200 * time.Millisecond
+	defer func() { loadStall = old }()
+
+	body := padded(t, 8<<10)
+	pr, pw := io.Pipe()
+	steady := loadFrom(t, server, asJane, pr)
+
+	go func() {
+		for i := 0; i < len(body); i += len(body) / 8 {
+			_, _ = pw.Write(body[i:min(i+len(body)/8, len(body))])
+			time.Sleep(100 * time.Millisecond) // a slow client, 4 stall timeouts in all
+		}
+		_ = pw.Close()
+	}()
+
+	if a := wait(t, steady); a.status != http.StatusOK {
+		t.Errorf("a slow, steady upload: %d %s", a.status, a.body)
+	}
+}
