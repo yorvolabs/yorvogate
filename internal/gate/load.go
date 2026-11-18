@@ -113,11 +113,11 @@ func (s *scoped) load() (err error) {
 	}()
 
 	if s.length > s.loadLimit {
-		return refuse(http.StatusRequestEntityTooLarge, "image.load: the archive is larger than %d bytes", s.loadLimit)
+		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, "image.load: the archive is larger than %d bytes", s.loadLimit)
 	}
 
 	if s.length > s.spool.limit {
-		return refuse(http.StatusRequestEntityTooLarge, "image.load: the archive is larger than the image spool (spool.limit, %d bytes)", s.spool.limit)
+		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, "image.load: the archive is larger than the image spool (spool.limit, %d bytes)", s.spool.limit)
 	}
 
 	held := &reservation{spool: s.spool, scope: s.scope.Name}
@@ -172,9 +172,9 @@ func (s *scoped) load() (err error) {
 
 	switch {
 	case errors.As(err, &bound):
-		return refuse(http.StatusRequestEntityTooLarge, "image.load: %v", bound)
+		return refuse(http.StatusRequestEntityTooLarge, bound.code, "image.load: %v", bound)
 	case err != nil:
-		return refuse(http.StatusBadRequest, "image.load: %v", err)
+		return refuse(http.StatusBadRequest, CodeLoadInvalid, "image.load: %v", err)
 	}
 
 	for _, name := range names {
@@ -186,7 +186,7 @@ func (s *scoped) load() (err error) {
 	// And it holds everything it refers to, each blob with its digest: else its names could be given
 	// to content Docker already has, which may be another scope's.
 	if err := contents.complete(); err != nil {
-		return refuse(http.StatusBadRequest, "image.load: %v", err)
+		return refuse(http.StatusBadRequest, CodeLoadInvalid, "image.load: %v", err)
 	}
 
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
@@ -210,7 +210,7 @@ func (s *scoped) spoolTo(file *os.File, stream io.Reader, held *reservation) (in
 		got, err := stream.Read(buf)
 		if got > 0 {
 			if n+int64(got) > s.loadLimit {
-				return n, refuse(http.StatusRequestEntityTooLarge, "image.load: the archive is larger than %d bytes", s.loadLimit)
+				return n, refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, "image.load: the archive is larger than %d bytes", s.loadLimit)
 			}
 
 			if !reserved {
@@ -230,9 +230,9 @@ func (s *scoped) spoolTo(file *os.File, stream io.Reader, held *reservation) (in
 		case errors.Is(err, io.EOF):
 			return n, nil
 		case errors.Is(err, errStalled):
-			return n, refuse(http.StatusBadRequest, "image.load: %v (nothing for %v)", err, loadStall)
+			return n, refuse(http.StatusBadRequest, CodeLoadStalled, "image.load: %v (nothing for %v)", err, loadStall)
 		case err != nil:
-			return n, refuse(http.StatusBadRequest, "image.load: the archive couldn't be read: %v", err)
+			return n, refuse(http.StatusBadRequest, CodeLoadUnreadable, "image.load: the archive couldn't be read: %v", err)
 		}
 	}
 }
@@ -254,7 +254,10 @@ type archiveBounds struct {
 }
 
 // boundError is an archive past one of its bounds.
-type boundError struct{ reason string }
+type boundError struct {
+	code   Code
+	reason string
+}
 
 func (e *boundError) Error() string { return e.reason }
 
@@ -272,9 +275,9 @@ func (b *bounded) Read(p []byte) (int, error) {
 
 	switch {
 	case b.read > b.bounds.unpacked:
-		return n, &boundError{fmt.Sprintf("the archive decompresses to more than %d bytes (spool.unpacked, spool.ratio)", b.bounds.unpacked)}
+		return n, &boundError{CodeLoadUnpacked, fmt.Sprintf("the archive decompresses to more than %d bytes (spool.unpacked, spool.ratio)", b.bounds.unpacked)}
 	case !b.bounds.deadline.IsZero() && time.Now().After(b.bounds.deadline):
-		return n, &boundError{fmt.Sprintf("the archive took longer than %v to check", loadCheck)}
+		return n, &boundError{CodeLoadUnpacked, fmt.Sprintf("the archive took longer than %v to check", loadCheck)}
 	}
 
 	return n, err
@@ -335,7 +338,7 @@ func archiveNames(r io.Reader, bounds archiveBounds) ([]string, *contents, error
 
 		// Before its entry is kept: the maps of what the archive holds grow by one per entry.
 		if entries++; entries > maxEntries {
-			return nil, nil, &boundError{fmt.Sprintf("the archive has more than %d entries", maxEntries)}
+			return nil, nil, &boundError{CodeLoadEntries, fmt.Sprintf("the archive has more than %d entries", maxEntries)}
 		}
 
 		// A name is relative and goes nowhere up: an extractor that joins "/manifest.json" or

@@ -27,11 +27,11 @@ func decode(body []byte, into any) error {
 	decoder.DisallowUnknownFields()
 
 	if err := decoder.Decode(into); err != nil {
-		return refuse(http.StatusBadRequest, "the body isn't one this endpoint takes: %v", err)
+		return refuse(http.StatusBadRequest, CodeBodyInvalid, "the body isn't one this endpoint takes: %v", err)
 	}
 
 	if decoder.More() {
-		return refuse(http.StatusBadRequest, "the body has more than one value")
+		return refuse(http.StatusBadRequest, CodeBodyInvalid, "the body has more than one value")
 	}
 
 	return nil
@@ -42,7 +42,7 @@ func decode(body []byte, into any) error {
 func (s *scoped) createContainer(body []byte) ([]byte, error) {
 	name := s.single("name")
 	if !s.scope.NamesContainer(name) {
-		return nil, refuse(http.StatusForbidden, "container.create: the name %q isn't one of scope %s's (%s)", name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
+		return nil, refuse(http.StatusForbidden, CodeNameNotOwn, "container.create: the name %q isn't one of scope %s's (%s)", name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
 	}
 
 	if err := s.notTaken("container", name, s.docker.Container); err != nil {
@@ -55,44 +55,44 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 	}
 
 	if f := unset(req, createRequest); len(f) > 0 {
-		return nil, refuse(http.StatusForbidden, "container.create %s: %s isn't allowed", name, strings.Join(f, ", "))
+		return nil, refuse(http.StatusForbidden, CodeFieldNotAllowed, "container.create %s: %s isn't allowed", name, strings.Join(f, ", "))
 	}
 
 	if req.Config == nil || req.Config.Image == "" {
-		return nil, refuse(http.StatusBadRequest, "container.create: no image")
+		return nil, refuse(http.StatusBadRequest, CodeImage, "container.create: no image")
 	}
 
 	if req.HostConfig == nil {
 		req.HostConfig = &container.HostConfig{}
 	}
 
-	var problems []string
-	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	var found problems
+	add := found.add
 
 	for _, f := range unset(req.Config, containerConfig) {
-		add("%s isn't allowed", f)
+		add(CodeFieldNotAllowed, "%s isn't allowed", f)
 	}
 
 	for _, f := range unset(req.HostConfig, hostConfigFields) {
-		add("HostConfig.%s isn't allowed", f)
+		add(CodeFieldNotAllowed, "HostConfig.%s isn't allowed", f)
 	}
 
 	s.ownLabels(req.Config.Labels, add)
 
 	if err := s.image(req.Config.Image); err != nil {
-		add("%v", err)
+		add(codeOf(err, CodeImage), "%v", err)
 	}
 
 	s.host(req.HostConfig, add)
 	s.resources(&req.HostConfig.Resources, add)
 	for _, f := range unset(req.NetworkingConfig, networkingConfig) {
-		add("NetworkingConfig.%s isn't allowed", f)
+		add(CodeFieldNotAllowed, "NetworkingConfig.%s isn't allowed", f)
 	}
 
 	s.networking(&req.HostConfig.NetworkMode, req.NetworkingConfig, add)
 
-	if len(problems) > 0 {
-		return nil, refuse(http.StatusForbidden, "container.create %s: %s", name, strings.Join(problems, "; "))
+	if len(found) > 0 {
+		return nil, found.refusal(http.StatusForbidden, "container.create "+name)
 	}
 
 	// What it runs is an image it may read, however it's named: Docker takes an ID by as few as 4 of
@@ -142,7 +142,7 @@ var (
 // Docker's default. json-file and local take their own; another driver the listener allows takes
 // only the values its log_options list, so a scope can't point Docker at an address of its choosing.
 // A non-blocking log's buffer is in Docker's own memory: it's bounded.
-func (s *scoped) logOptions(c container.LogConfig, add func(string, ...any)) {
+func (s *scoped) logOptions(c container.LogConfig, add func(Code, string, ...any)) {
 	driver := c.Type
 	if driver == "" && s.daemon != nil {
 		driver = s.daemon.logDriver
@@ -151,17 +151,17 @@ func (s *scoped) logOptions(c container.LogConfig, add func(string, ...any)) {
 	for option, value := range c.Config {
 		switch {
 		case driver == "none":
-			add("the log driver none takes no option (%s)", option)
+			add(CodeLogging, "the log driver none takes no option (%s)", option)
 		case option == "max-buffer-size":
 			size, err := units.RAMInBytes(value)
 			if err != nil || size > s.policy.LogBuffer() {
-				add("the log option max-buffer-size %q isn't allowed (at most %d bytes: the buffer is in Docker's own memory)", value, s.policy.LogBuffer())
+				add(CodeLogging, "the log option max-buffer-size %q isn't allowed (at most %d bytes: the buffer is in Docker's own memory)", value, s.policy.LogBuffer())
 			}
 		case slices.Contains(commonLogOptions, option), slices.Contains(ownLogOptions[driver], option):
 		case driver == "json-file" || driver == "local":
-			add("the log option %s isn't one of the %s driver's", option, driver)
+			add(CodeLogging, "the log option %s isn't one of the %s driver's", option, driver)
 		case !slices.Contains(s.policy.LogOptions[option], value):
-			add("the log option %s=%q isn't one the listener allows for the %s driver", option, value, driver)
+			add(CodeLogging, "the log option %s=%q isn't one the listener allows for the %s driver", option, value, driver)
 		}
 	}
 }
@@ -190,27 +190,27 @@ func safeDefaults(h *container.HostConfig, runtime string) {
 
 // ownLabels checks the labels of an object a scope creates: they carry its owner label, and none of
 // another scope's.
-func (s *scoped) ownLabels(labels map[string]string, add func(string, ...any)) {
+func (s *scoped) ownLabels(labels map[string]string, add func(Code, string, ...any)) {
 	if !s.scope.Owns(labels) {
-		add("it must carry the label %s=%s", s.scope.Owner.Key, s.scope.Owner.Value)
+		add(CodeLabelNotOwn, "it must carry the label %s=%s", s.scope.Owner.Key, s.scope.Owner.Value)
 	}
 
 	if s.scope.OwnedByAnother(labels) {
-		add("its labels mark it as another scope's")
+		add(CodeLabelNotOwn, "its labels mark it as another scope's")
 	}
 }
 
 // host checks what a container asks of the host: namespaces, capabilities, security options, the
 // runtime, logs, and what it mounts.
-func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
+func (s *scoped) host(h *container.HostConfig, add func(Code, string, ...any)) {
 	p := s.policy
 
 	if h.Privileged || h.PublishAllPorts || len(h.PortBindings) > 0 || len(h.Devices) > 0 {
-		add("privileged containers, published ports and devices aren't allowed")
+		add(CodeHostAccess, "privileged containers, published ports and devices aren't allowed")
 	}
 
 	if h.PidMode.IsHost() || h.IpcMode.IsHost() || h.UTSMode.IsHost() || h.UsernsMode.IsHost() || h.CgroupnsMode.IsHost() {
-		add("the host's namespaces aren't allowed")
+		add(CodeNamespace, "the host's namespaces aren't allowed")
 	}
 
 	// Another of its own containers' namespace, by the ID the check found: by its name, Docker would
@@ -219,7 +219,7 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 		if id, ok := s.ownContainerID(other); ok {
 			h.PidMode = container.PidMode("container:" + id)
 		} else {
-			add("PidMode: container:%s isn't one of its own", other)
+			add(CodeObjectNotOwn, "PidMode: container:%s isn't one of its own", other)
 		}
 	}
 
@@ -227,73 +227,73 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 		if id, ok := s.ownContainerID(other); ok {
 			h.IpcMode = container.IpcMode("container:" + id)
 		} else {
-			add("IpcMode: container:%s isn't one of its own", other)
+			add(CodeObjectNotOwn, "IpcMode: container:%s isn't one of its own", other)
 		}
 	}
 
 	// Each namespace: its own (Docker's default), or another of the scope's containers'. Only the
 	// values listed; Docker reads any other as an error, or as the host's.
 	if h.PidMode != "" && !h.PidMode.IsContainer() {
-		add("PidMode %q isn't allowed", h.PidMode)
+		add(CodeNamespace, "PidMode %q isn't allowed", h.PidMode)
 	}
 
 	if !slices.Contains([]container.IpcMode{"", "private", "shareable", "none"}, h.IpcMode) && !h.IpcMode.IsContainer() {
-		add("IpcMode %q isn't allowed", h.IpcMode)
+		add(CodeNamespace, "IpcMode %q isn't allowed", h.IpcMode)
 	}
 
 	if h.UTSMode != "" || h.UsernsMode != "" {
-		add("UTSMode and UsernsMode must be left as Docker sets them")
+		add(CodeNamespace, "UTSMode and UsernsMode must be left as Docker sets them")
 	}
 
 	if h.CgroupnsMode != "" && h.CgroupnsMode != "private" {
-		add("CgroupnsMode %q isn't allowed", h.CgroupnsMode)
+		add(CodeNamespace, "CgroupnsMode %q isn't allowed", h.CgroupnsMode)
 	}
 
 	for _, c := range h.CapAdd {
 		name := strings.TrimPrefix(strings.ToUpper(c), "CAP_")
 		if !slices.Contains(p.Capabilities, name) {
-			add("adding the capability %s isn't allowed (allowed: %s)", c, list(p.Capabilities))
+			add(CodeCapability, "adding the capability %s isn't allowed (allowed: %s)", c, list(p.Capabilities))
 		}
 	}
 
 	if p.DropAllCapabilities && !slices.ContainsFunc(h.CapDrop, func(c string) bool { return strings.EqualFold(c, "ALL") }) {
-		add("it must drop all capabilities (CapDrop: ALL)")
+		add(CodeCapability, "it must drop all capabilities (CapDrop: ALL)")
 	}
 
 	for _, o := range h.SecurityOpt {
 		if !slices.Contains(noNewPrivileges, o) && !slices.Contains(p.SecurityOptions, o) {
-			add("the security option %q isn't allowed", o)
+			add(CodeSecurity, "the security option %q isn't allowed", o)
 		}
 	}
 
 	if p.NoNewPrivileges && !slices.ContainsFunc(h.SecurityOpt, func(o string) bool { return slices.Contains(noNewPrivileges, o) }) {
-		add("it must run with no-new-privileges")
+		add(CodeSecurity, "it must run with no-new-privileges")
 	}
 
 	if h.Runtime != "" && !slices.Contains(p.Runtimes, h.Runtime) {
-		add("the runtime %q isn't allowed", h.Runtime)
+		add(CodeRuntime, "the runtime %q isn't allowed", h.Runtime)
 	}
 
 	if h.Isolation != "" && h.Isolation != "default" {
-		add("the isolation %q isn't allowed", h.Isolation)
+		add(CodeRuntime, "the isolation %q isn't allowed", h.Isolation)
 	}
 
 	if h.LogConfig.Type != "" && !slices.Contains(append([]string{"json-file", "local", "none"}, p.LogDrivers...), h.LogConfig.Type) {
-		add("the log driver %q isn't allowed", h.LogConfig.Type)
+		add(CodeLogging, "the log driver %q isn't allowed", h.LogConfig.Type)
 	} else {
 		s.logOptions(h.LogConfig, add)
 	}
 
 	for _, f := range unset(h.LogConfig, logConfig) {
-		add("LogConfig.%s isn't allowed", f)
+		add(CodeFieldNotAllowed, "LogConfig.%s isn't allowed", f)
 	}
 
 	if h.OomScoreAdj < 0 {
-		add("OomScoreAdj below 0 isn't allowed")
+		add(CodeLimit, "OomScoreAdj below 0 isn't allowed")
 	}
 
 	if !plainLocal(h.VolumeDriver, nil) {
-		add("the volume driver %q isn't allowed", h.VolumeDriver)
+		add(CodeMount, "the volume driver %q isn't allowed", h.VolumeDriver)
 	}
 
 	// By the ID the check found, as namespaces are (its :ro or :rw kept)
@@ -303,7 +303,7 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 
 		switch {
 		case !ok:
-			add("VolumesFrom: %s isn't one of its own containers", other)
+			add(CodeObjectNotOwn, "VolumesFrom: %s isn't one of its own containers", other)
 		case moded:
 			h.VolumesFrom[i] = id + ":" + mode
 		default:
@@ -314,7 +314,7 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 	for _, b := range h.Binds {
 		source, _, _ := strings.Cut(b, ":")
 		if err := s.volumeSource(source); err != nil {
-			add("Binds %q: %v", b, err)
+			add(CodeHostAccess, "Binds %q: %v", b, err)
 		}
 	}
 
@@ -325,7 +325,7 @@ func (s *scoped) host(h *container.HostConfig, add func(string, ...any)) {
 
 // resources checks a new container's limits: what the listener requires, and what reaches the host's
 // devices or its real-time scheduler.
-func (s *scoped) resources(r *container.Resources, add func(string, ...any)) {
+func (s *scoped) resources(r *container.Resources, add func(Code, string, ...any)) {
 	s.limits(*r, true, 0, add)
 }
 
@@ -335,12 +335,12 @@ func (s *scoped) resources(r *container.Resources, add func(string, ...any)) {
 // is memory and swap together) is bounded by the memory limit as Docker bounds it by default: at
 // most twice it, never unlimited. An update that gives swap without memory is checked against the
 // container's memory now (current).
-func (s *scoped) limits(r container.Resources, creating bool, current int64, add func(string, ...any)) {
+func (s *scoped) limits(r container.Resources, creating bool, current int64, add func(Code, string, ...any)) {
 	p := s.policy
 
 	if p.MaxMemory > 0 {
 		if (creating || r.Memory != 0) && (r.Memory <= 0 || r.Memory > p.MaxMemory) {
-			add("a memory limit up to %d bytes is required", p.MaxMemory)
+			add(CodeLimit, "a memory limit up to %d bytes is required", p.MaxMemory)
 		}
 
 		memory := r.Memory
@@ -350,77 +350,77 @@ func (s *scoped) limits(r container.Resources, creating bool, current int64, add
 
 		switch {
 		case r.MemorySwap < 0:
-			add("unlimited swap (MemorySwap -1) isn't allowed: memory and swap together are at most twice the memory limit")
+			add(CodeLimit, "unlimited swap (MemorySwap -1) isn't allowed: memory and swap together are at most twice the memory limit")
 		case r.MemorySwap > 0 && memory > 0 && (r.MemorySwap < memory || r.MemorySwap > 2*memory):
-			add("MemorySwap (memory and swap together) must be between the memory limit and twice it (%d to %d bytes), or left unset", memory, 2*memory)
+			add(CodeLimit, "MemorySwap (memory and swap together) must be between the memory limit and twice it (%d to %d bytes), or left unset", memory, 2*memory)
 		}
 	}
 
 	if p.MaxPids > 0 && (creating || r.PidsLimit != nil) && (r.PidsLimit == nil || *r.PidsLimit <= 0 || *r.PidsLimit > p.MaxPids) {
-		add("a process limit up to %d is required", p.MaxPids)
+		add(CodeLimit, "a process limit up to %d is required", p.MaxPids)
 	}
 
 	if r.OomKillDisable != nil && *r.OomKillDisable {
-		add("disabling the OOM killer isn't allowed")
+		add(CodeLimit, "disabling the OOM killer isn't allowed")
 	}
 
 	for _, u := range r.Ulimits {
 		if u != nil && !slices.Contains(p.Ulimits, u.Name) {
-			add("the ulimit %s isn't allowed", u.Name)
+			add(CodeLimit, "the ulimit %s isn't allowed", u.Name)
 		}
 	}
 
 	for _, u := range r.Ulimits {
 		for _, f := range unset(u, ulimit) {
-			add("a ulimit's %s isn't allowed", f)
+			add(CodeFieldNotAllowed, "a ulimit's %s isn't allowed", f)
 		}
 	}
 }
 
-func (s *scoped) mount(m mount.Mount, add func(string, ...any)) {
+func (s *scoped) mount(m mount.Mount, add func(Code, string, ...any)) {
 	for _, f := range unset(m, mountSpec) {
-		add("a mount's %s isn't allowed", f)
+		add(CodeFieldNotAllowed, "a mount's %s isn't allowed", f)
 	}
 
 	if !path.IsAbs(m.Target) || path.Clean(m.Target) != m.Target {
-		add("a mount's target %q must be an absolute, clean path", m.Target)
+		add(CodeMount, "a mount's target %q must be an absolute, clean path", m.Target)
 	}
 
 	switch m.Type {
 	case mount.TypeVolume:
 		if m.Source != "" {
 			if err := s.volumeSource(m.Source); err != nil {
-				add("mount of %q: %v", m.Source, err)
+				add(CodeMount, "mount of %q: %v", m.Source, err)
 			}
 		}
 
 		if o := m.VolumeOptions; o != nil {
 			for _, f := range unset(o, volumeOptions) {
-				add("a mount's VolumeOptions.%s isn't allowed", f)
+				add(CodeFieldNotAllowed, "a mount's VolumeOptions.%s isn't allowed", f)
 			}
 
 			for _, f := range unset(o.DriverConfig, mountDriver) {
-				add("a mount's VolumeOptions.DriverConfig.%s isn't allowed", f)
+				add(CodeFieldNotAllowed, "a mount's VolumeOptions.DriverConfig.%s isn't allowed", f)
 			}
 
 			if o.DriverConfig != nil && !plainLocal(o.DriverConfig.Name, o.DriverConfig.Options) {
-				add("mount of %q: volume driver options aren't allowed", m.Source)
+				add(CodeMount, "mount of %q: volume driver options aren't allowed", m.Source)
 			}
 
 			if s.scope.OwnedByAnother(o.Labels) {
-				add("mount of %q: its labels mark the volume as another scope's", m.Source)
+				add(CodeObjectNotOwn, "mount of %q: its labels mark the volume as another scope's", m.Source)
 			}
 
 			if o.Subpath != "" && (path.IsAbs(o.Subpath) || path.Clean(o.Subpath) != o.Subpath || strings.HasPrefix(o.Subpath, "..")) {
-				add("mount of %q: the subpath %q must stay inside the volume", m.Source, o.Subpath)
+				add(CodeMount, "mount of %q: the subpath %q must stay inside the volume", m.Source, o.Subpath)
 			}
 		}
 	case mount.TypeTmpfs:
 		if m.Source != "" {
-			add("a tmpfs mount has no source")
+			add(CodeMount, "a tmpfs mount has no source")
 		}
 	default:
-		add("a %q mount of %q isn't allowed (only volumes and tmpfs)", m.Type, m.Source)
+		add(CodeMount, "a %q mount of %q isn't allowed (only volumes and tmpfs)", m.Type, m.Source)
 	}
 }
 
@@ -456,7 +456,7 @@ func (s *scoped) volumeSource(source string) error {
 
 // networking checks the networks a container joins: its own, or the shared ones its scope names
 // (with only its own aliases and addresses there).
-func (s *scoped) networking(pinned *container.NetworkMode, nc *network.NetworkingConfig, add func(string, ...any)) {
+func (s *scoped) networking(pinned *container.NetworkMode, nc *network.NetworkingConfig, add func(Code, string, ...any)) {
 	mode := *pinned
 
 	var endpoints map[string]*network.EndpointSettings
@@ -467,7 +467,7 @@ func (s *scoped) networking(pinned *container.NetworkMode, nc *network.Networkin
 	switch {
 	case mode == "none":
 		if len(endpoints) > 0 {
-			add("a container without a network joins none")
+			add(CodeNetwork, "a container without a network joins none")
 		}
 
 		return
@@ -482,25 +482,25 @@ func (s *scoped) networking(pinned *container.NetworkMode, nc *network.Networkin
 
 		switch {
 		case err != nil || !s.owned(c):
-			add("NetworkMode container:%s isn't one of its own containers", other)
+			add(CodeObjectNotOwn, "NetworkMode container:%s isn't one of its own containers", other)
 		case s.egressFree():
 			// The one it joins may have been made before the scope was egress-free.
 			if outside, err := external(s.ctx, s.docker, s.version, c.inspection); err != nil {
-				add("the networks of container %s couldn't be checked: %v", other, err)
+				add(CodeNetwork, "the networks of container %s couldn't be checked: %v", other, err)
 			} else if len(outside) > 0 {
-				add("the container %s whose network it joins is on a network that isn't internal (%s; egress: none)", other, strings.Join(outside, ", "))
+				add(CodeEgress, "the container %s whose network it joins is on a network that isn't internal (%s; egress: none)", other, strings.Join(outside, ", "))
 			}
 		}
 
 		if len(endpoints) > 0 {
-			add("a container in another's network joins none of its own")
+			add(CodeNetwork, "a container in another's network joins none of its own")
 		}
 
 		return
 	case mode == "" || mode == "default" || mode == "bridge" || mode == "host" || strings.Contains(string(mode), ":"):
 		// Docker's default bridge (shared by every container on the machine), the host's, or a mode
 		// YorvoGate doesn't know
-		add("NetworkMode %q isn't allowed: a container joins its scope's networks", mode)
+		add(CodeNetwork, "NetworkMode %q isn't allowed: a container joins its scope's networks", mode)
 
 		return
 	}
@@ -514,7 +514,7 @@ func (s *scoped) networking(pinned *container.NetworkMode, nc *network.Networkin
 	}
 }
 
-func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(string, ...any)) {
+func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(Code, string, ...any)) {
 	if shared, ok := s.scope.Networks[name]; ok {
 		if s.egressFree() {
 			s.internal(name, add)
@@ -525,31 +525,31 @@ func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(str
 		}
 
 		for _, f := range unset(e, endpointShared) {
-			add("on the shared network %s, %s isn't allowed", name, f)
+			add(CodeFieldNotAllowed, "on the shared network %s, %s isn't allowed", name, f)
 		}
 
 		// As Docker's DNS keeps it: "WEB" is the scope's "web", "web." another name
 		for _, a := range e.Aliases {
 			alias, ok := scope.NormaliseAlias(a)
 			if !ok {
-				add("the alias %q on the shared network %s isn't a name as Docker's DNS keeps it (ASCII, no trailing dot)", a, name)
+				add(CodeNetwork, "the alias %q on the shared network %s isn't a name as Docker's DNS keeps it (ASCII, no trailing dot)", a, name)
 
 				continue
 			}
 
 			if !slices.Contains(shared.Aliases, alias) {
-				add("the alias %q on the shared network %s isn't one of its own", a, name)
+				add(CodeNetwork, "the alias %q on the shared network %s isn't one of its own", a, name)
 			}
 		}
 
 		for _, f := range unset(e.IPAMConfig, endpointIPAMShared) {
-			add("on the shared network %s, IPAMConfig.%s isn't allowed", name, f)
+			add(CodeFieldNotAllowed, "on the shared network %s, IPAMConfig.%s isn't allowed", name, f)
 		}
 
 		if c := e.IPAMConfig; c != nil {
 			for _, ip := range append([]netip.Addr{c.IPv4Address, c.IPv6Address}, c.LinkLocalIPs...) {
 				if ip.IsValid() && !slices.Contains(shared.Addresses, ip.String()) {
-					add("the address %s on the shared network %s isn't one of its own", ip, name)
+					add(CodeNetwork, "the address %s on the shared network %s isn't one of its own", ip, name)
 				}
 			}
 		}
@@ -559,24 +559,24 @@ func (s *scoped) endpoint(name string, e *network.EndpointSettings, add func(str
 
 	n, err := s.docker.Network(s.ctx, s.version, name)
 	if err != nil {
-		add("the network %s couldn't be checked: %v", name, err)
+		add(CodeNetwork, "the network %s couldn't be checked: %v", name, err)
 
 		return
 	}
 
 	if n == nil || !s.scope.Owns(n.Labels) {
-		add("the network %s isn't one of its own, nor a shared one it may join", name)
+		add(CodeObjectNotOwn, "the network %s isn't one of its own, nor a shared one it may join", name)
 
 		return
 	}
 
 	if s.egressFree() && !n.Internal {
-		add("the network %s isn't internal (egress: none)", name)
+		add(CodeEgress, "the network %s isn't internal (egress: none)", name)
 	}
 
 	if e != nil {
 		for _, f := range unset(e, endpointOwn) {
-			add("on the network %s, %s isn't allowed", name, f)
+			add(CodeFieldNotAllowed, "on the network %s, %s isn't allowed", name, f)
 		}
 	}
 }
@@ -598,17 +598,17 @@ func (s *scoped) updateContainer(body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	var problems []string
-	add := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
+	var found problems
+	add := found.add
 
 	for _, f := range unset(req, updateConfig) {
-		add("%s isn't allowed", f)
+		add(CodeFieldNotAllowed, "%s isn't allowed", f)
 	}
 
 	s.limits(req.Resources, false, s.currentMemory(), add)
 
-	if len(problems) > 0 {
-		return nil, refuse(http.StatusForbidden, "container.update: %s", strings.Join(problems, "; "))
+	if len(found) > 0 {
+		return nil, found.refusal(http.StatusForbidden, "container.update")
 	}
 
 	return json.Marshal(req)
@@ -622,11 +622,11 @@ func (s *scoped) createExec(body []byte) ([]byte, error) {
 	}
 
 	if req.Privileged {
-		return nil, refuse(http.StatusForbidden, "exec.create: a privileged exec isn't allowed")
+		return nil, refuse(http.StatusForbidden, CodeExec, "exec.create: a privileged exec isn't allowed")
 	}
 
 	if f := unset(req, execCreate); len(f) > 0 {
-		return nil, refuse(http.StatusForbidden, "exec.create: %s isn't allowed", strings.Join(f, ", "))
+		return nil, refuse(http.StatusForbidden, CodeFieldNotAllowed, "exec.create: %s isn't allowed", strings.Join(f, ", "))
 	}
 
 	return json.Marshal(req)
@@ -639,12 +639,12 @@ func (s *scoped) startExec(body []byte) ([]byte, error) {
 	}
 
 	if f := unset(req, execStart); len(f) > 0 {
-		return nil, refuse(http.StatusForbidden, "exec.start: %s isn't allowed", strings.Join(f, ", "))
+		return nil, refuse(http.StatusForbidden, CodeFieldNotAllowed, "exec.start: %s isn't allowed", strings.Join(f, ", "))
 	}
 
 	// Attached, it's a stream both ways: only as an upgrade.
 	if !req.Detach && !s.upgrading {
-		return nil, refuse(http.StatusBadRequest, "exec.start: an attached exec is allowed only as an HTTP upgrade")
+		return nil, refuse(http.StatusBadRequest, CodeUpgradeOnly, "exec.start: an attached exec is allowed only as an HTTP upgrade")
 	}
 
 	return json.Marshal(req)

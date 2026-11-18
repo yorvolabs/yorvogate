@@ -47,7 +47,7 @@ func searchRegistry(term string) string {
 // registry checks that a request reaches only a registry of the listener's.
 func (s *scoped) registry(registry, what string) error {
 	if !s.pulls.Allows(registry) {
-		return refuse(http.StatusForbidden, "%s: the registry %s isn't one this listener's scopes may pull from (%s)", what, registry, s.pulls.RegistryList())
+		return refuse(http.StatusForbidden, CodeRegistry, "%s: the registry %s isn't one this listener's scopes may pull from (%s)", what, registry, s.pulls.RegistryList())
 	}
 
 	return nil
@@ -62,16 +62,16 @@ func (s *scoped) platform(asked string) error {
 
 	platform, err := config.Platform(asked)
 	if err != nil {
-		return refuse(http.StatusBadRequest, "image.create: %v", err)
+		return refuse(http.StatusBadRequest, CodeImage, "image.create: %v", err)
 	}
 
 	host, err := s.docker.Platform(s.ctx, s.version)
 	if err != nil {
-		return refuse(http.StatusServiceUnavailable, "image.create: the platform %s can't be checked: Docker's own platform couldn't be read (%v)", asked, err)
+		return refuse(http.StatusServiceUnavailable, CodeDaemonUnknown, "image.create: the platform %s can't be checked: Docker's own platform couldn't be read (%v)", asked, err)
 	}
 
 	if platform != host && !s.pulls.AllowsPlatform(platform) {
-		return refuse(http.StatusForbidden, "image.create: the platform %s isn't the host's (%s), nor one this listener's scopes may pull", asked, host)
+		return refuse(http.StatusForbidden, CodePlatform, "image.create: the platform %s isn't the host's (%s), nor one this listener's scopes may pull", asked, host)
 	}
 
 	return nil

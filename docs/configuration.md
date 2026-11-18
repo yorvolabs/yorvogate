@@ -456,6 +456,72 @@ Run `yorvogate check` with the new version on your configuration and scope folde
 - **Image answers** (list, inspect, history) name an image only by the tags and digests the scope may see.
 - New, optional: [`scope_sockets`](#scope-sockets) (a socket per scope, where `token_sha256` becomes optional) and `socket_group` on any listener with unix sockets.
 
+## Reason codes
+
+Every refusal of a Docker request says why twice: in Docker's `message`, for people, which may change between releases, and in `code`, for programs, which doesn't. Docker's clients show the message and ignore the code:
+
+```
+{"message": "yorvogate: container.create jane-php-1: adding the capability SYS_ADMIN isn't allowed (allowed: NET_BIND_SERVICE, CHOWN)", "code": "policy.capability"}
+```
+
+A refusal that collects several problems (a container's, network's or volume's configuration, an update, a network connect) has the first one's code, and the log line lists every problem's code (`codes`). An authentication failure always has `auth.rejected`, whatever its cause, so a client learns nothing of which scopes exist; the log says the cause (`auth_failure`, below). The codes, and what each means:
+
+| Code | Meaning |
+|---|---|
+| `auth.rejected` | No such scope, or not its credentials (token, certificate, socket or peer user). Every authentication failure has this code; its cause is only logged. |
+| `body.field-not-allowed` | A field of the body is set that a scope may not set. |
+| `body.invalid` | The body isn't one value of what Docker reads there. |
+| `body.missing` | The endpoint takes a body, and none came. |
+| `body.too-large` | The body is larger than body_limit. |
+| `body.unexpected` | The endpoint takes no body, and one came. |
+| `body.unreadable` | The body couldn't be read (it stopped, or came too slowly). |
+| `daemon.defaults-unread` | Docker's defaults haven't been read yet: scoped requests wait for them. |
+| `daemon.defaults-unsafe` | Docker's defaults would widen what scopes may do (or couldn't be read). |
+| `daemon.unavailable` | Something of Docker's own that a check needs couldn't be read (its platform). |
+| `daemon.unreachable` | Docker didn't answer a request YorvoGate forwarded. |
+| `gate.undecided` | YorvoGate couldn't decide on the request (an error of its own, or Docker's while it looked something up). |
+| `header.content-type` | The Content-Type isn't one value, or isn't valid. |
+| `header.form-body` | A form body, whose parameters Docker would read over the checked query. |
+| `header.too-long` | A header is longer than YorvoGate forwards. |
+| `header.twice` | A header YorvoGate reads or forwards is given more than once. |
+| `listener.not-allowed` | The endpoint isn't one of the trusted listener's groups. |
+| `load.busy` | Too many image loads at once: retry (Retry-After). |
+| `load.entries` | The archive has more entries than an image archive may. |
+| `load.invalid` | The archive isn't an image archive YorvoGate reads, or holds names or blobs it may not. |
+| `load.spool-full` | The image spool is full now: retry (Retry-After). |
+| `load.stalled` | The archive stopped arriving. |
+| `load.too-large` | The image archive is larger than load_limit, or than the spool (spool.limit). |
+| `load.unpacked` | The archive decompresses to more than its bound (spool.ratio, spool.unpacked), or took too long to check. |
+| `load.unreadable` | The archive couldn't be read. |
+| `policy.builder` | A builder that isn't configured as a builder must be, or a use of it beyond buildctl dial-stdio. |
+| `policy.capability` | A capability beyond the listener's, or not dropping all where it must. |
+| `policy.egress` | A network that isn't internal, for a scope without egress. |
+| `policy.exec` | An exec that isn't allowed (privileged). |
+| `policy.host-access` | It would reach the host: privileged, a host path, devices, published ports. |
+| `policy.image` | An image reference that isn't valid, or missing. |
+| `policy.limit` | A resource limit missing, above the listener's, or one that's unlimited. |
+| `policy.logging` | A log driver or log option that isn't allowed. |
+| `policy.mount` | A mount or volume that isn't allowed (its type, source, driver, options or subpath). |
+| `policy.namespace` | A namespace mode that isn't allowed (the host's, or one Docker would read as the host's). |
+| `policy.network` | A network, alias, address, driver or subnet that isn't allowed. |
+| `policy.platform` | A platform that isn't the host's, nor one the listener allows. |
+| `policy.registry` | A registry the listener's scopes may not pull from. |
+| `policy.runtime` | A runtime or isolation that isn't allowed. |
+| `policy.security` | A security option, or no-new-privileges, that isn't the listener's. |
+| `query.invalid` | A query parameter's value isn't valid (filters that aren't JSON lists). |
+| `query.not-allowed` | A query parameter that isn't allowed, or that YorvoGate doesn't forward, for the endpoint. |
+| `query.twice` | A query parameter is given more than once. |
+| `route.invalid` | The path isn't canonical, or its API version isn't one YorvoGate serves. |
+| `route.unknown-endpoint` | An endpoint YorvoGate doesn't know (a newer Docker's, or none of Docker's). |
+| `scope.endpoint-not-allowed` | The endpoint isn't one a scope may use. |
+| `scope.image-not-own` | The image name isn't in the scope's image namespaces. |
+| `scope.label-not-own` | The object doesn't carry the scope's owner label, or carries another scope's. |
+| `scope.name-not-own` | The name isn't under the scope's prefixes. |
+| `scope.name-taken` | The name is under the scope's prefixes, but another owner's object has it. |
+| `scope.not-found` | The object isn't the scope's: answered as one that doesn't exist. |
+| `scope.object-not-own` | What the request joins or mounts (a container, network or volume) isn't the scope's. |
+| `stream.upgrade-only` | A stream allowed only as an HTTP upgrade. |
+
 ## Logs
 
 One JSON line per decision on standard error: `listener`, `method`, `path`, `scope` (scoped listeners), `endpoint`, the headers that weren't forwarded (`headers_not_forwarded`, names only), and for a refusal its `status` and `reason`.
