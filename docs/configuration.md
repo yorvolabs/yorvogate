@@ -429,6 +429,7 @@ GET /_yorvogate/v1/scopes/<name>?listener=<scoped listener>&absent
 - With `sha256`, the request waits (10 seconds at most) until that listener's scope file is the one with that SHA-256, whatever its state: write the file (by renaming a complete one over it), then ask with its SHA-256, and the answer is about that file and no older one. With `absent`, it waits until the scope has no file (`unknown`). YorvoGate scans the folders at once for such a request, rather than at its next scan.
 - A wait that ends without what it waited for answers **408** with `"matched": false` and the state as it is: treat it as a failure, never as the state you waited for. A match answers 200 with `"matched": true`.
 - `generation` counts the snapshots of the scope files since the start: it's for information, not proof that a write is in one.
+- The answer is open for additions: a release may add optional fields within version 1 (0.4 added `taken`), so ignore the fields you don't know. Validate with the schema of the release you run.
 - `taken` (only when it's `loaded`, and only when there are any): the containers, networks and volumes under the scope's prefixes that carry another owner's label, each with its `kind`, `name` and `owner` (`scope <name>`, or `<label>=<value>` of an owner no scope has now). Another scope made them before this one's file was valid: a shorter prefix's scope while this one didn't exist yet (jane creating `jane-shop-web-1` before site `jane-shop`), or a scope since removed. The scope can't create those names: its create is refused as taken (409), without saying whose. **Treat `taken` as a conflict to stop on, not a state to wait out**: it doesn't clear by itself. Decide what to do with the other owner's objects (through a trusted listener), or give the scope other names. If the names can't be listed, the answer is 502, never one without them. `check --docker` warns of them too.
 
 ## Formats and versions
@@ -439,6 +440,7 @@ The configuration and the scope files each say their format: `version: 1` (YAML)
 - An old format keeps working for at least one minor release after its successor, with a warning from `yorvogate check` and in the logs.
 - A configuration without `version` was read as version 1 in 0.3, with that warning, and is refused from 0.4. A scope file without one is still read as version 1, with the warning: an orchestrator may roll back to a release that refuses the field. It's refused from the first minor release after Quire Server writes a version in every scope file, which the CHANGELOG announces.
 - Each format's version moves on its own: a new configuration format doesn't change the scope files', or the reverse.
+- What YorvoGate reads (the configuration, scope files) is closed: a field it doesn't know is refused. What it answers (scope status) is open: optional fields may be added within a version, and a client should ignore those it doesn't know. A field removed or changed in meaning is a new version.
 
 ## Migrating from 0.1.0
 

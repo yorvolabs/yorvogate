@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yorvolabs/yorvogate/schemas/yorvogate-scope-status.v1.schema.json",
   "title": "YorvoGate scope status, format 1",
-  "description": "The answer of GET /_yorvogate/v1/scopes/<name> on a trusted listener (docs/configuration.md#scope-status). With sha256 or absent, the request waited: matched tells whether what it waited for came. A 408 answer has matched false and the current state, which is never the state waited for: treat it as a failure.",
+  "description": "The answer of GET /_yorvogate/v1/scopes/<name> on a trusted listener (docs/configuration.md#scope-status). With sha256 or absent, the request waited: matched tells whether what it waited for came. A 408 answer has matched false and the current state, which is never the state waited for: treat it as a failure. An answer is open for additions: a later release may add optional fields within version 1, so ignore fields you don't know (an input format, such as the configuration or a scope file, stays closed).",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["version", "generation", "listener", "scope", "state"],
   "properties": {
     "version": {"const": 1},
