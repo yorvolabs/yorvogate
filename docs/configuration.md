@@ -440,7 +440,9 @@ The configuration and the scope files each say their format: `version: 1` (YAML)
 - An old format keeps working for at least one minor release after its successor, with a warning from `yorvogate check` and in the logs.
 - A configuration without `version` was read as version 1 in 0.3, with that warning, and is refused from 0.4. A scope file without one is still read as version 1, with the warning: an orchestrator may roll back to a release that refuses the field. It's refused from the first minor release after Quire Server writes a version in every scope file, which the CHANGELOG announces.
 - Each format's version moves on its own: a new configuration format doesn't change the scope files', or the reverse.
-- What YorvoGate reads (the configuration, scope files) is closed: a field it doesn't know is refused. What it answers (scope status) is open: optional fields may be added within a version, and a client should ignore those it doesn't know. A field removed or changed in meaning is a new version.
+- What YorvoGate reads (the configuration, scope files) is closed: a field it doesn't know is refused. What it gives (scope status, refusals, the log) is open for additions at every level: a release may add optional fields within a version, and values to an open list. A client should ignore fields it doesn't know, and treat an unknown value of an open list as the list's general case.
+- Each list of values says whether it's open or closed (`x-list` in the schemas). Open lists are reason codes, the log's `msg`, `auth_failure` and `by`, and `taken`'s `kind`. A closed list is a scope's `state`: a new state is a new version, since orchestrators wait on knowing every one.
+- A new version comes with a field removed or renamed, a field made required or given another type, a change of meaning, a value added to a closed list, or a cause moved to another value of an open list (a refusal keeps its code once it has one).
 
 ## Migrating from 0.1.0
 

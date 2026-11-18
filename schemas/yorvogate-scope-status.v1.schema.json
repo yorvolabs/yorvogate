@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yorvolabs/yorvogate/schemas/yorvogate-scope-status.v1.schema.json",
   "title": "YorvoGate scope status, format 1",
-  "description": "The answer of GET /_yorvogate/v1/scopes/<name> on a trusted listener (docs/configuration.md#scope-status). With sha256 or absent, the request waited: matched tells whether what it waited for came. A 408 answer has matched false and the current state, which is never the state waited for: treat it as a failure. An answer is open for additions: a later release may add optional fields within version 1, so ignore fields you don't know (an input format, such as the configuration or a scope file, stays closed).",
+  "description": "The answer of GET /_yorvogate/v1/scopes/<name> on a trusted listener (docs/configuration.md#scope-status). With sha256 or absent, the request waited: matched tells whether what it waited for came. A 408 answer has matched false and the current state, which is never the state waited for: treat it as a failure. An answer is open for additions at every level (ADR-0005, amendment 1): a later release may add optional fields within version 1, and values to an open list (x-list: open), so ignore fields you don't know and treat an unknown value of an open list as its general case. A closed list (x-list: closed, here state) gains a value only in a new version. An input format, such as the configuration or a scope file, stays closed.",
   "type": "object",
   "additionalProperties": true,
   "required": ["version", "generation", "listener", "scope", "state"],
@@ -14,6 +14,7 @@
     "file_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "The SHA-256 of the scope file the state is about, a refused one included. Absent when there is no file."},
     "state": {
       "enum": ["loaded", "refused", "reserved", "unknown"],
+      "x-list": "closed",
       "description": "loaded: in effect (its socket open, on a listener with scope sockets). refused: its file isn't valid, or collides, and it holds no claims. reserved: refused, but its last valid claims are held for it. unknown: no scope file."
     },
     "reason": {"type": "string", "description": "Why it's refused or reserved."},
@@ -22,7 +23,7 @@
       "type": "array",
       "minItems": 1,
       "description": "Only when loaded, and only when there are any: the names under the scope's prefixes that another owner's objects have (made before its file was valid). The scope can't create them: an orchestrator should stop before deploying, and decide what to do with the other owner's objects.",
-      "items": {"type": "object", "additionalProperties": false, "required": ["kind", "name", "owner"], "properties": {"kind": {"enum": ["container", "network", "volume"]}, "name": {"type": "string"}, "owner": {"type": "string", "description": "scope <name>, or <label>=<value> of an owner no scope has now"}}}
+      "items": {"type": "object", "additionalProperties": true, "required": ["kind", "name", "owner"], "properties": {"kind": {"type": "string", "x-list": "open", "examples": ["container", "network", "volume"], "description": "Open: an unknown kind is a name the scope can't create."}, "name": {"type": "string"}, "owner": {"type": "string", "description": "scope <name>, or <label>=<value> of an owner no scope has now"}}}
     }
   },
   "allOf": [
