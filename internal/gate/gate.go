@@ -179,6 +179,14 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if refused.retryAfter > 0 {
 			w.Header().Set("Retry-After", strconv.Itoa(refused.retryAfter))
 		}
+
+		// An authentication failure closes its connection: its cause is logged after the answer, and
+		// a next request on the same connection would wait for that, so its time would tell the cause.
+		// (It also bounds what a client that doesn't authenticate can do with one connection.)
+		if refused.cause != nil {
+			w.Header().Set("Connection", "close")
+		}
+
 		answer(w, refused.status, refused.code, refused.reason)
 
 		// Why authentication failed, once the client has its answer

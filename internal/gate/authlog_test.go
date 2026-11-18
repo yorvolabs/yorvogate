@@ -67,8 +67,13 @@ func TestAuthFailuresAreAnsweredAlikeAndLoggedApart(t *testing.T) {
 		body, _ := io.ReadAll(res.Body)
 		_ = res.Body.Close()
 
+		// Its connection is closed: a next request on it can't time the cause's logging
+		if !res.Close {
+			t.Errorf("%s: the connection stays open", cause)
+		}
+
 		// The answer: the same for every cause, but its request ID
-		answer := res.Status + " " + string(body)
+		answer := res.Status + " " + res.Header.Get("Connection") + " " + string(body)
 		if first == "" {
 			first = answer
 		} else if answer != first {

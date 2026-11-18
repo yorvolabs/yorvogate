@@ -800,6 +800,7 @@ func TestACertificateIsCheckedAfterItsHandshake(t *testing.T) {
 				var reused []bool
 				trace := &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) { reused = append(reused, i.Reused) }}
 				keptAlive := &http.Client{Transport: &http.Transport{TLSClientConfig: m.tlsConfig(&cert), MaxConnsPerHost: 1}, Timeout: 5 * time.Second}
+				closed := false
 				send := func() int {
 					req, _ := http.NewRequestWithContext(httptrace.WithClientTrace(t.Context(), trace), "GET", "https://"+address+path, nil)
 					res, err := keptAlive.Do(req)
@@ -808,6 +809,7 @@ func TestACertificateIsCheckedAfterItsHandshake(t *testing.T) {
 					}
 					_, _ = io.Copy(io.Discard, res.Body)
 					_ = res.Body.Close()
+					closed = res.Close
 
 					return res.StatusCode
 				}
@@ -820,22 +822,23 @@ func TestACertificateIsCheckedAfterItsHandshake(t *testing.T) {
 
 				tc.change(m, cert)
 
+				// On a trusted listener, whatever it asks for: a path no endpoint has gets the same, not
+				// a 403 (a scoped listener maps the path first, as it does for a token)
+				if level == "trusted" {
+					path = "/v1.56/no/such/endpoint"
+				}
+
 				if status := send(); status != http.StatusUnauthorized {
 					t.Errorf("after, on the connection kept alive: %d", status)
 				}
 
-				// On a trusted listener, whatever it asks for: a path no endpoint has gets the same, not
-				// a 403 (a scoped listener maps the path first, as it does for a token)
-				wantReused := 2
-				if level == "trusted" {
-					path, wantReused = "/v1.56/no/such/endpoint", 3
-					if status := send(); status != http.StatusUnauthorized {
-						t.Errorf("after, a path no endpoint has: %d", status)
-					}
+				if len(reused) != 2 || !reused[1] {
+					t.Errorf("the connection wasn't kept alive: %v", reused)
 				}
 
-				if len(reused) != wantReused || !reused[len(reused)-1] {
-					t.Errorf("the connection wasn't kept alive: %v", reused)
+				// And the refusal closes it (its cause is logged after the answer)
+				if !closed {
+					t.Error("the connection stays open after the refusal")
 				}
 
 				g.Revoke()
