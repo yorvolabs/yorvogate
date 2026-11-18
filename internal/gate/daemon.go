@@ -169,7 +169,7 @@ func older(a, b string) bool {
 
 // Suspect is told of a request Docker didn't answer (err: why), and marks Docker down only on
 // evidence that it's Docker, not the request: a dial it refused (or no socket: it's restarting), or
-// a _ping that fails now too. Docker hanging up on one request (a scope's malformed one, say) leaves
+// a _ping that fails too (asked at most once a second). Docker hanging up on one request (a scope's malformed one, say) leaves
 // its _ping answering, so no scope can make every other's requests wait.
 func (d *Defaults) Suspect(err error) {
 	if d == nil || err == nil {
@@ -182,10 +182,9 @@ func (d *Defaults) Suspect(err error) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	if d.docker.ping(ctx) != nil {
+	// The readiness pinger's: one _ping a second at most, however many requests fail (a scope
+	// provoking hang-ups costs no more)
+	if d.ping.check(context.Background(), d.docker) != nil {
 		d.MarkDown()
 	}
 }

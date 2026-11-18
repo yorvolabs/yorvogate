@@ -367,3 +367,31 @@ func TestOneRequestDockerDropsIsntDockerDown(t *testing.T) {
 		t.Error("a refused dial left Docker up")
 	}
 }
+
+// However many requests Docker hangs up on, Suspect pings it at most once a second.
+func TestSuspectingPingsAtMostOnceASecond(t *testing.T) {
+	d := startDocker(t)
+	log, _ := checkedLog(t)
+	_, defaults := gateAndDefaults(t, d, "sites", log)
+
+	d.mu.Lock()
+	before := len(d.asked)
+	d.mu.Unlock()
+
+	for range 50 {
+		defaults.Suspect(io.ErrUnexpectedEOF)
+	}
+
+	d.mu.Lock()
+	pings := 0
+	for _, p := range d.asked[before:] {
+		if p == "/_ping" {
+			pings++
+		}
+	}
+	d.mu.Unlock()
+
+	if pings > 1 {
+		t.Errorf("%d pings for 50 failed requests in under a second", pings)
+	}
+}
