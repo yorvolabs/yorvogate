@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -31,6 +32,8 @@ type scopeStatus struct {
 	Reason     string `json:"reason,omitempty"`
 	// Set when the request waited: whether what it waited for came
 	Matched *bool `json:"matched,omitempty"`
+	// When it's loaded: the names under its prefixes another owner's objects have (taken.go)
+	Taken []Taken `json:"taken,omitempty"`
 }
 
 // own answers YorvoGate's own endpoints, which aren't Docker's: on a trusted listener only, as
@@ -133,10 +136,26 @@ func (g *Gate) own(w http.ResponseWriter, r *http.Request, entry *slog.Logger) {
 		waited = &matched
 	}
 
-	entry.Info("scope status", "scope", m[1], "state", status.State, "status", code)
+	answered := answerOf(status, waited)
+
+	// A loaded scope's taken names, as Docker has them now: listing them fails closed, as an answer
+	// without them would say there are none.
+	if status.State == "loaded" {
+		taken, err := g.taken(r.Context(), listener, m[1])
+		if err != nil {
+			entry.Error("scope status", "scope", m[1], "error", err.Error())
+			answer(w, http.StatusBadGateway, "the scope's taken names couldn't be listed: "+err.Error())
+
+			return
+		}
+
+		answered.Taken = taken
+	}
+
+	entry.Info("scope status", "scope", m[1], "state", status.State, "status", code, "taken", len(answered.Taken))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(answerOf(status, waited))
+	_ = json.NewEncoder(w).Encode(answered)
 }
 
 func answerOf(s scope.Status, matched *bool) scopeStatus {
@@ -144,4 +163,16 @@ func answerOf(s scope.Status, matched *bool) scopeStatus {
 		Version: 1, Generation: s.Generation, Listener: s.Listener, Scope: s.Scope,
 		FileSHA256: s.FileSHA256, State: s.State, Reason: s.Reason, Matched: matched,
 	}
+}
+
+// taken lists a loaded scope's taken names on a listener.
+func (g *Gate) taken(ctx context.Context, listener, name string) ([]Taken, error) {
+	s, err := g.registry.Store(listener).Get(name)
+	if err != nil {
+		return nil, err
+	}
+
+	lowest, _ := g.config.Versions()
+
+	return TakenFrom(ctx, g.docker, lowest.String(), s)
 }

@@ -45,6 +45,10 @@ func (s *scoped) createContainer(body []byte) ([]byte, error) {
 		return nil, refuse(http.StatusForbidden, "container.create: the name %q isn't one of scope %s's (%s)", name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
 	}
 
+	if err := s.notTaken("container", name, s.docker.Container); err != nil {
+		return nil, err
+	}
+
 	var req container.CreateRequest
 	if err := decode(body, &req); err != nil {
 		return nil, err

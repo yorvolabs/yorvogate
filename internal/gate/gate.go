@@ -89,9 +89,11 @@ func Registry(c *config.Config) *scope.Registry {
 // the process's spool.
 func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.Registry, defaults *Defaults, spool *Spool, log *slog.Logger) *Gate {
 	g := &Gate{config: c, listener: l, upstream: upstream, registry: scopes, defaults: defaults, log: log.With("listener", l.Name)}
+	// A trusted listener's own lookups too: scope status lists a scope's taken names
+	g.docker = NewDocker(c.UpstreamSocket())
+
 	if l.Mode == config.Scoped {
 		g.scopes = scopes.Store(l.Name)
-		g.docker = NewDocker(c.UpstreamSocket())
 		g.spool = spool
 	}
 

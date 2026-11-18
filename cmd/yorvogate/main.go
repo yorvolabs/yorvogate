@@ -281,6 +281,10 @@ func check(path string, docker bool, stdout io.Writer) error {
 		for _, warn := range egressLeaks(c, registry) {
 			fmt.Fprintf(stdout, "  warning: %s\n", warn)
 		}
+
+		for _, warn := range gate.TakenWarnings(context.Background(), c, registry) {
+			fmt.Fprintf(stdout, "  warning: %s\n", warn)
+		}
 	}
 
 	if len(refused) == 1 {

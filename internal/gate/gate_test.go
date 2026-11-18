@@ -75,6 +75,16 @@ type docker struct {
 	noVersion bool
 	// Docker's /info as YorvoGate reads it (Ubuntu's defaults unless a test changes it)
 	info map[string]any
+	// Containers a test adds to the usual ones
+	extra []fakeObject
+}
+
+// allContainers are the usual containers and the test's own.
+func (d *docker) allContainers() []fakeObject {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	return append(append([]fakeObject{}, containers...), d.extra...)
 }
 
 // dockerInfoAnswer is Docker's whole /info, as Docker 29.9.2 on a hardened host answers it
@@ -345,6 +355,18 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(r.URL.Query().Get("filters")), &filters)
 
 		list := []map[string]any{}
+
+		// Every one, with its labels (the taken names a scope status lists)
+		if r.URL.Query().Get("all") == "1" && len(filters) == 0 {
+			for _, c := range d.allContainers() {
+				list = append(list, map[string]any{"Id": c.id, "Names": []string{"/" + c.name}, "Labels": c.labels})
+			}
+
+			_ = json.NewEncoder(w).Encode(list)
+
+			return
+		}
+
 		for _, c := range containers {
 			for _, l := range filters["label"] {
 				if k, v, _ := strings.Cut(l, "="); c.labels[k] == v {
@@ -359,6 +381,29 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 		}
 
 		_ = json.NewEncoder(w).Encode(list)
+
+		return
+	}
+
+	// Every network and volume, with their labels (the taken names a scope status lists)
+	if strings.HasSuffix(r.URL.Path, "/networks") {
+		list := []map[string]any{}
+		for _, n := range networks {
+			list = append(list, map[string]any{"Id": n.id, "Name": n.name, "Labels": n.labels})
+		}
+
+		_ = json.NewEncoder(w).Encode(list)
+
+		return
+	}
+
+	if strings.HasSuffix(r.URL.Path, "/volumes") {
+		list := []map[string]any{}
+		for _, v := range volumes {
+			list = append(list, map[string]any{"Name": v.name, "Labels": v.labels})
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"Volumes": list})
 
 		return
 	}
@@ -435,7 +480,7 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 
 	switch m[1] {
 	case "containers":
-		if o := find(containers, m[2]); o != nil {
+		if o := find(d.allContainers(), m[2]); o != nil {
 			host, settings := map[string]any{}, map[string]any{}
 			for i, n := range containerNetworks[o.id] {
 				if i == 0 {

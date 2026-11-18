@@ -676,6 +676,30 @@ func (s *Scope) OwnedByAnother(labels map[string]string) bool {
 	return false
 }
 
+// OtherOwner says who owns an object whose labels aren't this scope's: another scope by name, when
+// one owns them, else the value of this scope's own owner label on it (an owner no scope has now).
+// "" when the object has no owner a scope could have: neither this scope's owner label, nor
+// another's.
+func (s *Scope) OtherOwner(labels map[string]string) string {
+	if s.Owns(labels) {
+		return ""
+	}
+
+	if s.index != nil {
+		for key, value := range labels {
+			if owner, ok := s.index.owners[Label{key, value}]; ok && owner != s.Name {
+				return "scope " + owner
+			}
+		}
+	}
+
+	if value, ok := labels[s.Owner.Key]; ok {
+		return s.Owner.Key + "=" + value
+	}
+
+	return ""
+}
+
 // Contains tells whether a subnet is inside one of the scope's (true when it has none).
 func (s *Scope) Contains(subnet netip.Prefix) bool {
 	if len(s.subnets) == 0 {

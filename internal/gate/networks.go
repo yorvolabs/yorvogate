@@ -27,6 +27,8 @@ func (s *scoped) createNetwork(body []byte) ([]byte, error) {
 
 	if !s.scope.Names(req.Name) {
 		add("the name %q isn't one of scope %s's (%s)", req.Name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
+	} else if err := s.notTaken("network", req.Name, s.docker.Network); err != nil {
+		return nil, err
 	}
 
 	s.ownLabels(req.Labels, add)
@@ -118,6 +120,8 @@ func (s *scoped) createVolume(body []byte) ([]byte, error) {
 
 	if !s.scope.Names(req.Name) {
 		add("the name %q isn't one of scope %s's (%s)", req.Name, s.scope.Name, strings.Join(s.scope.Prefixes, ", "))
+	} else if err := s.notTaken("volume", req.Name, s.docker.Volume); err != nil {
+		return nil, err
 	}
 
 	s.ownLabels(req.Labels, add)
