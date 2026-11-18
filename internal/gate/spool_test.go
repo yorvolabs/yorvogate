@@ -131,6 +131,23 @@ func started(t *testing.T, spooling <-chan string) string {
 	return ""
 }
 
+// emptied waits until the spool's folder is empty, each time a load is cleaned up (onUnspool), or
+// fails after 5 s: a load's answer reaches the client before its file is removed.
+func emptied(t *testing.T, dir string, unspooled <-chan string) {
+	t.Helper()
+	timeout := time.After(5 * time.Second)
+
+	for len(files(t, dir)) > 0 {
+		select {
+		case <-unspooled:
+		case <-timeout:
+			t.Errorf("the spool kept %v", files(t, dir))
+
+			return
+		}
+	}
+}
+
 // files lists what's in a folder.
 func files(t *testing.T, dir string) []string {
 	t.Helper()
@@ -260,9 +277,10 @@ func TestLoadsAtOnce(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 
-	spooling := make(chan string, 4)
-	onSpool = func(scope string) { spooling <- scope }
-	defer func() { onSpool = func(string) {} }()
+	spooling, unspooled := make(chan string, 4), make(chan string, 16)
+	spoolingHook.Store(ptr(func(scope string) { spooling <- scope }))
+	unspooledHook.Store(ptr(func(scope string) { unspooled <- scope }))
+	defer func() { spoolingHook.Store(nil); unspooledHook.Store(nil) }()
 
 	old := loadWait
 	loadWait = 200 * time.Millisecond
@@ -302,9 +320,7 @@ func TestLoadsAtOnce(t *testing.T) {
 		t.Errorf("jane's load: %d %s", a.status, a.body)
 	}
 
-	if got := files(t, dir); len(got) != 0 {
-		t.Errorf("the spool kept %v", got)
-	}
+	emptied(t, dir, unspooled)
 
 	// And with the slot free, blog's loads
 	if a := wait(t, loadFrom(t, server, asBlog, bytes.NewReader(padded(t, 1024)))); a.status != http.StatusOK {
@@ -320,22 +336,35 @@ func TestLoadSpoolBudget(t *testing.T) {
 	d := startDocker(t)
 	server, dir := spoolGate(t, d, "  limit: 1572864\n  loads: 2")
 
-	spooling := make(chan string, 4)
-	onSpool = func(scope string) { spooling <- scope }
-	defer func() { onSpool = func(string) {} }()
+	spooling, unspooled := make(chan string, 4), make(chan string, 16)
+	spoolingHook.Store(ptr(func(scope string) { spooling <- scope }))
+	unspooledHook.Store(ptr(func(scope string) { unspooled <- scope }))
+	reserved := make(chan int64, 64)
+	reservedHook.Store(ptr(func(scope string, held int64) {
+		if scope == "jane" {
+			select {
+			case reserved <- held:
+			default:
+			}
+		}
+	}))
+	defer func() { spoolingHook.Store(nil); unspooledHook.Store(nil); reservedHook.Store(nil) }()
 
 	big := padded(t, 1000<<10)
 	pr, pw := io.Pipe()
 	janes := loadFrom(t, server, asJane, pr)
 
-	// Jane's first 900 KiB, chunked. A second write returns only once the gate has taken the first
-	// whole: reserved and written.
-	if _, err := pw.Write(big[:900<<10]); err != nil {
-		t.Fatal(err)
-	}
+	// Jane's first 900 KiB, chunked, until the gate holds them all of the budget (onReserve: the
+	// bytes may still be on their way when the pipe's write returns)
+	go func() { _, _ = pw.Write(big[:900<<10]) }()
 	started(t, spooling)
-	if _, err := pw.Write(big[900<<10 : 900<<10+1]); err != nil {
-		t.Fatal(err)
+
+	for held := int64(0); held < 900<<10; {
+		select {
+		case held = <-reserved:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("jane holds %d bytes of the budget, want 900 KiB", held)
+		}
 	}
 
 	// Blog's, chunked too: it can't reserve past the budget while jane's holds 900 KiB.
@@ -349,7 +378,7 @@ func TestLoadSpoolBudget(t *testing.T) {
 		t.Errorf("blog's load past the budget: %d %v %s", b.status, b.header, b.body)
 	}
 
-	if _, err := pw.Write(big[900<<10+1:]); err != nil {
+	if _, err := pw.Write(big[900<<10:]); err != nil {
 		t.Fatal(err)
 	}
 	_ = pw.Close()
@@ -373,9 +402,7 @@ func TestLoadSpoolBudget(t *testing.T) {
 	}
 	_ = cpr.Close()
 
-	if got := files(t, dir); len(got) != 0 {
-		t.Errorf("the spool kept %v", got)
-	}
+	emptied(t, dir, unspooled)
 }
 
 // An upload that stops arriving is given up after the stall timeout: its slot and its reservation
@@ -504,3 +531,5 @@ func TestLoadSlowButSteady(t *testing.T) {
 		t.Errorf("a slow, steady upload: %d %s", a.status, a.body)
 	}
 }
+
+func ptr[T any](v T) *T { return &v }

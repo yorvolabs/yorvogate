@@ -120,7 +120,7 @@ func (s *scoped) load() (err error) {
 		return refuse(http.StatusRequestEntityTooLarge, "image.load: the archive is larger than the image spool (spool.limit, %d bytes)", s.spool.limit)
 	}
 
-	held := &reservation{spool: s.spool}
+	held := &reservation{spool: s.spool, scope: s.scope.Name}
 
 	release, err := s.spool.turn(s.ctx, s.scope.Name)
 	if err != nil {
@@ -149,6 +149,7 @@ func (s *scoped) load() (err error) {
 		_ = os.Remove(file.Name())
 		held.release()
 		release()
+		onUnspool(s.scope.Name)
 	}
 
 	onSpool(s.scope.Name)

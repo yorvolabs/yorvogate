@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -36,8 +37,33 @@ var (
 	loadCheck = 10 * time.Minute
 )
 
-// onSpool is called when a load has its turn and starts spooling (a test's hook).
-var onSpool = func(string) {}
+// Tests' hooks, called when a load has its turn and starts spooling (spooling), when its file is gone
+// and its bytes and turn are given back (unspooled: an answer reaches the client before its handler's
+// cleanup ends), and with what a load holds of the budget each time it takes more (reserved, under
+// the spool's lock: it must not block). Atomic: a test sets them while handlers run.
+var (
+	spoolingHook  atomic.Pointer[func(string)]
+	unspooledHook atomic.Pointer[func(string)]
+	reservedHook  atomic.Pointer[func(string, int64)]
+)
+
+func onSpool(scope string) {
+	if f := spoolingHook.Load(); f != nil {
+		(*f)(scope)
+	}
+}
+
+func onUnspool(scope string) {
+	if f := unspooledHook.Load(); f != nil {
+		(*f)(scope)
+	}
+}
+
+func onReserve(scope string, held int64) {
+	if f := reservedHook.Load(); f != nil {
+		(*f)(scope, held)
+	}
+}
 
 // spoolPrefix names an archive's file in the spool, so one left by a crash can be told and removed.
 const spoolPrefix = "yorvogate-load-"
@@ -155,6 +181,7 @@ func (s *Spool) turn(ctx context.Context, scope string) (func(), error) {
 // reservation is one load's share of the spool's budget.
 type reservation struct {
 	spool *Spool
+	scope string
 	held  int64
 }
 
@@ -168,6 +195,7 @@ func (r *reservation) reserve(n int64) error {
 	if s.reserved+n <= s.limit {
 		s.reserved += n
 		r.held += n
+		onReserve(r.scope, r.held)
 
 		return nil
 	}
