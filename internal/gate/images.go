@@ -181,15 +181,11 @@ var (
 	maxListKept = 64 << 20
 )
 
-// images filters an image list's answer: an image is listed with the names the scope may see, and not
-// at all when it has none (another scope's, or a nameless leftover).
-func (s *scoped) images(body []byte) ([]byte, error) {
-	return s.imagesFrom(bytes.NewReader(body))
-}
-
-// imagesFrom is images, reading Docker's answer as it comes: one image at a time, each at most
-// maxListElement bytes read from Docker (counted as read, not once decoded: a decoder holds a whole
-// value before it gives it), and the kept list at most maxListKept.
+// imagesFrom filters an image list's answer: an image is listed with the names the scope may see, and
+// not at all when it has none (another scope's, or a nameless leftover). It reads Docker's answer as
+// it comes: one image at a time, each at most maxListElement bytes read from Docker (counted as read,
+// not once decoded: a decoder holds a whole value before it gives it), the kept list at most
+// maxListKept.
 func (s *scoped) imagesFrom(r io.Reader) ([]byte, error) {
 	counted := &boundedReader{r: r}
 	decoder := json.NewDecoder(counted)

@@ -31,6 +31,9 @@ type Metrics struct {
 	gauges   []gauge
 
 	authLog *authLimiter
+	// The refused lines of a scope past its limits (limits.requests, limits.connections), limited the
+	// same way, by scope
+	limitLog *authLimiter
 }
 
 // labels are a sample's, as name=value pairs in a fixed order (a map key).
@@ -90,6 +93,7 @@ var metricHelp = map[string]string{
 	"yorvogate_streams_open":               "Streams open (requests upgraded to a connection), by listener.",
 	"yorvogate_requests_in_flight":         "Scoped requests in flight (streams included), by listener; by scope too with admin.scope_labels. What limits.requests bounds, per scope.",
 	"yorvogate_auth_log_dropped_total":     "auth failed log lines dropped by the per-source and global limits.",
+	"yorvogate_limit_log_dropped_total":    "refused log lines of scopes past their limits dropped by the per-scope and global limits.",
 	"yorvogate_config_reloads_total":       "Reloads of the configuration (SIGHUP), by result: reloaded or refused.",
 	"yorvogate_config_last_reload_success": "Whether the last reload of the configuration was taken (1 before any).",
 }
@@ -104,6 +108,7 @@ func NewMetrics(scopeLabels bool) *Metrics {
 		streams:     map[string]int64{},
 		inflight:    map[labels]int64{},
 		authLog:     newAuthLimiter(),
+		limitLog:    newAuthLimiter(),
 	}
 }
 
@@ -217,6 +222,22 @@ func (m *Metrics) authFailed(listener, cause string) {
 	m.add("yorvogate_auth_failures_total", labelsOf("listener", listener, "cause", cause), 1)
 }
 
+// limitLogged tells whether a refused line of a scope past its limits may be logged (and what was
+// dropped before), counting a dropped one: a scope refused thousands of times a second doesn't flood
+// the log.
+func (m *Metrics) limitLogged(scope string, now time.Time) (bool, int) {
+	if m == nil {
+		return true, 0
+	}
+
+	ok, dropped := m.limitLog.allow("scope="+scope, now)
+	if !ok {
+		m.add("yorvogate_limit_log_dropped_total", "", 1)
+	}
+
+	return ok, dropped
+}
+
 // authLimit tells whether an auth failed line may be logged (and what was dropped before), counting
 // a dropped one.
 func (m *Metrics) authLimit(source string, now time.Time) (bool, int) {
@@ -316,7 +337,7 @@ func (m *Metrics) Write(w io.Writer) error {
 		}
 	}
 
-	for _, name := range []string{"yorvogate_requests_total", "yorvogate_refusals_total", "yorvogate_auth_failures_total", "yorvogate_docker_errors_total", "yorvogate_auth_log_dropped_total", "yorvogate_config_reloads_total"} {
+	for _, name := range []string{"yorvogate_requests_total", "yorvogate_refusals_total", "yorvogate_auth_failures_total", "yorvogate_docker_errors_total", "yorvogate_auth_log_dropped_total", "yorvogate_limit_log_dropped_total", "yorvogate_config_reloads_total"} {
 		family(name, "counter", metricHelp[name])
 
 		for _, l := range slices.Sorted(maps.Keys(counters[name])) {
@@ -395,5 +416,9 @@ func (m *Metrics) FlushAuthLog(log *slog.Logger) {
 
 	if dropped := m.authLog.flush(time.Now()); dropped > 0 {
 		log.Warn("auth failed lines dropped", "log_version", LogVersion, "dropped", dropped)
+	}
+
+	if dropped := m.limitLog.flush(time.Now()); dropped > 0 {
+		log.Warn("refused lines dropped", "log_version", LogVersion, "dropped", dropped)
 	}
 }

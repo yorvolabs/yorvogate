@@ -3,10 +3,12 @@ package gate
 import (
 	"context"
 	"crypto/tls"
+	"io"
 	"net"
 	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/yorvolabs/yorvogate/internal/config"
 )
@@ -34,20 +36,6 @@ type slots struct {
 
 func newSlots(limit func() int) *slots {
 	return &slots{limit: limit, wake: make(chan struct{})}
-}
-
-// take takes a slot if one is free now.
-func (s *slots) take() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.used >= s.limit() {
-		return false
-	}
-
-	s.used++
-
-	return true
 }
 
 // wait takes a slot, waiting for one to be freed, until done.
@@ -78,13 +66,6 @@ func (s *slots) give() {
 	close(s.wake)
 	s.wake = make(chan struct{})
 	s.mu.Unlock()
-}
-
-func (s *slots) held() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	return s.used
 }
 
 // totalLimit is every listener's connections' bound together (LimitConnections).
@@ -328,6 +309,8 @@ func (c *limitConn) attribute(scope string, counts *scopeCounts, limit int) *ref
 			"this connection is another scope's (a connection is the scope of its first request): open a new one")
 		refused.closes = true
 
+		c.freeSlot()
+
 		return refused
 	}
 
@@ -338,17 +321,25 @@ func (c *limitConn) attribute(scope string, counts *scopeCounts, limit int) *ref
 		refused.retryAfter = 1
 		refused.closes = true
 
+		// Closed after its answer (which the server may take half a second to do): it's authenticated,
+		// so it doesn't hold back connections that haven't, meanwhile
+		c.freeSlot()
+
 		return refused
 	}
 
 	c.scope, c.scoped = scope, release
+	c.freeSlot()
 
+	return nil
+}
+
+// freeSlot gives back the listener's slot the connection took (it's authenticated). Held c.mu.
+func (c *limitConn) freeSlot() {
 	if c.slot {
 		c.slot = false
 		c.listener.slots.give()
 	}
-
-	return nil
 }
 
 // limitedKey holds, in a request's context, its connection's limitConn.
@@ -376,4 +367,50 @@ func unwrapLimited(c net.Conn) *limitConn {
 	}
 
 	return nil
+}
+
+// closeLinger is how long a connection closed after a refusal reads on (and discards) before it's
+// closed: long enough that its client reads the answer rather than a reset, as the server's own linger
+// does, a fifth of it.
+var closeLinger atomic.Int64
+
+func init() { closeLinger.Store(int64(100 * time.Millisecond)) }
+
+// closeSoon closes the connection of a request just answered: its write side at once, then the whole
+// connection once its client has closed, or after closeLinger.
+func closeSoon(w http.ResponseWriter) {
+	rc := http.NewResponseController(w)
+
+	// The answer, written to the connection before it's taken from the server
+	if err := rc.Flush(); err != nil {
+		return
+	}
+
+	conn, buffered, err := rc.Hijack()
+	if err != nil {
+		return
+	}
+
+	_ = buffered.Flush()
+
+	if half, ok := underlying(conn).(interface{ CloseWrite() error }); ok {
+		_ = half.CloseWrite()
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(time.Duration(closeLinger.Load())))
+	_, _ = io.Copy(io.Discard, buffered)
+	_ = conn.Close()
+}
+
+// underlying is a connection under every wrapper of the gate's (a limit, the tracking), TLS's
+// included.
+func underlying(c net.Conn) net.Conn {
+	for {
+		w, ok := c.(interface{ wrapped() net.Conn })
+		if !ok {
+			return c
+		}
+
+		c = w.wrapped()
+	}
 }

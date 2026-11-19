@@ -280,11 +280,25 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			logged = append(logged, "codes", refused.codes(), "codes_total", refused.total)
 		}
 
-		entry.Warn("refused", append(logged, refused.logged...)...)
-
 		scopeName := ""
 		if decision != nil && decision.scope != nil {
 			scopeName = decision.scope.Name
+		}
+
+		// A scope past its limits is logged within the per-scope and global limits: its refusals can
+		// come by the thousand a second. Every one is counted.
+		write := true
+		if refused.code == CodeScopeRequests || refused.code == CodeScopeConnections {
+			var dropped int
+
+			write, dropped = g.metrics.limitLogged(scopeName, time.Now())
+			if dropped > 0 {
+				g.log.Warn("refused lines dropped", "log_version", LogVersion, "dropped", dropped)
+			}
+		}
+
+		if write {
+			entry.Warn("refused", append(logged, refused.logged...)...)
 		}
 
 		g.metrics.decided(g.listener.Name, g.endpointOf(r, decision), refused, scopeName, sinceStart(r.Context()))
@@ -301,6 +315,13 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		answerRefusal(w, refused)
+
+		// One past its scope's limits is closed at once, not after the server's half-second linger,
+		// in which it would hold one of every listener's connections (a scope reconnecting fast
+		// enough would take them all)
+		if refused.closes {
+			closeSoon(w)
+		}
 
 		// Why authentication failed, once the client has its answer: counted always, logged within
 		// the per-source and global limits (authlimit.go)

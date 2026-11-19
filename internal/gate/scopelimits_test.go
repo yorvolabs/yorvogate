@@ -17,6 +17,9 @@ import (
 	"github.com/yorvolabs/yorvogate/internal/config"
 )
 
+// limitedLog is the last limitedGate's log.
+var limitedLog *logChecker
+
 // kimToken is the second scope's token in these tests (jane's is token).
 const kimToken = "kim-long-random-token-0123456789abcdef"
 
@@ -44,7 +47,8 @@ func limitedGate(t *testing.T, d *docker, limits string, unauthenticated int) (s
 		t.Fatal(err)
 	}
 
-	log, _ := checkedLog(t)
+	log, lines := checkedLog(t)
+	limitedLog = lines
 	g := New(c, c.Listeners[0], NewUpstream(c, log), registry, readDefaults(c), NewSpool(c), log)
 	g.UseMetrics(NewMetrics(true))
 
@@ -104,11 +108,16 @@ func dial(t *testing.T, addr string) *peer {
 	return &peer{t: t, conn: conn, read: bufio.NewReader(conn)}
 }
 
-// send sends a container list as the scope (by its token).
+// send sends a container list as the scope (by its token; none on a scope's socket).
 func (c *peer) send(scope, tok string) {
 	c.t.Helper()
 
-	if _, err := io.WriteString(c.conn, "GET /v1.56/containers/json HTTP/1.1\r\nHost: docker\r\nX-YorvoGate-Scope: "+scope+"\r\nX-YorvoGate-Token: "+tok+"\r\n\r\n"); err != nil {
+	credentials := ""
+	if scope != "" {
+		credentials = "X-YorvoGate-Scope: " + scope + "\r\nX-YorvoGate-Token: " + tok + "\r\n"
+	}
+
+	if _, err := io.WriteString(c.conn, "GET /v1.56/containers/json HTTP/1.1\r\nHost: docker\r\n"+credentials+"\r\n"); err != nil {
 		c.t.Fatal(err)
 	}
 }
@@ -428,5 +437,152 @@ func TestAnArchiveThatStopsArrivingIsEnded(t *testing.T) {
 
 	if took := time.Since(started); took > 5*time.Second {
 		t.Fatalf("ended after %v", took)
+	}
+}
+
+// refusedUpload sends, on a connection of its own, an upload of jane's past her connection limit, its
+// body yet to come (the server lingers before it closes such a connection), and reads its refusal.
+func refusedUpload(t *testing.T, addr string) *peer {
+	t.Helper()
+
+	refused := dial(t, addr)
+	if _, err := io.WriteString(refused.conn, "POST /v1.56/images/load HTTP/1.1\r\nHost: docker\r\nContent-Type: application/x-tar\r\nContent-Length: 1048576\r\nX-YorvoGate-Scope: jane\r\nX-YorvoGate-Token: "+token+"\r\n\r\nsome"); err != nil {
+		t.Fatal(err)
+	}
+
+	if status, code, _ := refused.answer(); status != http.StatusTooManyRequests || code != string(CodeScopeConnections) {
+		t.Fatalf("jane's connection past her limit: %d %s", status, code)
+	}
+
+	return refused
+}
+
+// A connection refused past its scope's limit is closed soon, not after the server's half-second
+// linger: it holds one of every listener's connections until it is.
+func TestARefusedConnectionIsClosedSoon(t *testing.T) {
+	d := startDocker(t)
+	addr, _, _ := limitedGate(t, d, "{connections: 1}", MaxConnections)
+
+	if status, _, _ := dial(t, addr).ask("jane", token); status != http.StatusOK {
+		t.Fatalf("jane: %d", status)
+	}
+
+	refused := refusedUpload(t, addr)
+
+	closing := time.Now()
+	if !refused.closed() {
+		t.Fatal("the refused connection is still open")
+	}
+
+	if took := time.Since(closing); took > 300*time.Millisecond {
+		t.Fatalf("the refused connection was closed after %v", took)
+	}
+}
+
+// A connection refused past its scope's limit has authenticated: it doesn't hold the listener's
+// slots for connections that haven't while it's closed, so another scope's new one isn't held back.
+func TestARefusedConnectionFreesTheListenersSlotAtOnce(t *testing.T) {
+	old := closeLinger.Swap(int64(2 * time.Second))
+	defer closeLinger.Store(old)
+
+	d := startDocker(t)
+	addr, _, _ := limitedGate(t, d, "{connections: 1}", 1)
+
+	if status, _, _ := dial(t, addr).ask("jane", token); status != http.StatusOK {
+		t.Fatalf("jane: %d", status)
+	}
+
+	_ = refusedUpload(t, addr)
+
+	started := time.Now()
+
+	if status, _, _ := dial(t, addr).ask("kim", kimToken); status != http.StatusOK {
+		t.Fatalf("kim: %d", status)
+	}
+
+	if took := time.Since(started); took > time.Second {
+		t.Fatalf("kim's new connection waited %v behind jane's refused one", took)
+	}
+}
+
+// A scope refused past its limits is logged at most 10 times a minute: its refusals can come by the
+// thousand a second. Every one is answered, and counted.
+func TestAScopePastItsLimitsDoesntFloodTheLog(t *testing.T) {
+	d := startDocker(t)
+	d.hold = make(chan struct{})
+	defer close(d.hold)
+
+	addr, g, _ := limitedGate(t, d, "{requests: 1}", MaxConnections)
+
+	dial(t, addr).send("jane", token)
+	eventually(t, "jane's request at Docker", func() bool { return d.holding.Load() == 1 })
+
+	for range 25 {
+		if status, code, _ := dial(t, addr).ask("jane", token); status != http.StatusTooManyRequests || code != string(CodeScopeRequests) {
+			t.Fatalf("%d %s", status, code)
+		}
+	}
+
+	logged := 0
+	for _, l := range limitedLog.Lines() {
+		if strings.Contains(l, `"msg":"refused"`) && strings.Contains(l, string(CodeScopeRequests)) {
+			logged++
+		}
+	}
+
+	if logged != authLinesPerSource {
+		t.Errorf("%d refused lines logged of 25, want %d", logged, authLinesPerSource)
+	}
+
+	var metrics strings.Builder
+	_ = g.metrics.Write(&metrics)
+
+	for _, want := range []string{"yorvogate_limit_log_dropped_total 15\n", `yorvogate_refusals_total{listener="tenants",code="scope.too-many-requests",scope="jane"} 25` + "\n"} {
+		if !strings.Contains(metrics.String(), want) {
+			t.Errorf("the metrics don't say %q", strings.TrimSpace(want))
+		}
+	}
+}
+
+// On scope_sockets a scope's socket accepts its limits.connections at once: the next waits, the other
+// scopes' sockets don't.
+func TestAScopesSocketAcceptsItsLimit(t *testing.T) {
+	d := startDocker(t)
+	_, _, dir := boundGateWith(t, d, "", ", limits: {connections: 2}")
+
+	socket := func(scope string) *peer {
+		conn, err := net.Dial("unix", filepath.Join(dir, scope+".sock"))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		t.Cleanup(func() { _ = conn.Close() })
+
+		return &peer{t: t, conn: conn, read: bufio.NewReader(conn)}
+	}
+
+	first, second := socket("jane"), socket("jane")
+	for _, c := range []*peer{first, second} {
+		if status, _, _ := c.ask("", ""); status != http.StatusOK {
+			t.Fatalf("jane: %d", status)
+		}
+	}
+
+	waiting := socket("jane")
+	waiting.send("", "")
+
+	_ = waiting.conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, err := waiting.read.Peek(1); err == nil {
+		t.Fatal("jane's third connection was served at her limit of 2")
+	}
+
+	if status, _, _ := socket("blog").ask("", ""); status != http.StatusOK {
+		t.Fatalf("blog, jane at her limit: %d", status)
+	}
+
+	_ = first.conn.Close()
+
+	if status, _, _ := waiting.answer(); status != http.StatusOK {
+		t.Fatalf("jane's third connection, one closed: %d", status)
 	}
 }

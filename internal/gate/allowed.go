@@ -179,6 +179,9 @@ func answerRefusal(w http.ResponseWriter, r *refusal) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	// Its length said, so the answer is whole even when its connection is taken from the server
+	// right after (closeSoon)
+	w.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
 	w.WriteHeader(r.status)
 	_, _ = w.Write(encoded)
 }
