@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -62,6 +63,10 @@ type docker struct {
 	api string
 	// How long it takes to answer a lookup of an object that exists (none unless a test sets it)
 	slow time.Duration
+	// While set, a client's container list is held until it's closed (or the request ends); each
+	// held one is counted
+	hold    chan struct{}
+	holding atomic.Int32
 	// The classic image store, which gives no image Descriptor (the containerd store unless a test
 	// sets it)
 	classic bool
@@ -281,7 +286,17 @@ func startDocker(t testing.TB) *docker {
 			d.forwarded = d.forwarded[len(d.forwarded)-100:]
 			d.dropped += 900
 		}
+		hold := d.hold
 		d.mu.Unlock()
+
+		if hold != nil && strings.HasSuffix(r.URL.Path, "/containers/json") {
+			d.holding.Add(1)
+			select {
+			case <-hold:
+			case <-r.Context().Done():
+			}
+			d.holding.Add(-1)
+		}
 
 		if r.Header.Get("Upgrade") == "tcp" {
 			conn, buffered, _ := w.(http.Hijacker).Hijack()

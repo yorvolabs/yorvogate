@@ -27,6 +27,11 @@ func NewServer(h http.Handler) *http.Server {
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    64 << 10,
 		ConnContext: func(ctx context.Context, c net.Conn) context.Context {
+			// The connection's slots, which its first authenticated request makes a scope's (limits.go)
+			if limited := unwrapLimited(c); limited != nil {
+				ctx = context.WithValue(ctx, limitedKey{}, limited)
+			}
+
 			if uid, ok := peerUID(c); ok {
 				return context.WithValue(ctx, peerKey{}, uid)
 			}
@@ -88,49 +93,11 @@ func peerUID(c net.Conn) (uint32, bool) {
 // open indefinitely.
 var bodyReadTimeout = 30 * time.Second
 
-// maxConnections is how many connections one listener accepts at once. For a scope-bound socket it's
-// per scope (each scope has its own socket), so one scope can't take the file descriptors the others
-// need; for a shared address it bounds the whole listener. Generous for a tenant's real use.
+// MaxConnections is how many connections a listener at an address accepts at once that are no
+// scope's: all of a trusted listener's, and a token or mTLS listener's until their first request
+// authenticates (then each is its scope's, under limits.connections). A scope's socket accepts its
+// scope's limits.connections instead.
 const MaxConnections = 256
-
-// LimitListener accepts at most n connections at once; past that, Accept waits for one to close. It
-// bounds the file descriptors a listener (and, for a scope socket, a scope) can tie up.
-func LimitListener(l net.Listener, n int) net.Listener {
-	return &limitListener{Listener: l, sem: make(chan struct{}, n)}
-}
-
-type limitListener struct {
-	net.Listener
-	sem chan struct{}
-}
-
-func (l *limitListener) Accept() (net.Conn, error) {
-	l.sem <- struct{}{}
-
-	conn, err := l.Listener.Accept()
-	if err != nil {
-		<-l.sem
-
-		return nil, err
-	}
-
-	return &limitConn{Conn: conn, release: func() { <-l.sem }}, nil
-}
-
-type limitConn struct {
-	net.Conn
-	release func()
-	once    sync.Once
-}
-
-func (c *limitConn) wrapped() net.Conn { return c.Conn }
-
-func (c *limitConn) Close() error {
-	err := c.Conn.Close()
-	c.once.Do(c.release)
-
-	return err
-}
 
 // umask is the process's: it's set only while a socket is made.
 var umask sync.Mutex
@@ -168,7 +135,7 @@ func Listen(path string, gid int) (net.Listener, error) {
 		return nil, err
 	}
 
-	return LimitListener(listener, MaxConnections), nil
+	return listener, nil
 }
 
 // Group is the ID of a listener's socket_group, or -1 when it has none (the process's own).
@@ -318,7 +285,14 @@ func (s *Sockets) serve(name string) error {
 		return err
 	}
 
-	t := newTracked(listener)
+	// The scope's connections, as many as its listener's limits.connections in effect now
+	t := newTracked(limitListenerBy(listener, func() int {
+		if g, ok := s.gate.now(); ok {
+			return g.listener.ScopeConnections()
+		}
+
+		return 0
+	}))
 	server := NewServer(s.gate)
 	server.BaseContext = func(net.Listener) context.Context {
 		return context.WithValue(t.ctx, boundKey{}, name)

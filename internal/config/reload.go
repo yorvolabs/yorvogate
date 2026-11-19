@@ -47,6 +47,7 @@ var configKeys = map[string]keyClass{
 	"admin":          reloadable, // by key (adminKeys); adding or removing it is a restart
 	"daemon":         reloadable,
 	"shutdown_grace": reloadable,
+	"limits":         restart, // the process's connections, bounded as they're accepted
 }
 
 var spoolKeys = map[string]keyClass{
@@ -79,6 +80,7 @@ var listenerKeys = map[string]keyClass{
 	"allow_privileged_builders": reloadable,
 	"pulls":                     reloadable,
 	"clients":                   reloadable,
+	"limits":                    reloadable,
 }
 
 // Reload is what a new configuration changes of the running one, by listener name.

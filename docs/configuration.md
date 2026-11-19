@@ -545,6 +545,7 @@ A refusal that collects several problems (a container's, network's or volume's c
 | `query.twice` | A query parameter is given more than once. |
 | `route.invalid` | The path isn't canonical, or its API version isn't one YorvoGate serves. |
 | `route.unknown-endpoint` | An endpoint YorvoGate doesn't know (a newer Docker's, or none of Docker's). |
+| `scope.connection-bound` | The connection is another scope's: a connection is the scope of its first request. The connection is closed. |
 | `scope.endpoint-not-allowed` | The endpoint isn't one a scope may use. |
 | `scope.image-not-own` | The image name isn't in the scope's image namespaces. |
 | `scope.label-not-own` | The object doesn't carry the scope's owner label, or carries another scope's. |
@@ -552,6 +553,8 @@ A refusal that collects several problems (a container's, network's or volume's c
 | `scope.name-taken` | The name is under the scope's prefixes, but another owner's object has it. |
 | `scope.not-found` | The object isn't the scope's: answered as one that doesn't exist. |
 | `scope.object-not-own` | What the request joins or mounts (a container, network or volume) isn't the scope's. |
+| `scope.too-many-connections` | The scope has as many connections open as the listener allows (limits.connections): use one of them. The connection is closed. |
+| `scope.too-many-requests` | The scope has as many requests in flight as the listener allows (limits.requests): retry when one ends (Retry-After). |
 | `stream.upgrade-only` | A stream allowed only as an HTTP upgrade. |
 
 ### What a refusal says

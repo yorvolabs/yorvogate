@@ -62,6 +62,10 @@ const (
 	CodePlatform   Code = "policy.platform"
 	CodeImage      Code = "policy.image"
 
+	CodeScopeRequests        Code = "scope.too-many-requests"
+	CodeScopeConnections     Code = "scope.too-many-connections"
+	CodeScopeConnectionBound Code = "scope.connection-bound"
+
 	CodeLoadTooLarge   Code = "load.too-large"
 	CodeLoadSpoolFull  Code = "load.spool-full"
 	CodeLoadBusy       Code = "load.busy"
@@ -126,6 +130,10 @@ var Codes = map[Code]string{
 	CodeRegistry:   "A registry the listener's scopes may not pull from.",
 	CodePlatform:   "A platform that isn't the host's, nor one the listener allows.",
 	CodeImage:      "An image reference that isn't valid, or missing.",
+
+	CodeScopeRequests:        "The scope has as many requests in flight as the listener allows (limits.requests): retry when one ends (Retry-After).",
+	CodeScopeConnections:     "The scope has as many connections open as the listener allows (limits.connections): use one of them. The connection is closed.",
+	CodeScopeConnectionBound: "The connection is another scope's: a connection is the scope of its first request. The connection is closed.",
 
 	CodeLoadTooLarge:   "The image archive is larger than load_limit, or than the spool (spool.limit).",
 	CodeLoadSpoolFull:  "The image spool is full now: retry (Retry-After).",

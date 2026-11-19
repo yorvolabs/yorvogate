@@ -26,7 +26,9 @@ type Metrics struct {
 	counters   map[string]map[labels]float64
 	histograms map[string]map[labels]*histogram
 	streams    map[string]int64
-	gauges     []gauge
+	// Scoped requests in flight, by listener (and scope, with scopeLabels)
+	inflight map[labels]int64
+	gauges   []gauge
 
 	authLog *authLimiter
 }
@@ -86,6 +88,7 @@ var metricHelp = map[string]string{
 	"yorvogate_decision_seconds":           "How long YorvoGate took to decide, a refusal's hold included, by listener.",
 	"yorvogate_docker_seconds":             "How long Docker took to answer a forwarded request (its headers; streams excluded), by listener.",
 	"yorvogate_streams_open":               "Streams open (requests upgraded to a connection), by listener.",
+	"yorvogate_requests_in_flight":         "Scoped requests in flight (streams included), by listener; by scope too with admin.scope_labels. What limits.requests bounds, per scope.",
 	"yorvogate_auth_log_dropped_total":     "auth failed log lines dropped by the per-source and global limits.",
 	"yorvogate_config_reloads_total":       "Reloads of the configuration (SIGHUP), by result: reloaded or refused.",
 	"yorvogate_config_last_reload_success": "Whether the last reload of the configuration was taken (1 before any).",
@@ -99,6 +102,7 @@ func NewMetrics(scopeLabels bool) *Metrics {
 		counters:    map[string]map[labels]float64{},
 		histograms:  map[string]map[labels]*histogram{},
 		streams:     map[string]int64{},
+		inflight:    map[labels]int64{},
 		authLog:     newAuthLimiter(),
 	}
 }
@@ -236,6 +240,25 @@ func (m *Metrics) dockerFailed(listener string) {
 	m.add("yorvogate_docker_errors_total", labelsOf("listener", listener), 1)
 }
 
+// requestInFlight counts a scoped request in flight (delta 1), or ended (-1).
+func (m *Metrics) requestInFlight(listener, scope string, delta int64) {
+	if m == nil {
+		return
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	l := labelsOf("listener", listener)
+	if m.scopeLabels {
+		l = labelsOf("listener", listener, "scope", scope)
+	}
+
+	if m.inflight[l] += delta; m.inflight[l] <= 0 {
+		delete(m.inflight, l)
+	}
+}
+
 func (m *Metrics) stream(listener string, delta int64) {
 	if m == nil {
 		return
@@ -263,6 +286,7 @@ func (m *Metrics) Write(w io.Writer) error {
 	}
 
 	streams := maps.Clone(m.streams)
+	inflight := maps.Clone(m.inflight)
 	reloaded := m.reloaded
 	gauges := slices.Clone(m.gauges)
 	m.mu.Unlock()
@@ -330,6 +354,12 @@ func (m *Metrics) Write(w io.Writer) error {
 
 	for _, listener := range slices.Sorted(maps.Keys(streams)) {
 		line("yorvogate_streams_open", labelsOf("listener", listener), float64(streams[listener]))
+	}
+
+	family("yorvogate_requests_in_flight", "gauge", metricHelp["yorvogate_requests_in_flight"])
+
+	for _, l := range slices.Sorted(maps.Keys(inflight)) {
+		line("yorvogate_requests_in_flight", l, float64(inflight[l]))
 	}
 
 	family("yorvogate_config_last_reload_success", "gauge", metricHelp["yorvogate_config_last_reload_success"])

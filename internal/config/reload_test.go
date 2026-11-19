@@ -87,6 +87,8 @@ func TestAReloadChangesPoliciesAndTrustedListeners(t *testing.T) {
 		{"a trusted listener's address", "tcp://127.0.0.1:2375", "tcp://127.0.0.1:2385", Reload{Moved: []string{"ops"}}, ""},
 		{"a trusted listener's socket group", "o.sock', mode", "o.sock', socket_group: '2001', mode", Reload{Moved: []string{"orchestrator"}}, ""},
 		{"admin's scope labels", "admin.sock'}", "admin.sock', scope_labels: true}", Reload{}, ""},
+		{"a scoped listener's limits", "scopes: /etc/yorvogate/sites}", "scopes: /etc/yorvogate/sites, limits: {connections: 8, requests: 16}}", Reload{Changed: []string{"sites"}}, ""},
+		{"the process's connections", "state_file:", "limits: {connections: 1024}\nstate_file:", Reload{}, "limits can't change"},
 
 		{"upstream", "unix:///var/run/docker.sock", "unix:///run/docker.sock", Reload{}, "upstream can't change"},
 		{"the state file", "/var/lib/yorvogate/state.json", "/var/lib/yorvogate/other.json", Reload{}, "state_file can't change"},
@@ -139,6 +141,36 @@ func TestShutdownGrace(t *testing.T) {
 	for _, value := range []string{"11m", "-1s", "8", "soon"} {
 		if _, err := Parse([]byte(reloadBase + "shutdown_grace: " + value + "\n")); err == nil || !strings.Contains(err.Error(), "shutdown_grace") {
 			t.Errorf("%s: %v", value, err)
+		}
+	}
+}
+
+// A scoped listener's limits are 64 connections and 64 requests per scope by default, and every
+// listener's connections 4096 together; a trusted listener has no per-scope limits.
+func TestLimits(t *testing.T) {
+	c := parsed(t, reloadBase)
+	if c.TotalConnections() != 4096 {
+		t.Errorf("total: %d", c.TotalConnections())
+	}
+
+	sites := c.Listeners[2]
+	if sites.ScopeConnections() != 64 || sites.ScopeRequests() != 64 {
+		t.Errorf("per scope: %d, %d", sites.ScopeConnections(), sites.ScopeRequests())
+	}
+
+	c = parsed(t, strings.Replace(reloadBase, "scopes: /etc/yorvogate/sites}", "scopes: /etc/yorvogate/sites, limits: {connections: 8, requests: 16}}", 1)+"limits: {connections: 100}\n")
+	if c.TotalConnections() != 100 || c.Listeners[2].ScopeConnections() != 8 || c.Listeners[2].ScopeRequests() != 16 {
+		t.Errorf("set: %d, %d, %d", c.TotalConnections(), c.Listeners[2].ScopeConnections(), c.Listeners[2].ScopeRequests())
+	}
+
+	for _, tc := range []struct{ from, to, refused string }{
+		{"allow: {system: read}}\n  - {name: ops", "allow: {system: read}, limits: {requests: 4}}\n  - {name: ops", "limits: only a scoped listener"},
+		{"scopes: /etc/yorvogate/sites}", "scopes: /etc/yorvogate/sites, limits: {requests: 5000}}", "limits.requests"},
+		{"scopes: /etc/yorvogate/sites}", "scopes: /etc/yorvogate/sites, limits: {connections: -1}}", "limits.connections"},
+		{"state_file:", "limits: {connections: 8}\nstate_file:", "limits.connections: between 16"},
+	} {
+		if _, err := Parse([]byte(strings.Replace(reloadBase, tc.from, tc.to, 1))); err == nil || !strings.Contains(err.Error(), tc.refused) {
+			t.Errorf("%s: %v", tc.to, err)
 		}
 	}
 }

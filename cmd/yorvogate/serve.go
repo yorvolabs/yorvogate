@@ -115,6 +115,9 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	// One spool for every listener: image loads are bounded across them all, and across reloads
 	p.spool = gate.NewSpool(c)
 
+	// Every listener's connections together (limits.connections: a restart changes it)
+	gate.LimitConnections(c.TotalConnections())
+
 	// Docker's defaults, read while scoped listeners serve: until they're read, and while they're
 	// unsafe, scoped requests are refused.
 	p.defaults = gate.NewDefaults(c)
@@ -151,7 +154,7 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		p.admin = &http.Server{Handler: gate.Admin(p.live, p.metrics, p.defaults, registry, p.spool), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 
 		go func() {
-			if err := p.admin.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+			if err := p.admin.Serve(gate.LimitListener(listener, gate.MaxConnections)); !errors.Is(err, http.ErrServerClosed) {
 				p.failed <- fmt.Errorf("admin: %w", err)
 			}
 		}()

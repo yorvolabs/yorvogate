@@ -59,7 +59,10 @@ type Gate struct {
 	dropped *sync.Map
 	// How long its recent decisions took, each endpoint's: a refusal is held as long (refusals.go)
 	decisions *decisionTimes
-	log       *slog.Logger
+	// What each scope holds on the listener: requests in flight, and (a token or mTLS listener's)
+	// connections (limits.go)
+	requests, connections *scopeCounts
+	log                   *slog.Logger
 	// The process's metrics (nil: none counted)
 	metrics *Metrics
 }
@@ -120,6 +123,7 @@ func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.
 	g := &Gate{
 		config: c, listener: l, upstream: upstream, registry: scopes, defaults: defaults, log: log.With("listener", l.Name),
 		inflight: newInflight(), closing: &atomic.Pointer[string]{}, streams: &streams{}, dropped: &sync.Map{}, decisions: &decisionTimes{},
+		requests: newScopeCounts(), connections: newScopeCounts(),
 	}
 	// A trusted listener's own lookups too: scope status lists a scope's taken names
 	g.docker = NewDocker(c.UpstreamSocket())
@@ -191,6 +195,8 @@ type refusal struct {
 	// An authentication failure's cause, logged once the client has its answer (so the answer's time
 	// doesn't depend on it): its fields
 	cause func() []any
+	// The connection is closed after the answer (one past its scope's limit, or another scope's)
+	closes bool
 }
 
 // authFailed is an authentication's refusal: auth.rejected, whatever the cause, logged afterwards.
@@ -240,7 +246,12 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// What the request holds until it's answered (its scope's request slot)
+	slots := &held{}
+	defer slots.release()
+
 	ctx := context.WithValue(withRuntime(r.Context(), g.config), controllerKey{}, http.NewResponseController(w))
+	ctx = context.WithValue(ctx, heldKey{}, slots)
 	r = r.WithContext(context.WithValue(ctx, startKey{}, time.Now()))
 
 	id, fields := requestFields(r)
@@ -285,7 +296,7 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// An authentication failure closes its connection: its cause is logged after the answer, and
 		// a next request on the same connection would wait for that, so its time would tell the cause.
 		// (It also bounds what a client that doesn't authenticate can do with one connection.)
-		if refused.cause != nil {
+		if refused.cause != nil || refused.closes {
 			w.Header().Set("Connection", "close")
 		}
 
@@ -438,6 +449,11 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 		}
 
 		entry = entry.With("scope", s.Name)
+
+		// One scope can't starve the others: its requests in flight, and its connections (limits.go)
+		if err := g.limited(r, s.Name); err != nil {
+			return nil, &scoped{scope: s}, err
+		}
 
 		daemon, err := g.defaults.current(g.config)
 		if err != nil {

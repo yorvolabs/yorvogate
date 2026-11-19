@@ -73,6 +73,8 @@ type Config struct {
 	// ShutdownGrace is how long a stopping YorvoGate waits for requests and streams to end before it
 	// closes them ("8s"; from 0s to 10m; by default 8s, under Docker's 10-second stop timeout).
 	ShutdownGrace string `yaml:"shutdown_grace"`
+	// Limits is what every listener's connections may hold together.
+	Limits Limits `yaml:"limits"`
 
 	lowest, highest route.Version
 	grace           time.Duration
@@ -180,6 +182,61 @@ type Listener struct {
 	// RequirePeerUIDs (a scoped listener on a unix address): every scope on it must list the user
 	// IDs whose connections may be it (peer_uids).
 	RequirePeerUIDs bool `yaml:"require_peer_uids"`
+	// Limits (scoped): what one scope may hold on this listener, so it can't starve the others.
+	Limits ListenerLimits `yaml:"limits"`
+}
+
+// Limits is the process's: what every listener's connections may hold together.
+type Limits struct {
+	// Connections is how many connections every listener may have open together (by default
+	// 4096): a bound on file descriptors, whatever the number of scopes.
+	Connections int `yaml:"connections"`
+}
+
+// ListenerLimits is what one scope may hold on a scoped listener.
+type ListenerLimits struct {
+	// Connections is how many connections one scope may have open (by default 64). On a token or
+	// mTLS listener a connection is a scope's from its first authenticated request; on
+	// scope_sockets, the scope's socket accepts this many.
+	Connections int `yaml:"connections"`
+	// Requests is how many requests one scope may have in flight, streams included (by default 64).
+	Requests int `yaml:"requests"`
+}
+
+const (
+	// DefaultConnections is how many connections every listener may have open together.
+	DefaultConnections = 4096
+	// DefaultScopeConnections is how many connections one scope may have open on a listener.
+	DefaultScopeConnections = 64
+	// DefaultScopeRequests is how many requests one scope may have in flight on a listener.
+	DefaultScopeRequests = 64
+)
+
+// TotalConnections is how many connections every listener may have open together.
+func (c *Config) TotalConnections() int {
+	if c.Limits.Connections == 0 {
+		return DefaultConnections
+	}
+
+	return c.Limits.Connections
+}
+
+// ScopeConnections is how many connections one scope may have open on the listener.
+func (l *Listener) ScopeConnections() int {
+	if l.Limits.Connections == 0 {
+		return DefaultScopeConnections
+	}
+
+	return l.Limits.Connections
+}
+
+// ScopeRequests is how many requests one scope may have in flight on the listener.
+func (l *Listener) ScopeRequests() int {
+	if l.Limits.Requests == 0 {
+		return DefaultScopeRequests
+	}
+
+	return l.Limits.Requests
 }
 
 // TLS is a TCP listener's TLS: files, read again when they change.
@@ -354,6 +411,10 @@ func (c *Config) check() error {
 		return err
 	}
 
+	if c.Limits.Connections != 0 && (c.Limits.Connections < 16 || c.Limits.Connections > 1<<20) {
+		return errors.New("limits.connections: between 16 and 1048576")
+	}
+
 	c.grace = DefaultShutdownGrace
 	if c.ShutdownGrace != "" {
 		d, err := time.ParseDuration(c.ShutdownGrace)
@@ -492,6 +553,18 @@ func (l *Listener) check() error {
 
 	if l.Mode == Trusted && l.RequirePeerUIDs {
 		return errors.New("require_peer_uids: only a scoped listener on a unix address has it")
+	}
+
+	if l.Mode == Trusted && l.Limits != (ListenerLimits{}) {
+		return errors.New("limits: only a scoped listener has them (a trusted listener's client is one)")
+	}
+
+	if l.Limits.Connections != 0 && (l.Limits.Connections < 1 || l.Limits.Connections > 4096) {
+		return errors.New("limits.connections: between 1 and 4096")
+	}
+
+	if l.Limits.Requests != 0 && (l.Limits.Requests < 1 || l.Limits.Requests > 4096) {
+		return errors.New("limits.requests: between 1 and 4096")
 	}
 
 	return nil
