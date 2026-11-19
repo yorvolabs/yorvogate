@@ -2,6 +2,6 @@
 # one line per key: <principal> namespaces="git" <key type> <public key>
 # The Release workflow releases only a tag signed by one of these keys, as main lists them
 # (.github/release-check.sh): a tag's own commit can't add its signer.
-#
-# NO KEY YET: the maintainer adds his signing key's public half here, in a pull request of its own.
-# Until then every release is refused.
+
+# The maintainer (SHA256:Y9yXYtr7+kBkTNGYL71K5+yE9wBvtDT7waKSGwuGr2Q, the key that signed v0.3.0)
+dpoposki namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIC5W50dlwamJ3W/cZLLR1ireeA4ExZmI+VbVhkIPfTH+
