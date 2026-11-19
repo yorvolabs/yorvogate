@@ -17,6 +17,11 @@ on:
         required: false
         type: string
         default: ''
+      bench:
+        description: Run the benchmark too (test/bench), on one leg; only CI's call does, on the pinned Engine its baseline is of
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -25,7 +30,8 @@ jobs:
   conformance:
     name: Conformance (a real Docker, real Compose; ${{ matrix.store }} image store, ${{ matrix.daemon }} daemon)
     runs-on: ubuntu-26.04
-    timeout-minutes: 45
+    # The nightly benchmark's full run takes about half an hour more
+    timeout-minutes: ${{ inputs.bench && 90 || 45 }}
     strategy:
       fail-fast: false
       matrix:
@@ -105,7 +111,7 @@ jobs:
       # The roadmap's load test (0.4-d): one scope's 1,000 slow uploads, or 1,000 connections that send
       # nothing, don't move another's p99; on one leg (what it measures isn't the store's or the
       # daemon's), against the gate the suite ran
-      - name: Set up Go (the load test's)
+      - name: Set up Go (the load test's and the benchmark's)
         if: matrix.store == 'containerd' && matrix.daemon == 'default'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -119,3 +125,30 @@ jobs:
           YGL_GATE: ${{ github.workspace }}/bin/yorvogate
           YGL_DOCKER: /var/run/docker.sock
         run: go test -count=1 -v -timeout 30m ./
+      # The benchmark (test/bench, docs/performance.md), on the same leg after the load test. On a pull
+      # request, the quick run, failing on a figure past its threshold twice (baseline.json, and the
+      # absolute bounds on scaling); at night, the full run, reported only. Its results are the run's
+      # bench artifact, what a new baseline is made from.
+      - name: The benchmark
+        id: bench
+        if: inputs.bench && matrix.store == 'containerd' && matrix.daemon == 'default'
+        working-directory: test/bench
+        env:
+          CGO_ENABLED: '0'
+          FULL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+          GATE: ${{ github.workspace }}/bin/yorvogate
+          OUT: ${{ runner.temp }}/bench
+        run: |
+          if [ "$FULL" = true ]; then
+            go run . -gate "$GATE" -docker /var/run/docker.sock -out "$OUT" -full -baseline baseline.json
+          else
+            go run . -gate "$GATE" -docker /var/run/docker.sock -out "$OUT" -baseline baseline.json -fail
+          fi
+          cat "$OUT/results.md" >> "$GITHUB_STEP_SUMMARY"
+      - name: The benchmark's results
+        if: always() && steps.bench.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bench
+          path: ${{ runner.temp }}/bench
+          if-no-files-found: ignore

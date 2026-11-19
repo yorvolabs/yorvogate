@@ -72,6 +72,8 @@ jobs:
     with:
       docker_version: 29.9.2
       docker_api: '1.56'
+      # The benchmark's baseline is of this Engine, on this runner: only this call runs it
+      bench: true
 
   quire-config:
     name: Quire Server's configuration is the pinned one
