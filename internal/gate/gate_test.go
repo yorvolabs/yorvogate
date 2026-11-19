@@ -77,6 +77,10 @@ type docker struct {
 	info map[string]any
 	// Containers a test adds to the usual ones
 	extra []fakeObject
+	// Whether it's down (restarting): no answer at all
+	down bool
+	// The oldest API version it serves ("1.40" unless a test changes it)
+	apiMin string
 }
 
 // allContainers are the usual containers and the test's own.
@@ -250,6 +254,19 @@ func startDocker(t testing.TB) *docker {
 	}
 
 	server := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Down (restarting): every connection closed without an answer
+		d.mu.Lock()
+		down := d.down
+		d.mu.Unlock()
+
+		if down {
+			if conn, _, err := http.NewResponseController(w).Hijack(); err == nil {
+				_ = conn.Close()
+			}
+
+			return
+		}
+
 		if r.Header.Get("User-Agent") == "yorvogate" {
 			d.inspect(w, r)
 
@@ -349,6 +366,13 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 	classic, otherDescriptor, arch, noVersion, info := d.classic, d.otherDescriptor, d.arch, d.noVersion, d.info
 	d.mu.Unlock()
 
+	// YorvoGate's own _ping (readiness)
+	if r.URL.Path == "/_ping" {
+		_, _ = w.Write([]byte("OK"))
+
+		return
+	}
+
 	// A list of containers, by their label (YorvoGate's own, of a scope's running containers)
 	if strings.HasSuffix(r.URL.Path, "/containers/json") {
 		var filters map[string][]string
@@ -441,7 +465,15 @@ func (d *docker) inspect(w http.ResponseWriter, r *http.Request) {
 			arch = "amd64"
 		}
 
-		_ = json.NewEncoder(w).Encode(map[string]any{"Os": "linux", "Arch": arch})
+		d.mu.Lock()
+		apiMin := d.apiMin
+		d.mu.Unlock()
+
+		if apiMin == "" {
+			apiMin = "1.40"
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]any{"Os": "linux", "Arch": arch, "ApiVersion": d.apiVersion(), "MinAPIVersion": apiMin})
 
 		return
 	}

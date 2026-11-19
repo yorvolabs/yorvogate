@@ -600,3 +600,79 @@ func TestCheckWarnsOnRootsSocketGroup(t *testing.T) {
 		}
 	}
 }
+
+// serve answers the admin listener: health, readiness and metrics on its own socket, never Docker's
+// API there.
+func TestServeAdmin(t *testing.T) {
+	dir := t.TempDir()
+	upstream := filepath.Join(dir, "docker.sock")
+	gateSocket, adminSocket := filepath.Join(dir, "gate.sock"), filepath.Join(dir, "admin.sock")
+
+	docker, err := net.Listen("unix", upstream)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		_ = http.Serve(docker, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte("OK"))
+		}))
+	}()
+	defer docker.Close()
+
+	configFile := filepath.Join(dir, "yorvogate.yaml")
+	_ = os.WriteFile(configFile, []byte("version: 1\nupstream: unix://"+upstream+"\nadmin: {address: 'unix://"+adminSocket+"'}\nlisteners:\n  - {name: server, address: 'unix://"+gateSocket+"', mode: trusted, allow: {system: read}}\n"), 0o600)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+
+	go func() { done <- serve(ctx, configFile, slog.New(slog.NewTextHandler(io.Discard, nil))) }()
+
+	client := &http.Client{Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", adminSocket)
+	}}}
+
+	get := func(path string) (int, string) {
+		for range 50 {
+			if res, err := client.Get("http://admin" + path); err == nil {
+				body, _ := io.ReadAll(res.Body)
+				_ = res.Body.Close()
+
+				return res.StatusCode, string(body)
+			}
+
+			time.Sleep(20 * time.Millisecond)
+		}
+
+		t.Fatalf("%s: no answer", path)
+
+		return 0, ""
+	}
+
+	if code, body := get("/healthz"); code != http.StatusOK || body != "ok\n" {
+		t.Errorf("healthz: %d %q", code, body)
+	}
+
+	if code, body := get("/readyz"); code != http.StatusOK || !strings.Contains(body, `"ready":true`) {
+		t.Errorf("readyz: %d %q", code, body)
+	}
+
+	if code, body := get("/metrics"); code != http.StatusOK || !strings.Contains(body, "yorvogate_build_info{version=") {
+		t.Errorf("metrics: %d %q", code, body)
+	}
+
+	if code, _ := get("/v1.56/containers/json"); code != http.StatusNotFound {
+		t.Errorf("Docker's API on the admin listener: %d", code)
+	}
+
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("stopped with %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("it didn't stop")
+	}
+}

@@ -6,6 +6,8 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ### Added
 
+- **An admin listener for monitoring** (`admin`): `/metrics` in Prometheus's text format (decisions, refusals by reason code, auth failures by cause, decision and Docker latency, Docker's errors, streams, the spool, scopes by state, Docker up and its defaults safe), `/healthz` for liveness, and `/readyz` for routing and alerts (Docker answers, its defaults are safe, its API versions overlap, the scopes and spool folders are usable), never for restarts. A unix socket or a loopback TCP address. Scope labels only with `admin.scope_labels`. See [monitoring](docs/configuration.md#monitoring).
+- **A warning when Docker's API versions don't overlap YorvoGate's**, logged when it starts and when it changes (every request is refused then, as before).
 - **Reason codes.** Every refusal of a Docker request carries a stable `code` beside Docker's `message` (`{"message": "yorvogate: …", "code": "policy.capability"}`), in its answer and in its log line. Docker's clients ignore it; programs read it. An authentication failure's code is always `auth.rejected`. The codes and their meanings are in [reason codes](docs/configuration.md#reason-codes).
 - **A request ID.** Every answer has an `X-Request-Id`, and its log line has the same `request_id`. A client's own `X-Request-Id` is logged as `client_request_id`.
 - **Why authentication failed, in the log.** An `auth failed` line, written after the answer, says the cause (`auth_failure`: unknown scope, wrong or expired token, peer not allowed, …), the scope claimed and the source. The client's answer is the same for every cause, and its connection is closed.
@@ -17,6 +19,8 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ### Changed
 
+- **When Docker doesn't answer, YorvoGate reads its defaults again before forwarding anything else.** Until it has, scoped requests are refused (503), and it tries about every second. Before, a Docker restarted with other defaults within the 60-second read was met with the old ones until the next read.
+- **`auth failed` log lines are limited:** 10 a minute per source (an IPv6 one by its /64), 600 in all. The rest are counted, never the refusals themselves.
 - **The log lines gained fields:** `log_version`, `request_id`, `source`, `decision_ms`, `code` and, for some, `client_request_id` and `codes`. None was removed or renamed, but a parser that refuses fields it doesn't know needs updating. The mTLS listener's `why` field on a refused certificate is now the `auth failed` line's `auth_failure`.
 - **Breaking: image archives are kept in `spool.dir`, not `$TMPDIR`, and YorvoGate needs that folder to start.** With a scoped listener, `serve` doesn't start, and `check` refuses, when `spool.dir` can't be made or written: by default `spool/` beside `state_file`, or `/var/lib/yorvogate/spool` without one. A container with `read_only: true` and no `state_file` needs a volume at `/var/lib/yorvogate`, or `spool.dir` set to one. A setup that mounted a volume at `/tmp` for loads can drop it once that's in place. Don't write `spool:` into a configuration that 0.3 may still read: 0.3 refuses the key.
 - **Breaking: a configuration without `version` is refused**, as 0.3 announced. Add `version: 1`. Scope files without one are still read as version 1, with a warning, until the first minor release after Quire Server writes a version in every scope file.

@@ -58,5 +58,6 @@ refused "sys_admin: unconfined seccomp" "security option" deny --security-opt se
 refused "sys_admin: a host device" "privileged containers" deny --device /dev/sda1:/dev/sda1 alpine:3.22 true
 refused "pid_namespace: the host PID namespace (--pid host)" "namespaces" deny --pid host alpine:3.22 true
 
+keep_log "$dir/yorvogate.log" escapes
 say "$passed passed, $failed failed"
 [ "$failed" = 0 ]

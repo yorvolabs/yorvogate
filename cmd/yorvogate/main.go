@@ -453,7 +453,10 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		go defaults.Watch(watching, log)
 	}
 
-	servers := make([]*http.Server, 0, len(c.Listeners))
+	gate.Version = version
+	metrics := gate.NewMetrics(c.Admin != nil && c.Admin.ScopeLabels)
+
+	servers := make([]*http.Server, 0, len(c.Listeners)+1)
 	bound := []*gate.Sockets{}
 	// Gates of scoped and mTLS listeners with an address: each ends the requests whose allowance goes
 	tokens := []*gate.Gate{}
@@ -475,6 +478,7 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 
 	for _, l := range c.Listeners {
 		g := gate.New(c, l, upstream, registry, defaults, spool, log)
+		g.UseMetrics(metrics)
 
 		if l.SocketBound() {
 			sockets, err := gate.NewSockets(g, log)
@@ -522,6 +526,25 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		log.Info("listening", "listener", l.Name, "mode", l.Mode, "address", l.Address)
 	}
 
+	// The admin listener: metrics, health, readiness (an operator's, never Docker's API)
+	if c.Admin != nil {
+		listener, err := listen(c.Admin.AdminListener())
+		if err != nil {
+			return fmt.Errorf("admin: %w", err)
+		}
+
+		server := &http.Server{Handler: gate.Admin(c, metrics, defaults, registry, spool), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
+		servers = append(servers, server)
+
+		go func() {
+			if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+				failed <- fmt.Errorf("admin: %w", err)
+			}
+		}()
+
+		log.Info("listening", "listener", "admin", "address", c.Admin.Address)
+	}
+
 	// Every listener is up, its scopes' sockets open: what the scope-status read answers from
 	registry.Publish()
 
@@ -538,6 +561,7 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 			scan(registry, certificates, bound, tokens, reported, docker, c, log)
 		case <-ticker.C:
 			scan(registry, certificates, bound, tokens, reported, docker, c, log)
+			metrics.FlushAuthLog(log)
 		case <-registry.Requests():
 			// A scope-status request waits for a scope file just written or removed
 			scan(registry, certificates, bound, tokens, reported, docker, c, log)

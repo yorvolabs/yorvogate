@@ -143,6 +143,8 @@ jobs:
         env:
           YGC_APPARMOR: yorvogate-buildkit-rootless
         run: test/conformance/run.sh
+      - name: The gate's logs are the log schema's, and carry the codes the attacks call for
+        run: docker compose -f compose.dev.yaml run --rm -T -e YGC_LOGS=/src/test/conformance/out go go test -count=1 -run TestConformanceLogs ./cmd/yorvogate/
 
   quire-config:
     name: Quire Server's configuration is the pinned one

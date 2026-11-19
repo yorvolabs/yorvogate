@@ -340,3 +340,26 @@ func TestTheSpool(t *testing.T) {
 		}
 	}
 }
+
+// The admin listener is a unix socket or a loopback TCP address, never another's address.
+func TestTheAdminListener(t *testing.T) {
+	for address, ok := range map[string]bool{
+		"unix:///run/yorvogate/admin.sock": true,
+		"tcp://127.0.0.1:9100":             true,
+		"tcp://[::1]:9100":                 true,
+		"tcp://0.0.0.0:9100":               false,
+		"tcp://10.0.0.2:9100":              false,
+		"tcp://localhost:9100":             false,
+		"http://127.0.0.1:9100":            false,
+		"tcp://127.0.0.1:2375":             false, // the server listener's
+	} {
+		_, err := Parse([]byte(strings.Replace(valid, "listeners:", "admin: {address: '"+address+"'}\nlisteners:", 1)))
+		if (err == nil) != ok {
+			t.Errorf("%s: %v", address, err)
+		}
+	}
+
+	if _, err := Parse([]byte(strings.Replace(valid, "listeners:", "admin: {address: 'tcp://127.0.0.1:9100', socket_group: '2002'}\nlisteners:", 1))); err == nil {
+		t.Error("a socket_group on a TCP admin address")
+	}
+}

@@ -52,6 +52,27 @@ type Gate struct {
 	// How long its recent decisions took, each endpoint's: a refusal is held as long (refusals.go)
 	decisions decisionTimes
 	log       *slog.Logger
+	// The process's metrics (nil: none counted)
+	metrics *Metrics
+}
+
+// UseMetrics counts the listener's decisions in the process's metrics.
+func (g *Gate) UseMetrics(m *Metrics) {
+	g.metrics = m
+}
+
+// endpointOf is the endpoint a request is for, by name, or "unknown" (a metric's label: bounded).
+func (g *Gate) endpointOf(r *http.Request, decision *scoped) string {
+	if decision != nil && decision.req.Endpoint != nil {
+		return decision.req.Endpoint.Name
+	}
+
+	lowest, highest := g.config.Versions()
+	if req, err := route.Parse(r.Method, r.URL.EscapedPath(), lowest, highest); err == nil {
+		return req.Endpoint.Name
+	}
+
+	return "unknown"
 }
 
 // Registry holds the scopes of every scoped listener of a configuration: they share one Docker, so
@@ -91,6 +112,7 @@ func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.
 	g := &Gate{config: c, listener: l, upstream: upstream, registry: scopes, defaults: defaults, log: log.With("listener", l.Name)}
 	// A trusted listener's own lookups too: scope status lists a scope's taken names
 	g.docker = NewDocker(c.UpstreamSocket())
+	g.docker.onDown = defaults.Suspect
 
 	if l.Mode == config.Scoped {
 		g.scopes = scopes.Store(l.Name)
@@ -176,6 +198,14 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		entry.Warn("refused", append(logged, refused.logged...)...)
+
+		scopeName := ""
+		if decision != nil && decision.scope != nil {
+			scopeName = decision.scope.Name
+		}
+
+		g.metrics.decided(g.listener.Name, g.endpointOf(r, decision), refused, scopeName, sinceStart(r.Context()))
+
 		if refused.retryAfter > 0 {
 			w.Header().Set("Retry-After", strconv.Itoa(refused.retryAfter))
 		}
@@ -189,14 +219,39 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		answer(w, refused.status, refused.code, refused.reason)
 
-		// Why authentication failed, once the client has its answer
+		// Why authentication failed, once the client has its answer: counted always, logged within
+		// the per-source and global limits (authlimit.go)
 		if refused.cause != nil {
 			_ = http.NewResponseController(w).Flush()
-			entry.Warn("auth failed", refused.cause()...)
+
+			fields := refused.cause()
+			g.metrics.authFailed(g.listener.Name, fmt.Sprint(fields[1]))
+
+			ok, dropped := g.metrics.authLimit(source(r), time.Now())
+			if dropped > 0 {
+				g.log.Warn("auth failed lines dropped", "log_version", LogVersion, "dropped", dropped)
+			}
+
+			if ok {
+				entry.Warn("auth failed", fields...)
+			}
 		}
 
 		return
 	}
+
+	g.metrics.decided(g.listener.Name, g.endpointOf(r, decision), nil, "", sinceStart(r.Context()))
+
+	// Docker not answering: counted, and it marks Docker down, so no request after it meets the
+	// defaults read before (daemon.go)
+	forward = forward.WithContext(context.WithValue(forward.Context(), dockerFailedKey{}, func(err error) {
+		g.metrics.dockerFailed(g.listener.Name)
+
+		// A client that went isn't Docker down
+		if r.Context().Err() == nil {
+			g.defaults.Suspect(err)
+		}
+	}))
 
 	switch {
 	case decision != nil && !g.listener.SocketBound():
@@ -218,13 +273,42 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		stream := entry.With(fields...)
+
+		g.metrics.stream(g.listener.Name, 1)
+		defer g.metrics.stream(g.listener.Name, -1)
+
 		g.forwardStream(w, forward, func(msg string, fields ...any) { stream.Info(msg, fields...) })
 
 		return
 	}
 
-	g.upstream.Forward(w, forward)
+	timed := &answerTimer{ResponseWriter: w, started: time.Now()}
+	g.upstream.Forward(timed, forward)
+
+	if !timed.answered.IsZero() {
+		g.metrics.dockerAnswered(g.listener.Name, timed.answered.Sub(timed.started))
+	}
 }
+
+// answerTimer notes when Docker's answer began (its headers).
+type answerTimer struct {
+	http.ResponseWriter
+	started, answered time.Time
+}
+
+func (a *answerTimer) WriteHeader(code int) {
+	if a.answered.IsZero() {
+		a.answered = time.Now()
+	}
+
+	a.ResponseWriter.WriteHeader(code)
+}
+
+func (a *answerTimer) Unwrap() http.ResponseWriter { return a.ResponseWriter }
+
+// dockerFailedKey holds, in a forwarded request's context, what to do when Docker doesn't answer it
+// (with why).
+type dockerFailedKey struct{}
 
 // undecided is the refusal of a request that couldn't be decided on. A client of a listener with an
 // address may not have proved a scope yet: it isn't told why, which could say what the gate has (a

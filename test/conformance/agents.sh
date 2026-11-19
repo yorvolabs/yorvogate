@@ -113,5 +113,6 @@ direct run -d --name ygca-agent-nogroup --user 1000:1000 -e HOME=/tmp \
 if output=$(direct exec ygca-agent-nogroup docker version 2>&1); then ko "a user outside the group can't connect" "$output"; elif printf '%s' "$output" | grep -q 'permission denied'; then ok "a user outside the group can't connect"; else ko "a user outside the group can't connect (not for its mode)" "$output"; fi
 if ana sh -c 'ls /var/run; test ! -e /var/run/ygca-bob.sock' >/dev/null 2>&1; then ok "no other agent's socket in its container"; else ko "no other agent's socket in its container" "$(ana ls -la /var/run 2>&1)"; fi
 
+keep_log "$dir/yorvogate.log" agents
 say "$passed passed, $failed failed"
 [ "$failed" = 0 ]

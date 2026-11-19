@@ -12,12 +12,15 @@ fi
 
 # Three times: scopes by token (in a header), each on its own socket, and each by its client certificate
 # (mTLS, with a whole build on rootless BuildKit: YGC_APPARMOR as for quire.sh)
+# Each suite's gate log, for TestConformanceLogs (cmd/yorvogate), from this run only
+rm -rf test/conformance/out && mkdir -p test/conformance/out
 status=0
 for listener in tokens sockets mtls; do
 	docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR -e YGC_LISTENER=$listener \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v "$PWD/bin:/yorvogate:ro" \
 		-v "$PWD/test/conformance:/conformance:ro" \
+		-v "$PWD/test/conformance/out:/out" \
 		docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
 		sh /conformance/suite.sh || status=1
 done
@@ -27,6 +30,7 @@ docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR \
 	-v /var/run/docker.sock:/var/run/docker.sock \
 	-v "$PWD/bin:/yorvogate:ro" \
 	-v "$PWD/test/conformance:/conformance:ro" \
+	-v "$PWD/test/conformance/out:/out" \
 	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
 	sh /conformance/quire.sh || status=1
 # Then a rootless build from docs/configuration.md alone: its listener, scope file and commands
@@ -34,6 +38,7 @@ docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR \
 	-v /var/run/docker.sock:/var/run/docker.sock \
 	-v "$PWD/bin:/yorvogate:ro" \
 	-v "$PWD/test/conformance:/conformance:ro" \
+	-v "$PWD/test/conformance/out:/out" \
 	-v "$PWD/docs:/docs:ro" \
 	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
 	sh /conformance/docs.sh || status=1
@@ -44,6 +49,7 @@ docker run --rm -e GITHUB_ACTIONS \
 	-v ygc-agents:/agents \
 	-v "$PWD/bin:/yorvogate:ro" \
 	-v "$PWD/test/conformance:/conformance:ro" \
+	-v "$PWD/test/conformance/out:/out" \
 	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
 	sh /conformance/agents.sh || status=1
 docker volume rm ygc-agents >/dev/null 2>&1
@@ -52,6 +58,7 @@ docker run --rm -e GITHUB_ACTIONS \
 	-v /var/run/docker.sock:/var/run/docker.sock \
 	-v "$PWD/bin:/yorvogate:ro" \
 	-v "$PWD/test/conformance:/conformance:ro" \
+	-v "$PWD/test/conformance/out:/out" \
 	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
 	sh /conformance/escapes.sh || status=1
 exit $status

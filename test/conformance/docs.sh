@@ -108,5 +108,6 @@ done < "$dir/scope.sh"
 if direct image inspect registry.example.com/tenants/ygd-jane/app:1 >/dev/null 2>&1; then ok "the image is built, in the scope's namespace"; else ko "the image is built, in the scope's namespace" "$(tail -5 "$dir/yorvogate.log")"; fi
 if grep -q '"scope":"ygd-jane".*"endpoint":"image.load"' "$dir/yorvogate.log"; then ok "it was loaded through the scope's socket"; else ko "it was loaded through the scope's socket" "$(grep image.load "$dir/yorvogate.log" | tail -3)"; fi
 
+keep_log "$dir/yorvogate.log" docs
 say "$passed passed, $failed failed"
 [ "$failed" = 0 ]

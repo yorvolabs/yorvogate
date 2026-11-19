@@ -676,6 +676,7 @@ works "jane: docker ps, at the gate's version" env DOCKER_HOST=tcp://127.0.0.1:2
 kill "$old" 2>/dev/null
 
 say ""
+keep_log "$dir/yorvogate.log" "suite-$YGC_LISTENER"
 say "$passed passed, $failed failed"
 grep "\"refused\"" "$dir/yorvogate.log" | grep -i "status\":5" | tail -3
 [ "$failed" = 0 ]
