@@ -41,4 +41,4 @@ Releases are signed: check the signature names the version you install (see "Ins
 
 What YorvoGate is meant to hold, and what it isn't, is in [docs/threat-model.md](docs/threat-model.md): a way through a scoped listener's policy is a vulnerability; what a trusted listener allows is its configuration.
 
-Vulnerabilities in Docker, runc or the kernel should be reported to those projects. If you're not sure where an issue belongs, report it here and we'll help route it.
+Run YorvoGate on a Docker Engine major it's certified for ([SUPPORT.md](SUPPORT.md#docker-engine)): its review and tests cover those only. Vulnerabilities in Docker, runc or the kernel should be reported to those projects. If you're not sure where an issue belongs, report it here and we'll help route it.

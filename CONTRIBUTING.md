@@ -45,5 +45,18 @@ docker compose -f compose.dev.yaml run --rm go make build && test/conformance/ru
    - A checked field needs a refusal you can see: an attack in `test/differential/corpus_test.go` that sets it (named in `attackFields`), or the `internal/gate` test that refuses it (`refusedElsewhere`).
    - A query parameter goes into its endpoint's descriptor (`internal/gate/endpoints.go`), and a new endpoint into `internal/route/endpoints.go` (with a rule, or refused on scoped listeners).
 3. **Rewrite the list of fields:** `go test ./internal/gate -run TestTheFieldsAreTheListedOnes -update`. Review its diff as the change of decisions it is. CI never rewrites it.
-4. **Move `config.Highest`**, and the differential suite's moby pin with the Engine CI installs ([test/differential](test/differential/README.md)).
+4. **Move `config.Highest`**, and the differential suite's moby pin with the Engine CI installs ([test/differential](test/differential/README.md)). The conformance pin moves with them (`ci.yaml`'s `docker_version` and `docker_api`).
 5. Run the checks.
+
+[SUPPORT.md](SUPPORT.md#docker-engine) promises a release supporting a certified major's new API version within 14 days of the Docker release that introduced it. The nightly `docker-latest.yaml` opens the `docker-compat` issue that starts the clock.
+
+## A new Docker major
+
+A new major is certified by review, not by its API version: it may change what fields and query keys YorvoGate already allows mean (ARC-0047 was one such change).
+
+1. **Do every step of [a new Docker API version](#a-new-docker-api-version)** for its first API version.
+2. **Read the new major's handlers** (in moby's source, at the major's first release tag) for every endpoint YorvoGate allows on a scoped listener. Look for a field or query key whose meaning changed, not only the added ones `apidiff` lists. Write what was read, and what changed, in the PR.
+3. **Run the conformance suite on it:** `docker-latest.yaml` by `workflow_dispatch` once `.github/docker-majors` lists it on the PR's branch.
+4. **Add its line to `.github/docker-majors`,** and its number to SUPPORT.md's certified list (`TestSupportNamesTheCertifiedMajors` keeps the two the same). Remove a major only in a minor release, and say so in the changelog's Upgrading section.
+
+SUPPORT.md promises a new major is certified before the newest certified one stops receiving security fixes, or the `docker-compat` issue says why not.

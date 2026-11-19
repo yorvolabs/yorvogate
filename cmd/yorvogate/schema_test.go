@@ -226,12 +226,12 @@ func TestTheSchemaReadsAliasesAsYorvoGateDoes(t *testing.T) {
 	}
 }
 
-// The schemas of what YorvoGate gives (scope status, the log, refusals, readiness) are open for additions at every level
+// The schemas of what YorvoGate gives (scope status, the log, refusals, readiness, version --json) are open for additions at every level
 // (ADR-0005, amendment 1): no object closed without saying why (x-closed-because), every closed list
 // marked (x-list: closed, its enum), and every open list marked (x-list: open, never an enum, so an
 // older schema doesn't refuse a newer value). Inputs' schemas stay closed.
 func TestTheOutputSchemasAreOpen(t *testing.T) {
-	for _, path := range []string{"../../schemas/yorvogate-scope-status.v1.schema.json", "../../schemas/yorvogate-log.v1.schema.json", "../../schemas/yorvogate-refusal.v1.schema.json", "../../schemas/yorvogate-readiness.v1.schema.json"} {
+	for _, path := range []string{"../../schemas/yorvogate-scope-status.v1.schema.json", "../../schemas/yorvogate-log.v1.schema.json", "../../schemas/yorvogate-refusal.v1.schema.json", "../../schemas/yorvogate-readiness.v1.schema.json", "../../schemas/yorvogate-version.v1.schema.json"} {
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)

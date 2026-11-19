@@ -19,12 +19,31 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/yorvolabs/yorvogate/internal/config"
 )
 
 func TestVersion(t *testing.T) {
 	var out, errs bytes.Buffer
 	if code := run([]string{"version"}, &out, &errs); code != 0 || out.String() != "yorvogate dev\n" {
 		t.Fatalf("%d %q %q", code, out.String(), errs.String())
+	}
+}
+
+// version --json is its schema's, and names the API versions the build serves.
+func TestVersionAsJSON(t *testing.T) {
+	var out, errs bytes.Buffer
+	if code := run([]string{"version", "--json"}, &out, &errs); code != 0 {
+		t.Fatalf("%d %q", code, errs.String())
+	}
+
+	if err := compile(t, "../../schemas/yorvogate-version.v1.schema.json").Validate(asJSON(t, out.String())); err != nil {
+		t.Fatalf("%s: %v", out.String(), err)
+	}
+
+	want := `{"version":"dev","api":{"min":"` + config.Lowest.String() + `","max":"` + config.Highest.String() + `"}}` + "\n"
+	if out.String() != want {
+		t.Fatalf("%q, want %q", out.String(), want)
 	}
 }
 

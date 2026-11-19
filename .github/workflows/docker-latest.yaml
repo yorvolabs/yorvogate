@@ -1,0 +1,186 @@
+---
+name: Docker's newest
+
+# Every night, Docker Engine's newest releases against what YorvoGate promises (SUPPORT.md, "Docker
+# Engine"): the conformance suite on the newest patch of each certified major (.github/docker-majors),
+# and Docker's newest API version against the one this build serves. Each thing to act on gets one
+# docker-compat issue (a newer API version, a new major, the suite failing), commented on, never
+# duplicated, and never closed here: closing is a maintainer's. The run is red only when the suite
+# fails; a newer API or a new major is an issue to act on, not a broken build.
+on:
+  schedule:
+    - cron: '41 4 * * *'
+  workflow_dispatch:
+    inputs:
+      pretend_highest:
+        description: Compare Docker's API with this version instead of the build's (1.55), to see the issue path work
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  newest:
+    name: Docker's newest releases
+    if: github.repository == 'yorvolabs/yorvogate'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    outputs:
+      patches: ${{ steps.newest.outputs.patches }}
+      newer_major: ${{ steps.newest.outputs.newer_major }}
+      newest: ${{ steps.newest.outputs.newest }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Docker's repository
+        run: test/ci/docker-repo.sh setup
+      - name: The newest patch of each certified major, and any newer major
+        id: newest
+        run: |
+          majors=$(grep -Ev '^(#|$)' .github/docker-majors)
+          patches=
+          for major in $majors; do
+            patch=$(test/ci/docker-repo.sh newest "$major")
+            [ -n "$patch" ] || { echo "::error::Docker's repository has no $major.x release."; exit 1; }
+            patches="$patches \"$patch\""
+          done
+          patches="[$(echo $patches | sed 's/ /, /g')]"
+          # shellcheck disable=SC2086 # one argument per major
+          newer=$(test/ci/docker-repo.sh newer-major $majors)
+          newest=$(test/ci/docker-repo.sh newest)
+          echo "Certified majors' newest: $patches; a newer major: ${newer:-none}; Docker's newest: $newest"
+          {
+            echo "patches=$patches"
+            echo "newer_major=$newer"
+            echo "newest=$newest"
+          } >> "$GITHUB_OUTPUT"
+
+  conformance:
+    name: On ${{ matrix.docker }}
+    needs: newest
+    strategy:
+      fail-fast: false
+      matrix:
+        docker: ${{ fromJSON(needs.newest.outputs.patches) }}
+    uses: ./.github/workflows/conformance.yaml
+    permissions:
+      contents: read
+    with:
+      docker_version: ${{ matrix.docker }}
+
+  api:
+    name: Docker's newest API version against the build's
+    needs: newest
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+    outputs:
+      docker_api: ${{ steps.compare.outputs.docker_api }}
+      served: ${{ steps.compare.outputs.served }}
+      newer: ${{ steps.compare.outputs.newer }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Docker Engine ${{ needs.newest.outputs.newest }}
+        env:
+          DOCKER_VERSION: ${{ needs.newest.outputs.newest }}
+        run: |
+          test/ci/docker-repo.sh setup
+          test/ci/docker-repo.sh install "$DOCKER_VERSION"
+          sudo systemctl reset-failed docker.service docker.socket || true
+          sudo systemctl restart docker || { sudo journalctl -u docker.service --no-pager -n 50; exit 1; }
+      - name: Build
+        run: HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose -f compose.dev.yaml run --rm go make build
+      - name: Compare
+        id: compare
+        env:
+          PRETEND: ${{ inputs.pretend_highest }}
+        run: |
+          docker_api=$(docker version --format '{{.Server.APIVersion}}')
+          served=$(bin/yorvogate version --json | jq -r .api.max)
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ -n "$PRETEND" ]; then
+            echo "$PRETEND" | grep -Eq '^1\.[0-9]+$' || { echo "::error::pretend_highest must be an API version (1.55)."; exit 1; }
+            echo "::notice::Pretending the build serves up to $PRETEND (it serves up to $served)."
+            served=$PRETEND
+          fi
+          newer=false
+          if [ "$docker_api" != "$served" ] && [ "$(printf '%s\n%s\n' "$docker_api" "$served" | sort -V | tail -n 1)" = "$docker_api" ]; then
+            newer=true
+          fi
+          echo "Docker's newest serves API $docker_api; the build serves up to $served; newer: $newer"
+          {
+            echo "docker_api=$docker_api"
+            echo "served=$served"
+            echo "newer=$newer"
+          } >> "$GITHUB_OUTPUT"
+
+  report:
+    name: An issue for each thing to act on
+    needs: [newest, conformance, api]
+    if: always() && needs.newest.result == 'success'
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      NEWEST: ${{ needs.newest.outputs.newest }}
+      PATCHES: ${{ needs.newest.outputs.patches }}
+      NEWER_MAJOR: ${{ needs.newest.outputs.newer_major }}
+      API_RESULT: ${{ needs.api.result }}
+      DOCKER_API: ${{ needs.api.outputs.docker_api }}
+      SERVED: ${{ needs.api.outputs.served }}
+      NEWER_API: ${{ needs.api.outputs.newer }}
+      CONFORMANCE: ${{ needs.conformance.result }}
+    steps:
+      - name: Open or comment
+        run: |
+          set -eu
+          gh label create docker-compat --color B60205 --description "Docker Engine's newest against what YorvoGate promises (SUPPORT.md)" 2>/dev/null || true
+
+          # One open issue per title, exactly (not a search: GitHub's is fuzzy, and lags)
+          report() {
+            title=$1 body=$2
+            number=$(gh issue list --label docker-compat --state open --limit 200 --json number,title \
+              | jq -r --arg t "$title" 'map(select(.title == $t)) | first | .number // empty')
+            if [ -n "$number" ]; then
+              gh issue comment "$number" --body "Still the case in $RUN."
+              echo "Commented on #$number: $title"
+            else
+              gh issue create --label docker-compat --title "$title" --body "$body"
+              echo "Opened: $title"
+            fi
+          }
+
+          if [ "$API_RESULT" = success ] && [ "$NEWER_API" = true ]; then
+            due=$(date -u -d '+14 days' +%Y-%m-%d)
+            report "Docker Engine API $DOCKER_API is newer than YorvoGate serves" \
+              "Docker Engine $NEWEST serves API $DOCKER_API; this build serves up to $SERVED. Found by $RUN.
+
+          SUPPORT.md promises a release supporting it within 14 days of the Docker release that introduced it: by **$due** at the latest, counted from today. Until then clients negotiate $SERVED, which Docker still serves. CONTRIBUTING.md, \"A new Docker API version\", has the steps."
+          fi
+
+          if [ -n "$NEWER_MAJOR" ]; then
+            major=${NEWER_MAJOR%%.*}
+            report "Docker Engine $major is released: certify YorvoGate for it, or say why not" \
+              "Docker Engine $NEWER_MAJOR is in Docker's repository, a major newer than every certified one (.github/docker-majors). Found by $RUN.
+
+          SUPPORT.md: a new major is certified after a review of its API handlers, before the newest certified major stops receiving security fixes, or this issue says why not. CONTRIBUTING.md, \"A new Docker major\", has the steps."
+          fi
+
+          if [ "$CONFORMANCE" = failure ]; then
+            versions=$(echo "$PATCHES" | jq -r 'join(", ")')
+            report "Conformance fails on Docker Engine $versions" \
+              "The conformance suite failed on the newest patch of a certified major ($versions): $RUN. Pull requests' runs, pinned to an older patch, may still pass: this is Docker's newest, as hosts that update run it."
+          fi
