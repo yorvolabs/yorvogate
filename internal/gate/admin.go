@@ -141,6 +141,7 @@ func (d *Defaults) Ready(ctx context.Context, live *Live, registry *scope.Regist
 	}
 
 	set("spool", spool)
+	set("listeners", live.unopenedWhy())
 
 	return r
 }

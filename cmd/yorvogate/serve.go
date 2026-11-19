@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -203,8 +204,17 @@ func digest(content []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// listenOn opens a listener's address (a variable, for tests).
+var listenOn = listen
+
 // open starts serving a listener of the configuration in effect.
 func (p *process) open(l config.Listener) error {
+	return p.openOn(l, nil)
+}
+
+// openOn starts serving a listener of the configuration in effect on raw, its address already open,
+// or on its address opened now (raw nil).
+func (p *process) openOn(l config.Listener, raw net.Listener) error {
 	c := p.live.Load().Config
 
 	g := gate.New(c, l, p.upstream, p.registry, p.defaults, p.spool, p.log)
@@ -228,9 +238,11 @@ func (p *process) open(l config.Listener) error {
 		return nil
 	}
 
-	raw, err := listen(l)
-	if err != nil {
-		return fmt.Errorf("listener %s: %w", l.Name, err)
+	if raw == nil {
+		var err error
+		if raw, err = listenOn(l); err != nil {
+			return fmt.Errorf("listener %s: %w", l.Name, err)
+		}
 	}
 
 	// Its connections tracked, upgraded ones (streams) included, so a stop or a reload can close
@@ -277,10 +289,16 @@ func (p *process) end(name, why string) {
 	_ = s.server.Close()
 }
 
-// reload reads the configuration file again and, when it's another than the one in effect and valid (as `check` has it, without
-// Docker) and changes nothing only a restart may, puts it in effect: the next request of every
-// listener is decided by it, trusted listeners added are opened, removed ones closed, moved ones
-// closed and opened again. Otherwise it's logged, and the running configuration stays.
+// reload reads the configuration file again and, when it's another than the one in effect and valid
+// (as `check` has it, without Docker) and changes nothing only a restart may, puts it in effect: the
+// next request of every listener is decided by it, trusted listeners added are opened, removed ones
+// closed, moved ones closed and opened again.
+//
+// A reload opens every listener it names, or isn't taken: each new address is opened first, while
+// the running listeners serve, and one that can't be refuses the reload. A listener moved on its own
+// address (its tls, plaintext or socket group) can only be opened again once it's closed: if that
+// fails, the reload is undone (the running configuration, and its listeners, back) and refused.
+// Otherwise it's logged, and the running configuration stays.
 func (p *process) reload() {
 	reloading()
 
@@ -307,7 +325,62 @@ func (p *process) reload() {
 		return
 	}
 
-	if err := p.certificates.Reconfigure(next, append(slices.Clone(changes.Moved), changes.Added...)); err != nil {
+	closing := append(slices.Clone(changes.Removed), changes.Moved...)
+
+	// What's opened: those added and moved, and any of the new configuration's not open now (one a
+	// reload undone couldn't open again)
+	var opening []config.Listener
+
+	for _, l := range next.Listeners {
+		_, open := p.served[l.Name]
+		if !l.SocketBound() && (!open || slices.Contains(changes.Added, l.Name) || slices.Contains(changes.Moved, l.Name)) {
+			opening = append(opening, l)
+		}
+	}
+
+	// Their addresses, opened while the running listeners serve: those a listener being closed
+	// holds are opened once it's closed
+	held := map[string]bool{}
+
+	for _, l := range running.Config.Listeners {
+		if slices.Contains(closing, l.Name) {
+			held[l.Address] = true
+		}
+	}
+
+	bound := map[string]net.Listener{}
+	unbind := func() {
+		for name, raw := range bound {
+			_ = raw.Close()
+			delete(bound, name)
+		}
+	}
+
+	for _, l := range opening {
+		if held[l.Address] {
+			continue
+		}
+
+		raw, err := listenOn(l)
+		if err != nil {
+			unbind()
+			p.refused(sha, fmt.Errorf("listener %s can't be opened: %w", l.Name, err))
+
+			return
+		}
+
+		bound[l.Name] = raw
+	}
+
+	names := make([]string, len(opening))
+	for i, l := range opening {
+		names[i] = l.Name
+	}
+
+	saved := p.certificates.Save()
+	if err := p.certificates.Reconfigure(next, names); err != nil {
+		unbind()
+		p.certificates.Restore(saved)
 		p.refused(sha, err)
 
 		return
@@ -315,27 +388,64 @@ func (p *process) reload() {
 
 	p.live.Swap(next, sha)
 	p.defaults.Reconfigure(next)
-	p.metrics.Reloaded(true, next.Admin != nil && next.Admin.ScopeLabels)
 
-	for _, name := range append(slices.Clone(changes.Removed), changes.Moved...) {
+	for _, name := range closing {
 		p.end(name, "reload")
 	}
 
-	for _, l := range next.Listeners {
-		if !slices.Contains(changes.Added, l.Name) && !slices.Contains(changes.Moved, l.Name) {
-			continue
+	var opened []string
+
+	for _, l := range opening {
+		raw := bound[l.Name]
+		delete(bound, l.Name)
+
+		if err := p.openOn(l, raw); err != nil {
+			unbind()
+			p.undo(running, saved, opened, closing)
+			p.refused(sha, fmt.Errorf("%w (the reload is undone)", err))
+
+			return
 		}
 
-		if err := p.open(l); err != nil {
-			// The configuration is in effect, without this listener: tried again at the next reload
-			p.log.Error("listener not opened", "listener", l.Name, "error", err)
-		}
+		opened = append(opened, l.Name)
 	}
 
+	p.live.Unopened("")
+	p.metrics.Reloaded(true, next.Admin != nil && next.Admin.ScopeLabels)
 	p.log.Info("configuration reloaded", "sha256", sha, "added", changes.Added, "removed", changes.Removed, "moved", changes.Moved, "changed", changes.Changed)
 
 	for _, d := range next.Deprecations() {
 		p.log.Warn("configuration", "warning", d)
+	}
+}
+
+// undo puts the running configuration back after a reload that couldn't open a listener: what it
+// opened is closed, and what it closed is opened again with the running configuration's settings.
+// One that can't be is logged, and readiness fails until a reload opens it.
+func (p *process) undo(running *gate.Runtime, saved gate.TLSState, opened, closed []string) {
+	for _, name := range opened {
+		p.end(name, "reload")
+	}
+
+	p.certificates.Restore(saved)
+	p.live.Swap(running.Config, running.SHA256)
+	p.defaults.Reconfigure(running.Config)
+
+	var lost []string
+
+	for _, l := range running.Config.Listeners {
+		if !slices.Contains(closed, l.Name) {
+			continue
+		}
+
+		if err := p.open(l); err != nil {
+			p.log.Error("listener not opened again", "listener", l.Name, "error", err.Error())
+			lost = append(lost, err.Error())
+		}
+	}
+
+	if len(lost) > 0 {
+		p.live.Unopened("a reload was undone, and these couldn't be opened again: " + strings.Join(lost, "; "))
 	}
 }
 

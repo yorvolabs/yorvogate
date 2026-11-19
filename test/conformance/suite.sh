@@ -713,7 +713,7 @@ works "the orchestrator: docker version again" orchestrator version
 say "== A Docker newer than the gate"
 # A gate that accepts at most API 1.50, in front of a Docker with a newer one: the CLI negotiates the
 # version the gate advertises, and works. Without the clamp it would ask for Docker's and be refused.
-sed -e 's|^upstream: .*|&\napi: {max: "1.50"}\nshutdown_grace: 1s|' -e 's|127.0.0.1:2376|127.0.0.1:2386|' -e 's|127.0.0.1:2377|127.0.0.1:2387|' -e 's|127.0.0.1:2380|127.0.0.1:2390|' -e 's|127.0.0.1:2378|127.0.0.1:2388|' \
+sed -e 's|^upstream: .*|&\napi: {max: "1.50"}|' -e 's|127.0.0.1:2376|127.0.0.1:2386|' -e 's|127.0.0.1:2377|127.0.0.1:2387|' -e 's|127.0.0.1:2380|127.0.0.1:2390|' -e 's|127.0.0.1:2378|127.0.0.1:2388|' \
 	-e "s|scope_sockets: $dir/sockets|scope_sockets: $dir/sockets-old|" "$dir/yorvogate.yaml" > "$dir/yorvogate-old.yaml"
 mkdir -p "$dir/sockets-old"
 "$yorvogate" serve --config "$dir/yorvogate-old.yaml" 2> "$dir/yorvogate-old.log" &
@@ -724,8 +724,8 @@ if [ "$negotiated" = 1.50 ]; then ok "the CLI negotiates the gate's 1.50"; else 
 works "jane: docker ps, at the gate's version" env DOCKER_HOST=tcp://127.0.0.1:2386 DOCKER_CONFIG="$dir/jane" docker ps
 
 say "== A stop drains, then closes the streams still open"
-# That gate stops (SIGTERM) with a stream of jane's open: it's closed at the grace's end (1 s), logged
-# by: shutdown, and the gate exits 0. The container is jane's by its name and label, made straight.
+# That gate stops (SIGTERM) with a stream of jane's open: it's closed at the grace's end (the default,
+# 8 s), logged by: shutdown, and the gate exits 0 within the 10 s Docker would give its container. The container is jane's by its name and label, made straight.
 # Without -i, the CLI sends nothing more once the exec starts, while Docker's side runs on: the gate
 # must close Docker's side too, or the stream would last until the command ends.
 direct run -d --name ygc-jane-drain --label com.docker.compose.project=ygc-jane alpine:3.22 sleep 300 >/dev/null
@@ -733,9 +733,12 @@ DOCKER_HOST=tcp://127.0.0.1:2386 DOCKER_CONFIG="$dir/jane" docker exec ygc-jane-
 drained=$!
 sleep 2
 if alive "$drained"; then ok "jane's exec streams, before the stop"; else ko "jane's exec streams, before the stop"; fi
+stopping=$(date +%s)
 kill -TERM "$old"
 if gone "$drained"; then ok "the stream is closed at the grace's end"; else ko "the stream is closed at the grace's end"; fi
 if wait "$old"; then ok "the gate exits 0"; else ko "the gate exits 0" "$(tail -3 "$dir/yorvogate-old.log")"; fi
+took=$(($(date +%s) - stopping))
+if [ "$took" -lt 10 ]; then ok "within 10 s of SIGTERM, with the default grace ($took s)"; else ko "within 10 s of SIGTERM, with the default grace" "$took s"; fi
 if grep '"msg":"stream closed"' "$dir/yorvogate-old.log" | grep -q '"by":"shutdown"'; then ok "the stream is logged as closed by shutdown"; else ko "the stream is logged as closed by shutdown" "$(grep stream "$dir/yorvogate-old.log" | tail -3)"; fi
 if grep -q '"msg":"stopped"' "$dir/yorvogate-old.log"; then ok "the gate logs it stopped"; else ko "the gate logs it stopped" "$(tail -3 "$dir/yorvogate-old.log")"; fi
 kill "$drained" 2>/dev/null

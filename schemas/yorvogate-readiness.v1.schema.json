@@ -13,7 +13,7 @@
     "checks": {
       "type": "object",
       "additionalProperties": {"type": "string", "description": "ok, or why not."},
-      "description": "Each check, ok or why not: docker, defaults, api_versions, scopes, spool (an open set)."
+      "description": "Each check, ok or why not: docker, defaults, api_versions, scopes, spool, listeners (an open set)."
     }
   }
 }

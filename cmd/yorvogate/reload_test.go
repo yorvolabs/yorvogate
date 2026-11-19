@@ -19,6 +19,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/yorvolabs/yorvogate/internal/config"
 )
 
 // lines is serve's log, read as it's written.
@@ -696,4 +698,148 @@ func TestAStopEndsAStreamWhoseClientSendsNothing(t *testing.T) {
 
 	r.log.wait(t, 1, streamClosed("shutdown"))
 	r.log.wait(t, 1, msg("stopped"))
+}
+
+// freeTCP is a loopback address nothing listens on (now).
+func freeTCP(t *testing.T) string {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	address := l.Addr().String()
+	_ = l.Close()
+
+	return address
+}
+
+// takenTCP is a loopback address something else listens on.
+func takenTCP(t *testing.T) string {
+	t.Helper()
+
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Cleanup(func() { _ = l.Close() })
+
+	return l.Addr().String()
+}
+
+// A reload opens every listener it names, or isn't taken (R4): a listener added, or one moved, to
+// an address that can't be opened refuses the reload; every running listener stays open, the
+// running configuration in effect, the refusal counted.
+func TestAReloadThatCantOpenAListenerIsRefused(t *testing.T) {
+	for _, tc := range []struct{ name, change string }{
+		{"a listener added at an address in use", "  - {name: more, address: 'tcp://TAKEN', mode: trusted, allow: {system: read}}\n"},
+		{"a listener moved to an address in use", "MOVE"},
+		{"a listener added in a folder that isn't there", "  - {name: more, address: 'unix:///nonexistent/more.sock', mode: trusted, allow: {system: read}}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			noScans(t)
+			dir := t.TempDir()
+			docker := fakeDocker(t, dir)
+			admin, ops := filepath.Join(dir, "admin.sock"), freeTCP(t)
+
+			first := "version: 1\nupstream: unix://" + docker + "\nadmin: {address: 'unix://" + admin + "'}\nlisteners:\n  - {name: ops, address: 'tcp://" + ops + "', mode: trusted, allow: {system: read}}\n"
+			r := start(t, dir, first)
+
+			second := first + strings.Replace(tc.change, "TAKEN", takenTCP(t), 1)
+			if tc.change == "MOVE" {
+				second = strings.Replace(first, ops, takenTCP(t), 1)
+			}
+
+			r.write(t, second)
+			hup(t)
+
+			line := r.log.wait(t, 1, msg("configuration not reloaded"))
+			if reason := fmt.Sprint(line["reason"]); !strings.Contains(reason, "can't be opened") {
+				t.Errorf("the reason: %s", reason)
+			}
+
+			if res, err := (&http.Client{Timeout: 2 * time.Second}).Get("http://" + ops + "/v1.56/_ping"); err != nil || res.StatusCode != http.StatusOK {
+				t.Errorf("ops at its running address: %v %v", res, err)
+			}
+
+			if code, body := status(t, over(admin), "/readyz"); code != http.StatusOK || !strings.Contains(body, `"config_sha256":"`+digest([]byte(first))+`"`) {
+				t.Errorf("readiness: %d %s", code, body)
+			}
+
+			if _, metrics := status(t, over(admin), "/metrics"); !strings.Contains(metrics, `yorvogate_config_reloads_total{result="refused"} 1`) {
+				t.Errorf("metrics: %s", metrics)
+			}
+		})
+	}
+}
+
+// A listener moved on its own address (tls added) whose reopening fails undoes the reload: it's open
+// again with its running settings, and the reload refused. When even that fails, readiness says so.
+func TestAMoveThatCantReopenIsUndone(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		fails int // how many openings of the address after the start fail
+		ready bool
+	}{
+		{"opened again as it was", 1, true},
+		{"not even as it was", 2, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			noScans(t)
+			dir := t.TempDir()
+			docker := fakeDocker(t, dir)
+			certs := tlsFiles(t)
+			admin, ops := filepath.Join(dir, "admin.sock"), freeTCP(t)
+
+			var (
+				mu     sync.Mutex
+				opened int
+			)
+
+			listenOn = func(l config.Listener) (net.Listener, error) {
+				if l.Name == "ops" {
+					mu.Lock()
+					opened++
+					n := opened
+					mu.Unlock()
+
+					// The first is the start's
+					if n > 1 && n <= 1+tc.fails {
+						return nil, errors.New("the address is taken now")
+					}
+				}
+
+				return listen(l)
+			}
+			t.Cleanup(func() { listenOn = listen })
+
+			head := "version: 1\nupstream: unix://" + docker + "\nadmin: {address: 'unix://" + admin + "'}\nlisteners:\n  - {name: ops, address: 'tcp://" + ops + "', mode: trusted, allow: {system: read}"
+			first := head + "}\n"
+			r := start(t, dir, first)
+
+			r.write(t, head+", tls: {certificate: "+certs+"/server.pem, key: "+certs+"/server.key, client_ca: "+certs+"/scopes-ca.pem}}\n")
+			hup(t)
+
+			line := r.log.wait(t, 1, msg("configuration not reloaded"))
+			if reason := fmt.Sprint(line["reason"]); !strings.Contains(reason, "the reload is undone") {
+				t.Errorf("the reason: %s", reason)
+			}
+
+			res, err := (&http.Client{Timeout: 2 * time.Second}).Get("http://" + ops + "/v1.56/_ping")
+			if answers := err == nil && res.StatusCode == http.StatusOK; answers != tc.ready {
+				t.Errorf("ops, plaintext as it was: answers %v (%v %v)", answers, res, err)
+			}
+
+			code, body := status(t, over(admin), "/readyz")
+			if !strings.Contains(body, `"config_sha256":"`+digest([]byte(first))+`"`) {
+				t.Errorf("not the running configuration's: %s", body)
+			}
+
+			if tc.ready && code != http.StatusOK || !tc.ready && (code != http.StatusServiceUnavailable || !strings.Contains(body, "couldn't be opened again")) {
+				t.Errorf("readiness: %d %s", code, body)
+			}
+		})
+	}
 }

@@ -14,6 +14,22 @@ import (
 type Live struct {
 	current  atomic.Pointer[Runtime]
 	draining atomic.Bool
+	// Why listeners of the configuration in effect aren't open ("" when all are)
+	unopened atomic.Pointer[string]
+}
+
+// Unopened says why listeners of the configuration in effect aren't open, or that all are ("").
+// Readiness fails while some aren't.
+func (l *Live) Unopened(why string) {
+	l.unopened.Store(&why)
+}
+
+func (l *Live) unopenedWhy() string {
+	if why := l.unopened.Load(); why != nil {
+		return *why
+	}
+
+	return ""
 }
 
 // Runtime is one configuration as it's in effect: its content's SHA-256, and which it is (each

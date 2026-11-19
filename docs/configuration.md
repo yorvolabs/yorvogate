@@ -443,6 +443,7 @@ GET /_yorvogate/v1/scopes/<name>?listener=<scoped listener>&absent
 
 - **It's valid:** it's in effect for the next request of every listener, and logged as `configuration reloaded`, with its `sha256` and the listeners `added`, `removed`, `moved` and `changed`. A request being answered finishes under the configuration it began with; none is decided by half of each.
 - **It isn't, or it changes what only a restart can** (below): it's refused and logged as `configuration not reloaded` with the reason, and the running configuration stays. The scope folders are still rescanned.
+- **A listener it adds or moves can't be opened** (its address is taken, its folder isn't there): it's refused the same way, every running listener still open. Each new address is opened before anything changes. A listener moved on its own address (its `tls`, `plaintext` or `socket_group` changed) can only be opened again once it's closed; if that fails, the reload is undone, the listener open again as it was. If even that fails, it's logged, and `/readyz` fails its `listeners` check until a reload opens it.
 
 `/readyz`'s `config_sha256` and the `yorvogate_config_info` metric say which file is in effect, and `yorvogate_config_last_reload_success` whether the last reload was taken: an orchestrator that edited the file can check it took. `SIGHUP`s that arrive during a reload make one more after it.
 
@@ -611,7 +612,7 @@ The optional `admin` listener answers an operator's monitoring, never Docker's A
   {"ready": false, "checks": {"docker": "ok", "defaults": "ok", "api_versions": "Docker serves API 1.57 to 1.60, YorvoGate 1.44 to 1.56: no version is both's", "scopes": "ok", "spool": "ok"}}
   ```
 
-  The checks: Docker answers its `_ping` (asked at most once a second, whatever scrapes), its defaults are read and safe, its API versions overlap YorvoGate's, every scopes folder can be read, the spool's folder can be written. The answer also has `config_sha256`, the SHA-256 of the configuration file in effect (see [reloading](#reloading-the-configuration)), and `"draining": true` once YorvoGate is [stopping](#stopping), when it's never ready. Use it to route and to alert. **Never restart on it**: a Docker that's down, or whose defaults are unsafe, isn't fixed by restarting YorvoGate.
+  The checks: Docker answers its `_ping` (asked at most once a second, whatever scrapes), its defaults are read and safe, its API versions overlap YorvoGate's, every scopes folder can be read, the spool's folder can be written, every listener of the configuration in effect is open (`listeners`: see [reloading](#reloading-the-configuration)). The answer also has `config_sha256`, the SHA-256 of the configuration file in effect (see [reloading](#reloading-the-configuration)), and `"draining": true` once YorvoGate is [stopping](#stopping), when it's never ready. Use it to route and to alert. **Never restart on it**: a Docker that's down, or whose defaults are unsafe, isn't fixed by restarting YorvoGate.
 - **`/metrics`**, in Prometheus's text format:
 
 | Metric | Type | Labels |

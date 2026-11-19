@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -373,6 +374,30 @@ func (s *TLS) Reload() {
 		t.current.Store(st)
 		s.log.Info("tls files: read again", "listener", name, "expires", st.leaf.NotAfter)
 		s.expiring(name, st)
+	}
+}
+
+// TLSState is what Reconfigure changes, saved to be put back (a reload rolled back).
+type TLSState struct {
+	files   map[string]*TLSFiles
+	configs map[*TLSFiles]*config.Listener
+}
+
+// Save is the set's state now.
+func (s *TLS) Save() TLSState {
+	st := TLSState{files: maps.Clone(s.files), configs: map[*TLSFiles]*config.Listener{}}
+	for _, t := range s.files {
+		st.configs[t] = t.config.Load()
+	}
+
+	return st
+}
+
+// Restore puts a saved state back.
+func (s *TLS) Restore(st TLSState) {
+	s.files = st.files
+	for t, l := range st.configs {
+		t.config.Store(l)
 	}
 }
 
