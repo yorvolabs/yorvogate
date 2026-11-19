@@ -649,3 +649,41 @@ func TestTheTotalBoundsScopedListenersOnly(t *testing.T) {
 		}
 	}
 }
+
+// limits.connections bounds connections, not listeners: idle scoped listeners (a scope's socket
+// that no one is connected to) hold none of it, so with more scopes than the bound, every scope's
+// socket is answered.
+func TestIdleListenersHoldNoneOfTheTotal(t *testing.T) {
+	d := startDocker(t)
+
+	total.mu.Lock()
+	held := total.used
+	total.mu.Unlock()
+
+	LimitConnections(held + 2)
+	defer LimitConnections(config.DefaultConnections)
+
+	var addrs []string
+
+	for range 6 {
+		addr, _, _ := limitedGate(t, d, "{}", MaxConnections)
+		addrs = append(addrs, addr)
+	}
+
+	// Every listener idle, then one connection at a time on each: all answered
+	for _, addr := range addrs {
+		c := dial(t, addr)
+		c.send("jane", token)
+
+		_ = c.conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if _, err := c.read.Peek(1); err != nil {
+			t.Fatalf("a connection to one of 6 idle listeners, the bound 2: %v", err)
+		}
+
+		if status, _, _ := c.answer(); status != http.StatusOK {
+			t.Fatalf("%d", status)
+		}
+
+		_ = c.conn.Close()
+	}
+}

@@ -242,21 +242,21 @@ func (l *limitListener) Accept() (net.Conn, error) {
 		return nil, net.ErrClosed
 	}
 
-	if l.total != nil && !l.total.wait(l.done) {
-		l.slots.give()
-
-		return nil, net.ErrClosed
-	}
-
 	conn, err := l.Listener.Accept()
 	if err != nil {
 		l.slots.give()
 
-		if l.total != nil {
-			l.total.give()
-		}
-
 		return nil, err
+	}
+
+	// One of every scoped listener's, taken once a connection has come: taken before, an idle
+	// listener would hold one with no connection, and as many idle scopes' sockets as the bound
+	// would hold it all. Each listener waits with at most this one connection.
+	if l.total != nil && !l.total.wait(l.done) {
+		_ = conn.Close()
+		l.slots.give()
+
+		return nil, net.ErrClosed
 	}
 
 	return &limitConn{Conn: conn, listener: l, slot: true}, nil
