@@ -29,9 +29,11 @@ as() {
 
 cleanup() {
 	for project in ygq-jane ygq-jane-blog ygq-jane_shop; do
-		direct ps -aq --filter "label=com.docker.compose.project=$project" | xargs -r docker rm -f >/dev/null 2>&1
-		direct network ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker network rm >/dev/null 2>&1
-		direct volume ls -q --filter "label=com.docker.compose.project=$project" | xargs -r docker volume rm >/dev/null 2>&1
+		direct ps -aq --filter "label=com.docker.compose.project=$project" | xargs -r env -u DOCKER_HOST -u DOCKER_CONFIG docker rm -f >/dev/null 2>&1
+		direct network ls -q --filter "label=com.docker.compose.project=$project" | xargs -r env -u DOCKER_HOST -u DOCKER_CONFIG docker network rm >/dev/null 2>&1
+		direct volume ls -q --filter "label=com.docker.compose.project=$project" | xargs -r env -u DOCKER_HOST -u DOCKER_CONFIG docker volume rm >/dev/null 2>&1
+		# A rebuild's replaced image, left without a name
+		direct images -q --filter dangling=true --filter "label=com.docker.compose.project=$project" | xargs -r env -u DOCKER_HOST -u DOCKER_CONFIG docker rmi >/dev/null 2>&1
 	done
 	direct rm -f ygq-buildkit-jane ygq-db-jane >/dev/null 2>&1
 	direct volume rm ygq-buildkit-jane-state >/dev/null 2>&1
