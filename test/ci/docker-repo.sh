@@ -5,6 +5,8 @@
 #   docker-repo.sh setup             add the repository (once, before the others)
 #   docker-repo.sh newest [MAJOR]    the newest version it has (29.9.3), of MAJOR if given
 #   docker-repo.sh newer-major M...  the newest version of a major newer than every M, if one exists
+#   docker-repo.sh certified M...    the newest patch of the newest of the majors M (what the API is
+#                                    compared on: a newer major's API has no promised time)
 #   docker-repo.sh install VERSION   install that version (Engine, CLI, containerd)
 set -eu
 
@@ -40,6 +42,11 @@ newer-major)
 	highest=$(printf '%s\n' "$@" | sort -n | tail -n 1)
 	versions | awk -F. -v h="$highest" '$1 > h { print; exit }'
 	;;
+certified)
+	shift
+	highest=$(printf '%s\n' "$@" | sort -n | tail -n 1)
+	versions | grep -E "^$highest\." | head -n 1
+	;;
 install)
 	version=$2
 	echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "::error::$version isn't a Docker Engine version."; exit 1; }
@@ -49,7 +56,7 @@ install)
 	sudo apt-get install -y -q --allow-downgrades "docker-ce=$full" "docker-ce-cli=$full" containerd.io
 	;;
 *)
-	echo "usage: docker-repo.sh setup | newest [MAJOR] | newer-major MAJOR... | install VERSION" >&2
+	echo "usage: docker-repo.sh setup | newest [MAJOR] | newer-major MAJOR... | certified MAJOR... | install VERSION" >&2
 	exit 2
 	;;
 esac

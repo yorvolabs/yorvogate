@@ -35,6 +35,7 @@ jobs:
       patches: ${{ steps.newest.outputs.patches }}
       newer_major: ${{ steps.newest.outputs.newer_major }}
       newest: ${{ steps.newest.outputs.newest }}
+      certified: ${{ steps.newest.outputs.certified }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,11 +57,14 @@ jobs:
           # shellcheck disable=SC2086 # one argument per major
           newer=$(test/ci/docker-repo.sh newer-major $majors)
           newest=$(test/ci/docker-repo.sh newest)
-          echo "Certified majors' newest: $patches; a newer major: ${newer:-none}; Docker's newest: $newest"
+          # shellcheck disable=SC2086 # one argument per major
+          certified=$(test/ci/docker-repo.sh certified $majors)
+          echo "Certified majors' newest: $patches (the API compared on $certified); a newer major: ${newer:-none}; Docker's newest: $newest"
           {
             echo "patches=$patches"
             echo "newer_major=$newer"
             echo "newest=$newest"
+            echo "certified=$certified"
           } >> "$GITHUB_OUTPUT"
 
   conformance:
@@ -76,8 +80,10 @@ jobs:
     with:
       docker_version: ${{ matrix.docker }}
 
+  # The newest certified major's newest patch: a newer major's API is the new-major issue's, which
+  # promises no time (SUPPORT.md)
   api:
-    name: Docker's newest API version against the build's
+    name: The newest certified Docker's API version against the build's
     needs: newest
     runs-on: ubuntu-26.04
     timeout-minutes: 15
@@ -90,9 +96,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Docker Engine ${{ needs.newest.outputs.newest }}
+      - name: Docker Engine ${{ needs.newest.outputs.certified }}
         env:
-          DOCKER_VERSION: ${{ needs.newest.outputs.newest }}
+          DOCKER_VERSION: ${{ needs.newest.outputs.certified }}
         run: |
           test/ci/docker-repo.sh setup
           test/ci/docker-repo.sh install "$DOCKER_VERSION"
@@ -135,7 +141,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      NEWEST: ${{ needs.newest.outputs.newest }}
+      CERTIFIED: ${{ needs.newest.outputs.certified }}
       PATCHES: ${{ needs.newest.outputs.patches }}
       NEWER_MAJOR: ${{ needs.newest.outputs.newer_major }}
       API_RESULT: ${{ needs.api.result }}
@@ -166,7 +172,7 @@ jobs:
           if [ "$API_RESULT" = success ] && [ "$NEWER_API" = true ]; then
             due=$(date -u -d '+14 days' +%Y-%m-%d)
             report "Docker Engine API $DOCKER_API is newer than YorvoGate serves" \
-              "Docker Engine $NEWEST serves API $DOCKER_API; this build serves up to $SERVED. Found by $RUN.
+              "Docker Engine $CERTIFIED (the newest certified major's newest patch) serves API $DOCKER_API; this build serves up to $SERVED. Found by $RUN.
 
           SUPPORT.md promises a release supporting it within 14 days of the Docker release that introduced it: by **$due** at the latest, counted from today. Until then clients negotiate $SERVED, which Docker still serves. CONTRIBUTING.md, \"A new Docker API version\", has the steps."
           fi
