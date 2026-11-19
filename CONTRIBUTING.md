@@ -39,20 +39,21 @@ docker compose -f compose.dev.yaml run --rm go make build && test/conformance/ru
 
 ## Branches, pull requests and releases
 
-The same conventions hold across YorvoLabs' repositories (ADR-0010).
+The same conventions hold across YorvoLabs' repositories.
 
 ### Pull requests
 
 Pull requests are squashed: the title becomes the commit's subject on `main`, followed by `(#N)`, and the description its body.
 
-- **The title** is one imperative sentence of at most 72 characters, without a final period, e.g. "Refuse a release whose tag isn't signed". References go at the end, in parentheses: a roadmap item, a finding, e.g. "Bound image loads with a shared spool (0.4-d1)". No `feat:`-style prefixes: only Dependabot's `chore:` stays, so dependency updates can be filtered.
-- **The description** follows the [template](.github/pull_request_template.md): **Why**, **What changes** (as behavior, not files), **Tested** (what ran, and what didn't, with why), **Refs**.
+- **The title** is one imperative sentence of at most 72 characters, without a final period, that says what the code does, e.g. "Bound image loads with a shared spool". No `feat:`-style prefixes: only Dependabot's `chore:` stays, so dependency updates can be filtered.
+- **Nothing internal in public text.** Titles, descriptions, commit messages, branch names, tag messages, release notes and the changelog say what the code changes and why, for a reader outside the project. They carry no internal plan or finding codes, no names of who decided, reviewed or approved what, and no paths outside the repository.
+- **The description** follows the [template](.github/pull_request_template.md): **Why**, **What changes** (as behavior, not files), **Tested** (what ran, and what didn't, with why), **Refs**: only what a reader can open (issues and pull requests, published advisories, RFCs, upstream docs), or left out.
 - A release's pull request is titled `Release X.Y.Z`, and the one that moves `main` on to the next minor `Start X.Y`.
 - **Commits on a branch** are free-form, since they're squashed away. `Co-authored-by` is the only trailer, for a human co-author.
 
 ### Branches
 
-- `<kind>/<slug>`, where the kind is `feat`, `fix`, `docs`, `chore`, `ci` or `security`, and the slug is lowercase with hyphens. It may carry a work item: `feat/0.4-d2-fairness`, `fix/rt-04-image-list`.
+- `<kind>/<slug>`, where the kind is `feat`, `fix`, `docs`, `chore`, `ci` or `security`, and the slug is lowercase with hyphens and describes the change: `feat/per-scope-limits`, `fix/image-list-size`.
 - A release is prepared on `chore/release-X.Y.Z`. `release/` is kept for maintenance branches (below).
 - **A fix of an embargoed vulnerability** is developed in the repository's private security advisory fork, never on a public branch. Until the advisory is published, its title, description and branch describe the change neutrally: no advisory ID, and no description of the exploit. The changelog's Security entry and the advisory ID are added at the release.
 

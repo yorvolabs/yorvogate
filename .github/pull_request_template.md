@@ -1,7 +1,7 @@
 <!-- Thanks for contributing! For a bigger change, please link the issue where the approach was agreed.
-The title is the squashed commit's subject: imperative, at most 72 characters, with references at the
-end in parentheses, e.g. "Bound image loads with a shared spool (0.4-d1)". This description is its
-body. -->
+The title is the squashed commit's subject: imperative, at most 72 characters, saying what the code
+does, e.g. "Bound image loads with a shared spool". This description is its body. Both are public:
+nothing internal (plan or finding codes, who reviewed or decided) in either. -->
 
 ## Why
 
@@ -18,7 +18,8 @@ against a real Docker. And what didn't, with why. -->
 
 ## Refs
 
-<!-- The issue, roadmap item or finding, e.g. "Fixes #123", "0.4-d2", "RT-04". -->
+<!-- What a reader can open: an issue or pull request ("Fixes #123"), a published advisory, an RFC,
+upstream docs. Leave it out when there's none. -->
 
 ## Checklist
 
