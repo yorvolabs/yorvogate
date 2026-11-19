@@ -1,8 +1,11 @@
 package gate
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -169,17 +172,52 @@ func (s *scoped) tag() error {
 	return s.ownsImageName(target, "image.tag", at(inQuery, "repo"))
 }
 
+// The bounds of an image list's answer as YorvoGate filters it: Docker's list is read one image at a
+// time, never held whole, so what the gate holds is the scope's own images, not the host's.
+var (
+	// One image of Docker's list, as read from Docker (an entry is about 1–2 KiB)
+	maxListElement int64 = 1 << 20
+	// The scope's list, as the client gets it
+	maxListKept = 64 << 20
+)
+
 // images filters an image list's answer: an image is listed with the names the scope may see, and not
 // at all when it has none (another scope's, or a nameless leftover).
 func (s *scoped) images(body []byte) ([]byte, error) {
-	var list []map[string]json.RawMessage
-	if err := json.Unmarshal(body, &list); err != nil {
-		return nil, err
+	return s.imagesFrom(bytes.NewReader(body))
+}
+
+// imagesFrom is images, reading Docker's answer as it comes: one image at a time, each at most
+// maxListElement bytes read from Docker (counted as read, not once decoded: a decoder holds a whole
+// value before it gives it), and the kept list at most maxListKept.
+func (s *scoped) imagesFrom(r io.Reader) ([]byte, error) {
+	counted := &boundedReader{r: r}
+	decoder := json.NewDecoder(counted)
+
+	if t, err := decoder.Token(); err != nil || t != json.Delim('[') {
+		return nil, fmt.Errorf("an image list isn't a JSON list: %v", err)
 	}
 
-	kept := make([]map[string]json.RawMessage, 0, len(list))
+	var kept bytes.Buffer
+	kept.WriteByte('[')
 
-	for _, img := range list {
+	for decoder.More() {
+		counted.limit = decoder.InputOffset() + maxListElement
+
+		var raw json.RawMessage
+		if err := decoder.Decode(&raw); err != nil {
+			if errors.Is(err, errElementTooLarge) {
+				return nil, answerTooLarge("an image of Docker's list is over %d bytes", maxListElement)
+			}
+
+			return nil, err
+		}
+
+		var img map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &img); err != nil {
+			return nil, err
+		}
+
 		var tags []string
 		_ = json.Unmarshal(img["RepoTags"], &tags)
 
@@ -191,10 +229,60 @@ func (s *scoped) images(body []byte) ([]byte, error) {
 			return nil, err
 		}
 
-		kept = append(kept, img)
+		encoded, err := json.Marshal(img)
+		if err != nil {
+			return nil, err
+		}
+
+		if kept.Len()+len(encoded)+2 > maxListKept {
+			return nil, answerTooLarge("the scope's image list is over %d bytes", maxListKept)
+		}
+
+		if kept.Len() > 1 {
+			kept.WriteByte(',')
+		}
+
+		kept.Write(encoded)
 	}
 
-	return json.Marshal(kept)
+	counted.limit = 0
+
+	if t, err := decoder.Token(); err != nil || t != json.Delim(']') {
+		return nil, fmt.Errorf("an image list isn't a JSON list: %v", err)
+	}
+
+	kept.WriteByte(']')
+
+	return kept.Bytes(), nil
+}
+
+var errElementTooLarge = errors.New("an element of Docker's answer is too large")
+
+// boundedReader counts what it reads, and fails a read past limit (when it's set).
+type boundedReader struct {
+	r     io.Reader
+	n     int64
+	limit int64
+}
+
+func (b *boundedReader) Read(p []byte) (int, error) {
+	if b.limit > 0 {
+		if b.n >= b.limit {
+			return 0, errElementTooLarge
+		}
+
+		p = p[:min(int64(len(p)), b.limit-b.n)]
+	}
+
+	n, err := b.r.Read(p)
+	b.n += int64(n)
+
+	return n, err
+}
+
+// answerTooLarge refuses an answer of Docker's larger than YorvoGate passes on.
+func answerTooLarge(format string, args ...any) *refusal {
+	return refuse(http.StatusBadGateway, CodeAnswerTooLarge, nowhere, nothingAllowed, "Docker's answer is larger than YorvoGate passes on: "+format, args...)
 }
 
 // imageNames filters an image's inspection: its tags and digests name it only as the scope may see

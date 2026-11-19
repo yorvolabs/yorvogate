@@ -80,6 +80,7 @@ const (
 	CodeDefaultsUnsafe    Code = "daemon.defaults-unsafe"
 	CodeDaemonUnknown     Code = "daemon.unavailable"
 	CodeDockerUnreachable Code = "daemon.unreachable"
+	CodeAnswerTooLarge    Code = "daemon.answer-too-large"
 )
 
 // Codes are the codes and what each means: the configuration docs' table (docs/configuration.md#reason-codes).
@@ -150,6 +151,7 @@ var Codes = map[Code]string{
 	CodeDefaultsUnsafe:    "Docker's defaults would widen what scopes may do (or couldn't be read).",
 	CodeDaemonUnknown:     "Something of Docker's own that a check needs couldn't be read (its platform).",
 	CodeDockerUnreachable: "Docker didn't answer a request YorvoGate forwarded.",
+	CodeAnswerTooLarge:    "Docker's answer is larger than YorvoGate passes on (an image of its list over 1 MiB, the scope's list over 64 MiB, another answer over 16 MiB).",
 }
 
 // problem is one of the reasons a request is refused: its code, where it is, what's allowed there,

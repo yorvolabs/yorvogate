@@ -60,6 +60,8 @@ type scoped struct {
 	target *object
 	// Changes Docker's answer before the client sees it (e.g. other scopes' objects left out)
 	answer func([]byte) ([]byte, error)
+	// Or changes it as it's read (an image list: Docker's is the host's, read one image at a time)
+	answerStream func(io.Reader) ([]byte, error)
 }
 
 // decide returns the body to forward (nil for none, or a stream forwarded as it comes).
@@ -143,7 +145,7 @@ func (s *scoped) inspectNetwork() error {
 }
 
 func (s *scoped) listImages() error {
-	s.answer = s.images
+	s.answerStream = s.imagesFrom
 
 	return nil
 }

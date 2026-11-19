@@ -508,6 +508,7 @@ A refusal that collects several problems (a container's, network's or volume's c
 | `body.too-large` | The body is larger than body_limit. |
 | `body.unexpected` | The endpoint takes no body, and one came. |
 | `body.unreadable` | The body couldn't be read (it stopped, or came too slowly). |
+| `daemon.answer-too-large` | Docker's answer is larger than YorvoGate passes on (an image of its list over 1 MiB, the scope's list over 64 MiB, another answer over 16 MiB). |
 | `daemon.defaults-unread` | Docker's defaults haven't been read yet: scoped requests wait for them. |
 | `daemon.defaults-unsafe` | Docker's defaults would widen what scopes may do (or couldn't be read). |
 | `daemon.unavailable` | Something of Docker's own that a check needs couldn't be read (its platform). |

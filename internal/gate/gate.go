@@ -521,6 +521,10 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			out = out.WithContext(context.WithValue(out.Context(), answerKey{}, decision.answer))
 		}
 
+		if decision.answerStream != nil {
+			out = out.WithContext(context.WithValue(out.Context(), answerStreamKey{}, decision.answerStream))
+		}
+
 		// Docker reads a request's parameters from its body too when the Content-Type says it's a
 		// form, and those win over the query YorvoGate checked. So the Content-Type Docker gets is
 		// YorvoGate's, from what's forwarded, never the client's.
