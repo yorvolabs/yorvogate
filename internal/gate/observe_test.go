@@ -196,6 +196,13 @@ func TestMetrics(t *testing.T) {
 			}
 		}
 
+		// Go's runtime, as Prometheus's Go client names it
+		for _, series := range []string{"go_goroutines{}", "go_memstats_heap_alloc_bytes{}", "go_memstats_sys_bytes{}", "go_gc_heap_goal_bytes{}", "go_gc_gomemlimit_bytes{}"} {
+			if values[series] <= 0 {
+				t.Errorf("%s = %v, want a value above 0", series, values[series])
+			}
+		}
+
 		withScope := `yorvogate_refusals_total{listener="sites",code="body.field-not-allowed",scope="jane"}`
 		without := `yorvogate_refusals_total{listener="sites",code="body.field-not-allowed"}`
 

@@ -666,6 +666,7 @@ The optional `admin` listener answers an operator's monitoring, never Docker's A
 | `yorvogate_config_reloads_total` | counter | `result` (`reloaded`, `refused`) |
 | `yorvogate_config_last_reload_success` | gauge | — (1 before any reload) |
 | `yorvogate_config_info` | gauge | `sha256`: the configuration file in effect |
+| `go_goroutines`, `go_memstats_heap_alloc_bytes`, `go_memstats_sys_bytes`, `go_gc_heap_goal_bytes`, `go_gc_gomemlimit_bytes` | gauge | — : Go's runtime, as Prometheus's Go client names them (the heap's live objects, what the runtime has from the system, the next collection's goal, `GOMEMLIMIT`) |
 
 Every label's values are bounded, so the series don't grow with traffic. Without `scope_labels`, they don't grow with scopes either. With it, refusals are counted per scope and code, which is what to look at per site. To scrape the unix socket, give Prometheus the socket (or a sidecar such as socat), or use loopback TCP on the host. Alerts worth having: `yorvogate_docker_up == 0`, `yorvogate_docker_defaults_safe == 0`, a rise of `yorvogate_refusals_total` for a code, and `/readyz` failing for minutes.
 
