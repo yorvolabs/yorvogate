@@ -265,15 +265,15 @@ func (d *Defaults) Watch(ctx context.Context, log *slog.Logger) {
 func (d *Defaults) current() (*daemonState, error) {
 	state := d.state.Load()
 	if state == nil && d.down.Load() {
-		return nil, refuse(http.StatusServiceUnavailable, CodeDefaultsUnread, "Docker didn't answer: scoped requests wait until its defaults are read again")
+		return nil, refuse(http.StatusServiceUnavailable, CodeDefaultsUnread, nowhere, nothingAllowed, "Docker didn't answer: scoped requests wait until its defaults are read again")
 	}
 
 	if state == nil {
-		return nil, refuse(http.StatusServiceUnavailable, CodeDefaultsUnread, "Docker's defaults haven't been read yet: scoped requests wait for them")
+		return nil, refuse(http.StatusServiceUnavailable, CodeDefaultsUnread, nowhere, nothingAllowed, "Docker's defaults haven't been read yet: scoped requests wait for them")
 	}
 
 	if len(state.unsafe) > 0 {
-		return nil, refuse(http.StatusServiceUnavailable, CodeDefaultsUnsafe, "Docker's defaults would widen what scopes may do: %s", strings.Join(state.unsafe, "; "))
+		return nil, refuse(http.StatusServiceUnavailable, CodeDefaultsUnsafe, nowhere, nothingAllowed, "Docker's defaults would widen what scopes may do: %s", strings.Join(state.unsafe, "; "))
 	}
 
 	return state, nil

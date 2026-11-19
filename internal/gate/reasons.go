@@ -142,33 +142,57 @@ var Codes = map[Code]string{
 	CodeDockerUnreachable: "Docker didn't answer a request YorvoGate forwarded.",
 }
 
-// problem is one of the reasons a request is refused, when several are collected (a container's
-// configuration): its code and what's wrong.
+// problem is one of the reasons a request is refused: its code, where it is, what's allowed there,
+// and what's wrong.
 type problem struct {
-	code Code
-	text string
+	code    Code
+	at      where
+	allowed *Allowed
+	text    string
 }
+
+// adder adds a problem to those of a request (a check's that collects several).
+type adder = func(code Code, at where, allowed *Allowed, format string, args ...any)
 
 // problems collects a request's problems.
 type problems []problem
 
-func (p *problems) add(code Code, format string, args ...any) {
-	*p = append(*p, problem{code: code, text: fmt.Sprintf(format, args...)})
+func (p *problems) add(code Code, at where, allowed *Allowed, format string, args ...any) {
+	*p = append(*p, problem{code: code, at: at, allowed: allowed, text: fmt.Sprintf(format, args...)})
 }
 
-// refusal is the one refusal of every problem: the first's code, and all of them.
+// refusal is the one refusal of every problem: the first's code, and the first maxProblems of them
+// (the message too says only those, and how many more there are).
 func (p problems) refusal(status int, prefix string) *refusal {
-	texts := make([]string, len(p))
-	codes := make([]Code, len(p))
+	shown := p[:min(len(p), maxProblems)]
 
-	for i, pr := range p {
-		texts[i], codes[i] = pr.text, pr.code
+	texts := make([]string, len(shown))
+	for i, pr := range shown {
+		texts[i] = pr.text
 	}
 
-	r := refuse(status, codes[0], "%s: %s", prefix, strings.Join(texts, "; "))
-	r.codes = codes
+	reason := prefix + ": " + strings.Join(texts, "; ")
+	if more := len(p) - len(shown); more > 0 {
+		reason += fmt.Sprintf("; and %d more", more)
+	}
 
-	return r
+	return &refusal{status: status, code: p[0].code, reason: reason, problems: shown, total: len(p)}
+}
+
+// refusedFields is the refusal of fields a scope may not set: each a problem, at its path (under
+// base) in the body.
+func refusedFields(status int, prefix, base string, fields []string) *refusal {
+	return refusedFieldsAs(status, CodeFieldNotAllowed, prefix, base, fields)
+}
+
+// refusedFieldsAs is refusedFields with another code (a builder's).
+func refusedFieldsAs(status int, code Code, prefix, base string, fields []string) *refusal {
+	var found problems
+	for _, f := range fields {
+		found.add(code, at(inBody, base+f), allowUnset(), "%s isn't allowed", base+f)
+	}
+
+	return found.refusal(status, prefix)
 }
 
 // codeOf is an error's code, when it's a refusal, or else the one given.

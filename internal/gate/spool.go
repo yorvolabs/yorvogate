@@ -155,7 +155,10 @@ func (s *Spool) turn(ctx context.Context, scope string) (func(), error) {
 	defer timer.Stop()
 
 	busy := func() error {
-		return &refusal{status: http.StatusServiceUnavailable, code: CodeLoadBusy, retryAfter: 5, reason: "image.load: too many image loads at once: retry"}
+		r := refuse(http.StatusServiceUnavailable, CodeLoadBusy, nowhere, nothingAllowed, "image.load: too many image loads at once: retry")
+		r.retryAfter = 5
+
+		return r
 	}
 
 	release, err := s.scopes.acquireBy(ctx, timer.C, scope)
@@ -201,10 +204,13 @@ func (r *reservation) reserve(n int64) error {
 	}
 
 	if r.held+n > s.limit || s.reserved == r.held {
-		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, "image.load: the archive is larger than the image spool (spool.limit, %d bytes)", s.limit)
+		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, at(inBody, ""), allowAtMost(s.limit, "bytes"), "image.load: the archive is larger than the image spool (spool.limit, %d bytes)", s.limit)
 	}
 
-	return &refusal{status: http.StatusServiceUnavailable, code: CodeLoadSpoolFull, retryAfter: 10, reason: "image.load: the image spool is full: retry"}
+	full := refuse(http.StatusServiceUnavailable, CodeLoadSpoolFull, nowhere, nothingAllowed, "image.load: the image spool is full: retry")
+	full.retryAfter = 10
+
+	return full
 }
 
 // release gives the load's bytes back.

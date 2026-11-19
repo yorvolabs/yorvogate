@@ -204,8 +204,8 @@ func TestARefusedFieldIsRefusedThroughAFreeOne(t *testing.T) {
 	in := decided("inner", reflect.TypeFor[inner](), freeAs("x", "Fine"), refusedAs("x", "Not"))
 	c := decided("outer", reflect.TypeFor[outer](), holding(freeAs("x", "In"), in))
 
-	if got := unset(outer{In: []*inner{{Fine: "a"}, {Not: "b"}}}, c); !slices.Equal(got, []string{"In.Not"}) {
-		t.Errorf("got %q, want In.Not", got)
+	if got := unset(outer{In: []*inner{{Fine: "a"}, {Not: "b"}}}, c); !slices.Equal(got, []string{"In[1].Not"}) {
+		t.Errorf("got %q, want In[1].Not", got)
 	}
 }
 

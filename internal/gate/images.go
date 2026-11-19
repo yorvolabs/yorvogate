@@ -41,7 +41,7 @@ func (s *scoped) image(image string) error {
 // image with no name at all (a build's leftover) may be anyone's: it isn't read. What's checked is
 // returned: the caller names the image by it, so a name moved after the check changes nothing.
 func (s *scoped) readsImage(ref string) (*image, error) {
-	missing := refuse(http.StatusNotFound, CodeNotFound, "No such image: %s", ref)
+	missing := refuse(http.StatusNotFound, CodeNotFound, nowhere, nothingAllowed, "No such image: %s", ref)
 
 	if s.image(ref) != nil {
 		return nil, missing
@@ -110,9 +110,9 @@ func (s *scoped) visible(tags []string) []string {
 // ownsImageName checks a name a scope writes (tags, loads, deletes): in one of its own namespaces
 // only. Any other name may be another's to run: retagging "postgres:18" would change what every
 // container that names it runs next.
-func (s *scoped) ownsImageName(ref, what string) error {
+func (s *scoped) ownsImageName(ref, what string, field where) error {
 	if imageID.MatchString(ref) || !s.scope.OwnsImage(imageName(ref)) {
-		return refuse(http.StatusForbidden, CodeImageNotOwn, "%s: %s isn't in one of scope %s's image namespaces (%s)", what, ref, s.scope.Name, list(s.scope.Images))
+		return refuse(http.StatusForbidden, CodeImageNotOwn, field, allowUnder(s.scope.Images), "%s: %s isn't in one of scope %s's image namespaces (%s)", what, ref, s.scope.Name, list(s.scope.Images))
 	}
 
 	return nil
@@ -124,12 +124,12 @@ func (s *scoped) ownsImageName(ref, what string) error {
 func (s *scoped) pull() error {
 	// Docker reads an import's archive from the body; a pull has none.
 	if s.hasBody {
-		return refuse(http.StatusBadRequest, CodeBodyUnexpected, "image.create has no body: a pull's parameters are in its query")
+		return refuse(http.StatusBadRequest, CodeBodyUnexpected, at(inBody, ""), allowUnset(), "image.create has no body: a pull's parameters are in its query")
 	}
 
 	from := s.query.Get("fromImage")
 	if from == "" {
-		return refuse(http.StatusBadRequest, CodeImage, "image.create: fromImage is missing")
+		return refuse(http.StatusBadRequest, CodeImage, at(inQuery, "fromImage"), allowRequired(), "image.create: fromImage is missing")
 	}
 
 	ref := from
@@ -142,10 +142,10 @@ func (s *scoped) pull() error {
 	}
 
 	if err := s.image(ref); err != nil {
-		return refuse(http.StatusForbidden, CodeImage, "image.create: %v", err)
+		return refuse(http.StatusForbidden, CodeImage, at(inQuery, "fromImage"), nothingAllowed, "image.create: %v", err)
 	}
 
-	if err := s.registry(ReferenceRegistry(from), "image.create"); err != nil {
+	if err := s.registry(ReferenceRegistry(from), "image.create", at(inQuery, "fromImage")); err != nil {
 		return err
 	}
 
@@ -166,7 +166,7 @@ func (s *scoped) tag() error {
 		target += ":" + tag
 	}
 
-	return s.ownsImageName(target, "image.tag")
+	return s.ownsImageName(target, "image.tag", at(inQuery, "repo"))
 }
 
 // images filters an image list's answer: an image is listed with the names the scope may see, and not

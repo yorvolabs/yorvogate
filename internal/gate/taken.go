@@ -87,7 +87,7 @@ func TakenFrom(ctx context.Context, d *Docker, version string, s *scope.Scope) (
 }
 
 // notTaken refuses a scope's create of a name another owner's object has, by its exact name.
-func (s *scoped) notTaken(kind, name string, lookup func(context.Context, string, string) (*object, error)) error {
+func (s *scoped) notTaken(kind, name string, field where, lookup func(context.Context, string, string) (*object, error)) error {
 	o, err := lookup(s.ctx, s.version, name)
 	if err != nil {
 		return err
@@ -97,7 +97,7 @@ func (s *scoped) notTaken(kind, name string, lookup func(context.Context, string
 		return nil
 	}
 
-	return refuse(http.StatusConflict, CodeNameTaken, "%s.create: the name %q is taken: another owner's %s had it before scope %s's file was valid (the operator sees whose in the scope's status)", kind, name, kind, s.scope.Name)
+	return refuse(http.StatusConflict, CodeNameTaken, field, allowPrefixed(s.scope.Prefixes), "%s.create: the name %q is taken: another owner's %s had it before scope %s's file was valid (the operator sees whose in the scope's status)", kind, name, kind, s.scope.Name)
 }
 
 // TakenWarnings are check --docker's: every scoped listener's loaded scopes with taken names.

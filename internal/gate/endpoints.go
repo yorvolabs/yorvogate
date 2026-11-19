@@ -147,15 +147,15 @@ func (d descriptor) parameters(endpoint string, query map[string][]string) error
 	for _, key := range slices.Sorted(maps.Keys(query)) {
 		values := query[key]
 		if why, ok := d.refused[key]; ok {
-			return refuse(http.StatusForbidden, CodeQueryNotAllowed, "%s: the parameter %q isn't allowed: %s", endpoint, key, why)
+			return refuse(http.StatusForbidden, CodeQueryNotAllowed, at(inQuery, key), allowUnset(), "%s: the parameter %q isn't allowed: %s", endpoint, key, why)
 		}
 
 		if d.query[key] == 0 {
-			return refuse(http.StatusForbidden, CodeQueryNotAllowed, "%s: the parameter %q isn't one YorvoGate forwards", endpoint, key)
+			return refuse(http.StatusForbidden, CodeQueryNotAllowed, at(inQuery, key), allowUnset(), "%s: the parameter %q isn't one YorvoGate forwards", endpoint, key)
 		}
 
 		if len(values) > 1 && key != d.many {
-			return refuse(http.StatusBadRequest, CodeQueryTwice, "the parameter %q is given more than once", key)
+			return refuse(http.StatusBadRequest, CodeQueryTwice, at(inQuery, key), allowRequired(), "the parameter %q is given more than once", key)
 		}
 	}
 

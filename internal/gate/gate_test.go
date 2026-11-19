@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -648,10 +649,16 @@ func gateAndDefaults(t testing.TB, d *docker, listener string, log *slog.Logger)
 		t.Fatal(err)
 	}
 
+	// Another scope, which no request of the suite names: nothing of it may be in any answer
+	// (refusals_test.go's TestMain checks every refusal for zulu).
+	if err := os.WriteFile(filepath.Join(scopes, "zulu.json"), []byte(zuluScope), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	c, err := config.Parse([]byte(`
 version: 1
 upstream: unix://` + d.socket + `
-body_limit: 4096
+body_limit: ` + strconv.Itoa(fixtureBodyLimit) + `
 load_limit: 1048576
 spool: {dir: ` + t.TempDir() + `}
 listeners:
@@ -734,6 +741,19 @@ listeners:
 
 	return nil, nil
 }
+
+// zuluScope is a scope of the fixture's that no request names, its every value marked "zulu".
+const zuluScope = `{
+	"token_sha256": "` + "5151515151515151515151515151515151515151515151515151515151515151" + `",
+	"owner": {"label": "com.docker.compose.project", "value": "zulu-owner-7f3a"},
+	"prefixes": ["zulu-"],
+	"images": ["quire-sites/zulu-img/"],
+	"networks": {"zulu-secret-link": {"aliases": ["zulu.secret.internal"]}},
+	"subnets": ["10.99.7.0/24"]
+}`
+
+// fixtureBodyLimit is the fixture's body_limit (a test may raise it for its own gate).
+var fixtureBodyLimit = 4096
 
 var asJane = map[string]string{"X-YorvoGate-Scope": "jane", "X-YorvoGate-Token": token}
 

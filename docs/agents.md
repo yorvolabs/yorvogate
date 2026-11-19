@@ -55,6 +55,8 @@ YorvoGate's own user must be in the group to give it its sockets (in its contain
   docker network create --label com.docker.compose.project=ana ana-net
   docker run -d --name ana-web --label com.docker.compose.project=ana --network ana-net nginx
   ```
+
+  An agent that talks to the API itself (an SDK, not the CLI) can read the refusal's `problems`: each one's field (`HostConfig.CapAdd[0]`) and what the policy would accept there (`{"kind": "one-of", "values": [...]}`), so it can fix the request and retry once without parsing the message ([what a refusal says](configuration.md#what-a-refusal-says)).
 - **What it may never do**, whatever it asks: privileged containers, host paths, devices, the host's namespaces, published ports, added capabilities (none are listed here), and the rest of [the containers' rules](configuration.md#containers-scoped-listeners).
 - **Stricter containers**, with the listener's [`containers`](configuration.md#containers-scoped-listeners) keys: `drop_all_capabilities`, `no_new_privileges`, `max_memory` and `max_pids` are requirements, not defaults. Each container must then ask for them (`--cap-drop ALL --security-opt no-new-privileges --memory 1g --pids-limit 256`, or the same in a Compose file), and one that doesn't is refused.
 - **Images** it pulls are shared with the host; it may tag and delete only in its own namespace (`agents/ana/`).

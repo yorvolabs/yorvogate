@@ -232,6 +232,8 @@ type outcome struct {
 	message  string
 	readings []reading
 	reached  []string
+	// The answer's body, as it came (at most 1 MiB)
+	body []byte
 }
 
 func (o outcome) String() string {
@@ -290,6 +292,8 @@ func (s *suite) send(r request) outcome {
 		if json.Unmarshal(body, &answer) == nil {
 			o.message = answer.Message
 		}
+
+		o.body = body
 	}
 
 	// A stream's backend call can come after its answer: what this request made Docker read is in
@@ -299,6 +303,10 @@ func (s *suite) send(r request) outcome {
 
 	arrived := s.d.forwarded()
 	o.readings, o.reached = s.d.take()
+
+	if o.status >= 400 && arrived == 0 {
+		s.checkRefusal(r, o.body)
+	}
 
 	switch {
 	case len(o.reached) > 0:

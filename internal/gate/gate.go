@@ -133,9 +133,11 @@ type refusal struct {
 	status int
 	code   Code
 	reason string
-	// Every problem's code, when several were collected (code is the first's)
-	codes  []Code
-	logged []any
+	// Its problems (one, unless several were collected; at most maxProblems), and how many there
+	// were
+	problems []problem
+	total    int
+	logged   []any
 	// Seconds to wait before retrying, when the refusal is only for now
 	retryAfter int
 	// An authentication failure's cause, logged once the client has its answer (so the answer's time
@@ -145,7 +147,7 @@ type refusal struct {
 
 // authFailed is an authentication's refusal: auth.rejected, whatever the cause, logged afterwards.
 func authFailed(status int, cause func() string, claimed string, format string, args ...any) *refusal {
-	r := refuse(status, CodeAuthRejected, format, args...)
+	r := refuse(status, CodeAuthRejected, nowhere, nothingAllowed, format, args...)
 	r.cause = func() []any {
 		fields := []any{"auth_failure", cause()}
 		if claimed != "" {
@@ -162,8 +164,21 @@ func because(cause string) func() string { return func() string { return cause }
 
 func (r *refusal) Error() string { return r.reason }
 
-func refuse(status int, code Code, format string, args ...any) *refusal {
-	return &refusal{status: status, code: code, reason: fmt.Sprintf(format, args...)}
+// refuse is a refusal of one problem: its code, where it is, and what's allowed there.
+func refuse(status int, code Code, at where, allowed *Allowed, format string, args ...any) *refusal {
+	reason := fmt.Sprintf(format, args...)
+
+	return &refusal{status: status, code: code, reason: reason, problems: []problem{{code: code, at: at, allowed: allowed, text: reason}}, total: 1}
+}
+
+// codes are a refusal's problems' codes, as logged when there are several: the first maxProblems.
+func (r *refusal) codes() []Code {
+	codes := make([]Code, len(r.problems))
+	for i, p := range r.problems {
+		codes[i] = p.code
+	}
+
+	return codes
 }
 
 // ServeHTTP decides on a request, and forwards it if it's allowed.
@@ -193,8 +208,8 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 
 		logged := []any{"status", refused.status, "code", refused.code, "reason", refused.reason, "decision_ms", decisionMS(r.Context())}
-		if len(refused.codes) > 1 {
-			logged = append(logged, "codes", refused.codes)
+		if refused.total > 1 {
+			logged = append(logged, "codes", refused.codes(), "codes_total", refused.total)
 		}
 
 		entry.Warn("refused", append(logged, refused.logged...)...)
@@ -217,7 +232,7 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Connection", "close")
 		}
 
-		answer(w, refused.status, refused.code, refused.reason)
+		answerRefusal(w, refused)
 
 		// Why authentication failed, once the client has its answer: counted always, logged within
 		// the per-source and global limits (authlimit.go)
@@ -315,10 +330,13 @@ type dockerFailedKey struct{}
 // scope file's path); the log is.
 func (g *Gate) undecided(err error) *refusal {
 	if g.listener.Mode == config.Scoped && !g.listener.SocketBound() {
-		return &refusal{status: http.StatusInternalServerError, code: CodeUndecided, reason: "the request couldn't be decided on", logged: []any{"error", err.Error()}}
+		r := refuse(http.StatusInternalServerError, CodeUndecided, nowhere, nothingAllowed, "the request couldn't be decided on")
+		r.logged = []any{"error", err.Error()}
+
+		return r
 	}
 
-	return refuse(http.StatusInternalServerError, CodeUndecided, "the request couldn't be decided on: %v", err)
+	return refuse(http.StatusInternalServerError, CodeUndecided, nowhere, nothingAllowed, "the request couldn't be decided on: %v", err)
 }
 
 // decided returns the request to forward (with what YorvoGate checked as its body) and, on a scoped
@@ -336,16 +354,16 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 	req, err := route.Parse(r.Method, r.URL.EscapedPath(), lowest, highest)
 	if err != nil {
 		if errors.Is(err, route.ErrUnknown) {
-			return nil, nil, refuse(http.StatusForbidden, CodeUnknownEndpoint, "%v", err)
+			return nil, nil, refuse(http.StatusForbidden, CodeUnknownEndpoint, at(inPath, ""), nothingAllowed, "%v", err)
 		}
 
-		return nil, nil, refuse(http.StatusBadRequest, CodeInvalidRoute, "%v", err)
+		return nil, nil, refuse(http.StatusBadRequest, CodeInvalidRoute, at(inPath, ""), nothingAllowed, "%v", err)
 	}
 
 	switch g.listener.Mode {
 	case config.Trusted:
 		if !g.listener.Allows(req.Endpoint) {
-			return nil, nil, refuse(http.StatusForbidden, CodeListenerDenies, "%s isn't allowed on this listener", req.Endpoint.Name)
+			return nil, nil, refuse(http.StatusForbidden, CodeListenerDenies, at(inPath, ""), allowNone(), "%s isn't allowed on this listener", req.Endpoint.Name)
 		}
 
 		if err := upgradeOnly(r, req.Endpoint); err != nil {
@@ -453,7 +471,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 		return withBody(out, checked), decision, nil
 	}
 
-	return nil, nil, refuse(http.StatusInternalServerError, CodeUndecided, "the listener has no mode")
+	return nil, nil, refuse(http.StatusInternalServerError, CodeUndecided, nowhere, nothingAllowed, "the listener has no mode")
 }
 
 // boundKey carries, in the context of a request that came on a scope's own socket, the scope's name.
@@ -493,7 +511,7 @@ func (g *Gate) scope(r *http.Request) (*scope.Scope, error) {
 
 	name, ok := r.Context().Value(boundKey{}).(string)
 	if !ok {
-		return nil, refuse(http.StatusInternalServerError, CodeUndecided, "the request didn't come on a scope's socket")
+		return nil, refuse(http.StatusInternalServerError, CodeUndecided, nowhere, nothingAllowed, "the request didn't come on a scope's socket")
 	}
 
 	if named := r.Header.Get(ScopeHeader); named != "" && named != name {
@@ -527,7 +545,7 @@ func (g *Gate) certified(r *http.Request) (*scope.Scope, error) {
 	}
 
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
-		return nil, refuse(http.StatusInternalServerError, CodeUndecided, "the request came without a client certificate")
+		return nil, refuse(http.StatusInternalServerError, CodeUndecided, nowhere, nothingAllowed, "the request came without a client certificate")
 	}
 
 	name, err := certificateScope(r.TLS.PeerCertificates[0])
@@ -580,10 +598,10 @@ func (g *Gate) readBody(r *http.Request, e *route.Endpoint) ([]byte, error) {
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			return nil, refuse(http.StatusRequestEntityTooLarge, CodeBodyTooLarge, "the request's body is larger than %d bytes", g.config.BodyLimit)
+			return nil, refuse(http.StatusRequestEntityTooLarge, CodeBodyTooLarge, at(inBody, ""), allowAtMost(g.config.BodyLimit, "bytes"), "the request's body is larger than %d bytes", g.config.BodyLimit)
 		}
 
-		return nil, refuse(http.StatusBadRequest, CodeBodyUnreadable, "the request's body couldn't be read: %v", err)
+		return nil, refuse(http.StatusBadRequest, CodeBodyUnreadable, at(inBody, ""), nothingAllowed, "the request's body couldn't be read: %v", err)
 	}
 
 	return body, nil
@@ -593,7 +611,7 @@ func (g *Gate) readBody(r *http.Request, e *route.Endpoint) ([]byte, error) {
 // only once Docker has switched protocols.
 func upgradeOnly(r *http.Request, e *route.Endpoint) error {
 	if e.Upgrade && !upgrading(r) {
-		return refuse(http.StatusBadRequest, CodeUpgradeOnly, "%s is a stream: it's allowed only as an HTTP upgrade", e.Name)
+		return refuse(http.StatusBadRequest, CodeUpgradeOnly, at(inHeader, "Upgrade"), allowRequired("tcp"), "%s is a stream: it's allowed only as an HTTP upgrade", e.Name)
 	}
 
 	return nil
@@ -649,17 +667,17 @@ func notAForm(r *http.Request) error {
 	}
 
 	if len(types) > 1 {
-		return refuse(http.StatusBadRequest, CodeHeaderContentType, "the request has more than one Content-Type")
+		return refuse(http.StatusBadRequest, CodeHeaderContentType, at(inHeader, "Content-Type"), nothingAllowed, "the request has more than one Content-Type")
 	}
 
 	media, _, err := mime.ParseMediaType(types[0])
 	if err != nil {
 		// The client's value isn't repeated: what a client sends in its headers isn't logged
-		return refuse(http.StatusBadRequest, CodeHeaderContentType, "the request's Content-Type isn't a valid media type")
+		return refuse(http.StatusBadRequest, CodeHeaderContentType, at(inHeader, "Content-Type"), nothingAllowed, "the request's Content-Type isn't a valid media type")
 	}
 
 	if media == "application/x-www-form-urlencoded" || strings.HasPrefix(media, "multipart/") {
-		return refuse(http.StatusUnsupportedMediaType, CodeFormBody, "a form body (application/x-www-form-urlencoded or multipart/*) isn't allowed: Docker would read parameters from it that YorvoGate doesn't check")
+		return refuse(http.StatusUnsupportedMediaType, CodeFormBody, at(inHeader, "Content-Type"), nothingAllowed, "a form body (application/x-www-form-urlencoded or multipart/*) isn't allowed: Docker would read parameters from it that YorvoGate doesn't check")
 	}
 
 	return nil
@@ -683,16 +701,10 @@ func withBody(r *http.Request, body []byte) *http.Request {
 	return r
 }
 
-// answer refuses as Docker answers errors, so its clients show why.
-// Besides Docker's message, a refusal of a Docker request says its code (reasons.go), which
-// Docker's clients ignore and programs read.
-func answer(w http.ResponseWriter, status int, code Code, reason string) {
-	body := map[string]string{"message": "yorvogate: " + reason}
-	if code != "" {
-		body["code"] = string(code)
-	}
-
+// answer answers an error of YorvoGate's own endpoints (not a refusal of a Docker request: those
+// are answerRefusal's), as Docker answers errors.
+func answer(w http.ResponseWriter, status int, reason string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": "yorvogate: " + reason})
 }

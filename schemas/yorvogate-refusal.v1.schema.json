@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yorvolabs/yorvogate/schemas/yorvogate-refusal.v1.schema.json",
+  "title": "YorvoGate refusal, format 1",
+  "description": "The body of a refusal of a Docker request (docs/configuration.md#what-a-refusal-says): Docker's error format (message, which Docker's clients show), and what a program reads: the reason code and each problem, where it is and what the policy would accept there. Open for additions at every level (ADR-0005, amendment 1): a later release may add optional fields within refusal_version 1, and values to an open list (x-list: open), so ignore fields you don't know and read an unknown value of an open list by the problem's message.",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["message", "code", "refusal_version", "problems"],
+  "properties": {
+    "message": {"type": "string", "pattern": "^yorvogate: ", "description": "For people; may change. Every problem's message, joined (the first 32, and how many more)."},
+    "code": {"type": "string", "pattern": "^[a-z]+\\.[a-z-]+$", "x-list": "open", "description": "The first problem's. Open: docs/configuration.md#reason-codes. A cause keeps its code."},
+    "refusal_version": {"const": 1},
+    "problems": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": {"$ref": "#/$defs/problem"}
+    },
+    "problems_truncated": {"type": "boolean", "description": "There were more than 32 problems: only the first 32 are answered."}
+  },
+  "$defs": {
+    "problem": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["code", "message"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[a-z]+\\.[a-z-]+$", "x-list": "open"},
+        "in": {"enum": ["body", "query", "header", "path"], "x-list": "closed", "description": "Closed: the part of the request it's in. Absent when it isn't about one part (Docker's defaults, a lookup that failed)."},
+        "field": {"type": "string", "description": "Where in that part: a body's path by Docker's JSON names, with list indexes ([0]) and map keys as JSON strings ([\"max-size\"]); a query parameter's, header's or path parameter's name. Absent for the part as a whole."},
+        "allowed": {"$ref": "#/$defs/allowed"},
+        "message": {"type": "string", "description": "This problem's, for people."},
+        "retry_after": {"type": "integer", "minimum": 1, "description": "Seconds to wait before retrying a refusal that's only for now (as the Retry-After header)."}
+      }
+    },
+    "allowed": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind"],
+      "description": "What the policy would accept where the problem is: the listener's configuration, the scope's own file and fixed rules; never another scope's, nor what's in use now. Absent when nothing can be said, or saying it would tell something.",
+      "properties": {
+        "kind": {"type": "string", "x-list": "open", "examples": ["unset", "required", "one-of", "at-most", "between", "prefixed", "under", "own", "none"], "description": "Open: an unknown kind is read by the problem's message."},
+        "values": {"type": "array", "description": "The kind's values: one of them (one-of, required), a prefix (prefixed), what it's inside (under), the shared ones besides its own (own)."},
+        "min": {"type": "integer"},
+        "max": {"type": "integer"},
+        "unit": {"type": "string", "examples": ["bytes"]}
+      }
+    }
+  }
+}

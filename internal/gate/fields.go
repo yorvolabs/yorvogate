@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"fmt"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -351,8 +352,8 @@ func unsetIn(value reflect.Value, c *classification, prefix string) []string {
 		switch {
 		case d.class == isFree || d.class == isChecked:
 			if d.class == isFree && len(d.nested) == 1 {
-				each(v, func(e reflect.Value) {
-					set = append(set, unsetIn(e, d.nested[0], prefix+apiName(f)+".")...)
+				each(v, prefix+apiName(f), func(e reflect.Value, path string) {
+					set = append(set, unsetIn(e, d.nested[0], path+".")...)
 				})
 			}
 		case isSet(d, v):
@@ -394,22 +395,26 @@ func throughPointer(t reflect.Type, index []int) bool {
 	return false
 }
 
-// each calls fn with every struct a field's value holds: itself, or the elements of a list or map.
-func each(v reflect.Value, fn func(reflect.Value)) {
+// each calls fn with every struct a field's value holds, and its path: itself, or the elements of a
+// list (path[i]) or map (path["key"], in the keys' order).
+func each(v reflect.Value, path string, fn func(reflect.Value, string)) {
 	switch v.Kind() {
 	case reflect.Pointer:
 		if !v.IsNil() {
-			each(v.Elem(), fn)
+			each(v.Elem(), path, fn)
 		}
 	case reflect.Struct:
-		fn(v)
+		fn(v, path)
 	case reflect.Slice, reflect.Array:
 		for i := range v.Len() {
-			each(v.Index(i), fn)
+			each(v.Index(i), index(path, i), fn)
 		}
 	case reflect.Map:
-		for it := v.MapRange(); it.Next(); {
-			each(it.Value(), fn)
+		keys := v.MapKeys()
+		slices.SortFunc(keys, func(a, b reflect.Value) int { return strings.Compare(fmt.Sprint(a), fmt.Sprint(b)) })
+
+		for _, k := range keys {
+			each(v.MapIndex(k), key(path, fmt.Sprint(k)), fn)
 		}
 	}
 }

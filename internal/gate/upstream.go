@@ -102,7 +102,7 @@ func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
 				failed(err)
 			}
 
-			answer(w, http.StatusBadGateway, CodeDockerUnreachable, "Docker didn't answer")
+			answerRefusal(w, refuse(http.StatusBadGateway, CodeDockerUnreachable, nowhere, nothingAllowed, "Docker didn't answer"))
 		},
 	}}
 }
