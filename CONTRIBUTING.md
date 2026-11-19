@@ -66,7 +66,7 @@ Pull requests are squashed: the title becomes the commit's subject on `main`, fo
 
 ### The changelog
 
-[`CHANGELOG.md`](CHANGELOG.md) follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/): `## [Unreleased]`, then `## [X.Y.Z] - YYYY-MM-DD` for each release, newest first. In the pull request titled `Release X.Y.Z`, move `[Unreleased]` under the version. The GitHub release is titled `YorvoGate X.Y.Z`, with the version's section as its notes (and the image's digest, and the Docker majors it's certified for), and is marked a pre-release for an `-rc.N`.
+[`CHANGELOG.md`](CHANGELOG.md) follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/): `## [Unreleased]`, then `## [X.Y.Z] - YYYY-MM-DD` for each release, newest first. In the pull request titled `Release X.Y.Z`, move `[Unreleased]` under the version. The same pull request updates [docs/performance.md](docs/performance.md) from the benchmark's full run at its commit (run CI's workflow by hand on the branch, and take the `bench` artifact's `results.md`). The GitHub release is titled `YorvoGate X.Y.Z`, with the version's section as its notes (and the image's digest, and the Docker majors it's certified for), and is marked a pre-release for an `-rc.N`.
 
 ## A new Docker API version
 
