@@ -12,9 +12,9 @@ EFFICACY ?= 90
 # The version a release's binaries say they are (make dist VERSION=1.2.3)
 VERSION ?= dev
 
-.PHONY: check format lint test vulnerabilities differential build fuzz mutation dist
+.PHONY: check format lint test vulnerabilities differential load build fuzz mutation dist
 
-check: format lint test vulnerabilities differential
+check: format lint test vulnerabilities differential load
 
 # Code formatted as gofmt does (fails on any difference)
 format:
@@ -39,6 +39,11 @@ vulnerabilities:
 # packages wants libnftables with it), so without -race.
 differential:
 	cd test/differential && CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test -count=1 -timeout 60s ./...
+
+# The load test (test/load): its own module, built and vetted here; it runs only against the built gate
+# and a real Docker (CI's conformance job, one leg), so here it skips.
+load:
+	cd test/load && CGO_ENABLED=0 go vet ./... && CGO_ENABLED=0 go test -count=1 ./...
 
 build:
 	CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o bin/yorvogate ./cmd/yorvogate

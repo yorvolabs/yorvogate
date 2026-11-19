@@ -308,6 +308,33 @@ A scope's image archive is kept on disk while it's checked, then forwarded from 
 - **Time.** An upload that sends nothing for 60 seconds is ended (400), and checking an archive may take at most 10 minutes. Either way, its file, bytes and turn are freed.
 - **In a small container** (a memory limit of a few hundred MiB), set `GOMEMLIMIT` to about 80% of it (`GOMEMLIMIT: 200MiB` under `mem_limit: 256m`): YorvoGate's runtime then collects garbage sooner rather than reach the limit while loads are read, each of which takes up to about 16 MiB at once.
 
+## Limits
+
+One scope can't starve the others. On a scoped listener, each scope may hold so much, and every listener's connections together are bounded, whatever the number of scopes:
+
+```yaml
+version: 1
+upstream: unix:///var/run/docker.sock
+state_file: /var/lib/yorvogate/state.json
+limits:
+  connections: 4096   # every listener's connections together (the default)
+listeners:
+  - name: tenants
+    address: tcp://127.0.0.1:2376
+    mode: scoped
+    scopes: /etc/yorvogate/tenants
+    limits:
+      connections: 64 # one scope's open connections (the default)
+      requests: 64    # one scope's requests in flight, streams included (the default)
+```
+
+- **A scope's requests** (`limits.requests`, by default 64): its requests being decided or answered, an open stream (attach, exec, logs that follow, events, a pull's progress) counted for as long as it's open. One more is refused with 429 (`scope.too-many-requests`) and `Retry-After`. A Compose project's `up` has about one request per service in flight at once, plus `logs -f` and `events`; `yorvogate_requests_in_flight` (with `admin.scope_labels`, by scope) shows a real peak. It bounds what a slow client holds too: an upload that trickles in holds one of its scope's requests for as long as it lasts. The 60-second stall on an image archive or an archive put into a container ends only a body that stops arriving.
+- **A scope's connections** (`limits.connections`, by default 64). On a token or mTLS listener a connection is a scope's from its first authenticated request, and stays that scope's: a request on it with another scope's credentials is refused (`scope.connection-bound`) and the connection closed. A scope's connection past its limit is refused with 429 (`scope.too-many-connections`) and closed. On `scope_sockets`, a scope's socket accepts that many connections at once, and the next waits.
+- **Every listener's connections** (`limits.connections` at the top level, by default 4096): a bound on file descriptors. Past it, a new connection on any listener waits until one closes.
+- **Connections that haven't authenticated** on a token or mTLS listener: at most 256 at once, the listener's own bound. A connection that becomes a scope's no longer counts there, so connections that never authenticate can hold back new connections, never a scope's open ones. A trusted listener's 256 are all of its connections.
+
+`limits` on a scoped listener changes with a [reload](#reloading-the-configuration): a lowered limit applies to the next request, and those in flight finish. The top level's needs a restart.
+
 ## Docker's defaults
 
 What a scope's container leaves unset, Docker fills in from its own configuration. So YorvoGate doesn't leave it to Docker:
@@ -449,12 +476,12 @@ GET /_yorvogate/v1/scopes/<name>?listener=<scoped listener>&absent
 
 What a reload changes:
 
-- **Policies and limits**, on every listener: `allow`, `containers`, `pulls`, `builder_apparmor_profiles`, `allow_privileged_builders`, `clients`; and `api`, `body_limit`, `load_limit`, `daemon`, `spool`'s `limit`, `loads`, `ratio` and `unpacked`, `admin.scope_labels`, `shutdown_grace`. A stream already open (attach, exec) goes on: it was allowed under the policy it began with. To end streams, restart YorvoGate, or revoke the credential they came with.
+- **Policies and limits**, on every listener: `allow`, `containers`, `pulls`, `builder_apparmor_profiles`, `allow_privileged_builders`, `clients`; and `api`, `body_limit`, `load_limit`, `daemon`, `spool`'s `limit`, `loads`, `ratio` and `unpacked`, `admin.scope_labels`, `shutdown_grace`, and a scoped listener's `limits`. A stream already open (attach, exec) goes on: it was allowed under the policy it began with. To end streams, restart YorvoGate, or revoke the credential they came with.
 - **Credentials:** a trusted listener's `clients` pin removed, or a certificate whose CA is no longer in `client_ca`, ends the requests and streams that came with it (`by: revoked`), as a scope file's change does.
 - **Trusted listeners**, added and removed. A trusted listener whose `address`, `socket_group`, `tls` or `plaintext` changes is moved: it's closed, its connections and streams with it (`by: reload`), and opened again. One renamed is one removed and one added.
 - **Spool limits lowered** below what loads in flight hold: those loads finish, and new ones wait for their turn, or are told to retry, until what's held is under the new limits.
 
-What needs a restart (a reload that changes it is refused): `upstream`, `state_file`, `spool.dir`, the `admin` listener (added, removed, its `address` or `socket_group`); and every scoped listener's layout: adding or removing one, and its `name`, `mode`, `address`, `scope_sockets`, `scopes`, `socket_group`, `tls` and `require_peer_uids`. Scoped listeners' claims are decided together, by listener, so they stay as they started.
+What needs a restart (a reload that changes it is refused): `upstream`, `state_file`, `spool.dir`, `limits.connections` (the top level's), the `admin` listener (added, removed, its `address` or `socket_group`); and every scoped listener's layout: adding or removing one, and its `name`, `mode`, `address`, `scope_sockets`, `scopes`, `socket_group`, `tls` and `require_peer_uids`. Scoped listeners' claims are decided together, by listener, so they stay as they started.
 
 ## Stopping
 
@@ -627,9 +654,11 @@ The optional `admin` listener answers an operator's monitoring, never Docker's A
 | `yorvogate_auth_failures_total` | counter | `listener`, `cause` (as the log's `auth_failure`) |
 | `yorvogate_docker_errors_total` | counter | `listener`: requests Docker didn't answer |
 | `yorvogate_auth_log_dropped_total` | counter | `auth failed` log lines dropped by their limits (below) |
+| `yorvogate_limit_log_dropped_total` | counter | `refused` log lines of scopes past their [limits](#limits) dropped by their limits (below) |
 | `yorvogate_decision_seconds` | histogram | `listener`: how long YorvoGate took to decide |
 | `yorvogate_docker_seconds` | histogram | `listener`: how long Docker took to start its answer (streams excluded) |
 | `yorvogate_streams_open` | gauge | `listener` |
+| `yorvogate_requests_in_flight` | gauge | `listener`, and `scope` with `scope_labels`: scoped requests in flight, streams included ([limits](#limits)) |
 | `yorvogate_spool_bytes`, `yorvogate_spool_loads` | gauge | `of` (`used`, `limit`) |
 | `yorvogate_scopes` | gauge | `listener`, `state` (`loaded`, `refused`, `reserved`) |
 | `yorvogate_docker_up`, `yorvogate_docker_defaults_safe` | gauge | — |
@@ -642,7 +671,7 @@ Every label's values are bounded, so the series don't grow with traffic. Without
 
 **When Docker doesn't answer** (it's restarting), YorvoGate treats Docker's defaults as unread from that request on. Scoped requests are refused (503, `daemon.defaults-unread`) until it has read them again, which it tries about every second. So no request is forwarded under the defaults of the Docker before a restart, even one shorter than the 60-second read.
 
-**`auth failed` lines are limited:** at most 10 a minute from one source (an IPv6 source counts by its /64) and 600 a minute in all. The rest are counted (`yorvogate_auth_log_dropped_total`), and one `auth failed lines dropped` line says how many, once a minute. The refusals themselves, and `yorvogate_auth_failures_total`, are never limited.
+**`auth failed` lines are limited:** at most 10 a minute from one source (an IPv6 source counts by its /64) and 600 a minute in all. The rest are counted (`yorvogate_auth_log_dropped_total`), and one `auth failed lines dropped` line says how many, once a minute. The refusals themselves, and `yorvogate_auth_failures_total`, are never limited. **So are the `refused` lines of a scope past its [limits](#limits)** (`scope.too-many-requests`, `scope.too-many-connections`): 10 a minute per scope and 600 in all, the rest counted (`yorvogate_limit_log_dropped_total`, and `yorvogate_refusals_total` counts every refusal), with one `refused lines dropped` line a minute.
 
 ## Logs
 
