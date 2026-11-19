@@ -58,7 +58,7 @@ func limitedGate(t *testing.T, d *docker, limits string, unauthenticated int) (s
 	}
 
 	server := NewServer(g)
-	listener := LimitListener(raw, unauthenticated)
+	listener := ScopedLimitListener(raw, unauthenticated)
 
 	go func() { _ = server.Serve(listener) }()
 
@@ -584,5 +584,68 @@ func TestAScopesSocketAcceptsItsLimit(t *testing.T) {
 
 	if status, _, _ := waiting.answer(); status != http.StatusOK {
 		t.Fatalf("jane's third connection, one closed: %d", status)
+	}
+}
+
+// limits.connections bounds scoped listeners only: with every one of its connections a scope's, a
+// trusted listener's request and the admin listener's /readyz are answered (R1, 0.4-d2's review).
+func TestTheTotalBoundsScopedListenersOnly(t *testing.T) {
+	d := startDocker(t)
+
+	total.mu.Lock()
+	held := total.used
+	total.mu.Unlock()
+
+	LimitConnections(held + 4)
+	defer LimitConnections(config.DefaultConnections)
+
+	addr, _, c := limitedGate(t, d, "{}", MaxConnections)
+
+	// The scoped listeners' total, taken by jane
+	for range 4 {
+		if status, _, _ := dial(t, addr).ask("jane", token); status != http.StatusOK {
+			t.Fatalf("jane: %d", status)
+		}
+	}
+
+	waiting := dial(t, addr)
+	waiting.send("kim", kimToken)
+
+	_ = waiting.conn.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, err := waiting.read.Peek(1); err == nil {
+		t.Fatal("a scoped connection past the total was served")
+	}
+
+	serve := func(h http.Handler) string {
+		raw, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		server := NewServer(h)
+		go func() { _ = server.Serve(LimitListener(raw, MaxConnections)) }()
+		t.Cleanup(func() { _ = server.Close() })
+
+		return raw.Addr().String()
+	}
+
+	trusted, err := config.Parse([]byte("version: 1\nupstream: unix://" + d.socket + "\nspool: {dir: " + t.TempDir() + "}\nlisteners:\n  - {name: ops, address: 'tcp://127.0.0.1:2391', mode: trusted, allow: {system: read}}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	log, _ := checkedLog(t)
+	ops := serve(New(trusted, trusted.Listeners[0], NewUpstream(trusted, log), Registry(trusted), readDefaults(trusted), NewSpool(trusted), log))
+	admin := serve(Admin(NewLive(c, "sha"), NewMetrics(false), readDefaults(c), Registry(c), NewSpool(c)))
+
+	for name, path := range map[string]string{ops: "/v1.56/version", admin: "/readyz"} {
+		conn := dial(t, name)
+		if _, err := io.WriteString(conn.conn, "GET "+path+" HTTP/1.1\r\nHost: docker\r\n\r\n"); err != nil {
+			t.Fatal(err)
+		}
+
+		if status, _, _ := conn.answer(); status == 0 {
+			t.Fatalf("%s: no answer", path)
+		}
 	}
 }

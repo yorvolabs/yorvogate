@@ -310,14 +310,14 @@ A scope's image archive is kept on disk while it's checked, then forwarded from 
 
 ## Limits
 
-One scope can't starve the others. On a scoped listener, each scope may hold so much, and every listener's connections together are bounded, whatever the number of scopes:
+One scope can't starve the others. On a scoped listener, each scope may hold so much, and every scoped listener's connections together are bounded, whatever the number of scopes:
 
 ```yaml
 version: 1
 upstream: unix:///var/run/docker.sock
 state_file: /var/lib/yorvogate/state.json
 limits:
-  connections: 4096   # every listener's connections together (the default)
+  connections: 4096   # every scoped listener's connections together (the default)
 listeners:
   - name: tenants
     address: tcp://127.0.0.1:2376
@@ -330,7 +330,7 @@ listeners:
 
 - **A scope's requests** (`limits.requests`, by default 64): its requests being decided or answered, an open stream (attach, exec, logs that follow, events, a pull's progress) counted for as long as it's open. One more is refused with 429 (`scope.too-many-requests`) and `Retry-After`. A Compose project's `up` has about one request per service in flight at once, plus `logs -f` and `events`; `yorvogate_requests_in_flight` (with `admin.scope_labels`, by scope) shows a real peak. It bounds what a slow client holds too: an upload that trickles in holds one of its scope's requests for as long as it lasts. The 60-second stall on an image archive or an archive put into a container ends only a body that stops arriving.
 - **A scope's connections** (`limits.connections`, by default 64). On a token or mTLS listener a connection is a scope's from its first authenticated request, and stays that scope's: a request on it with another scope's credentials is refused (`scope.connection-bound`) and the connection closed. A scope's connection past its limit is refused with 429 (`scope.too-many-connections`) and closed. On `scope_sockets`, a scope's socket accepts that many connections at once, and the next waits.
-- **Every listener's connections** (`limits.connections` at the top level, by default 4096): a bound on file descriptors. Past it, a new connection on any listener waits until one closes.
+- **Every scoped listener's connections** (`limits.connections` at the top level, by default 4096): a bound on file descriptors. Past it, a new connection on any scoped listener waits until one closes. Trusted listeners and the admin listener aren't counted (each keeps its own 256), so `/readyz`, `/metrics` and an operator's listener are answered when scopes hold every connection. In all, YorvoGate's connections are at most `limits.connections` + 256 × (trusted listeners + admin), plus Docker's: give its process file descriptors for twice that.
 - **Connections that haven't authenticated** on a token or mTLS listener: at most 256 at once, the listener's own bound. A connection that becomes a scope's no longer counts there, so connections that never authenticate can hold back new connections, never a scope's open ones. A trusted listener's 256 are all of its connections.
 
 `limits` on a scoped listener changes with a [reload](#reloading-the-configuration): a lowered limit applies to the next request, and those in flight finish. The top level's needs a restart.

@@ -317,7 +317,7 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		answerRefusal(w, refused)
 
 		// One past its scope's limits is closed at once, not after the server's half-second linger,
-		// in which it would hold one of every listener's connections (a scope reconnecting fast
+		// in which it would hold one of every scoped listener's connections (a scope reconnecting fast
 		// enough would take them all)
 		if refused.closes {
 			closeSoon(w)

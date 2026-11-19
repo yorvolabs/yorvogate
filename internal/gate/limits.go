@@ -15,7 +15,7 @@ import (
 
 // One scope can't starve the others: on a scoped listener, each scope may have at most so many
 // requests in flight (limits.requests, streams included) and so many connections open
-// (limits.connections); and every listener's connections together are bounded (limits.connections at
+// (limits.connections); and every scoped listener's connections together are bounded (limits.connections at
 // the top level), whatever the number of scopes.
 //
 // On a token or mTLS listener a connection is no scope's until its first request authenticates:
@@ -68,15 +68,15 @@ func (s *slots) give() {
 	s.mu.Unlock()
 }
 
-// totalLimit is every listener's connections' bound together (LimitConnections).
+// totalLimit is every scoped listener's connections' bound together (LimitConnections).
 var totalLimit atomic.Int64
 
 func init() { totalLimit.Store(config.DefaultConnections) }
 
-// total is every listener's connections together.
+// total is every scoped listener's connections together.
 var total = newSlots(func() int { return int(totalLimit.Load()) })
 
-// LimitConnections bounds every listener's connections together (the configuration's
+// LimitConnections bounds every scoped listener's connections together (the configuration's
 // limits.connections), from the next one accepted.
 func LimitConnections(n int) {
 	totalLimit.Store(int64(n))
@@ -210,19 +210,29 @@ func (g *Gate) limited(r *http.Request, scope string) error {
 }
 
 // LimitListener accepts at most n connections at once; past that, Accept waits for one to close.
-// Every connection also holds one of every listener's together (LimitConnections).
+// A trusted listener's, or the admin listener's: they keep answering whatever scoped clients hold, so
+// an operator and the monitoring can act when scopes are at the bound.
 func LimitListener(l net.Listener, n int) net.Listener {
+	return &limitListener{Listener: l, slots: newSlots(func() int { return n }), done: make(chan struct{})}
+}
+
+// ScopedLimitListener is LimitListener for a scoped listener: each of its connections also holds
+// one of every scoped listener's together (LimitConnections).
+func ScopedLimitListener(l net.Listener, n int) net.Listener {
 	return limitListenerBy(l, func() int { return n })
 }
 
+// limitListenerBy is a scoped listener's, under a limit that may change (a scope's socket's).
 func limitListenerBy(l net.Listener, limit func() int) *limitListener {
-	return &limitListener{Listener: l, slots: newSlots(limit), done: make(chan struct{})}
+	return &limitListener{Listener: l, slots: newSlots(limit), total: total, done: make(chan struct{})}
 }
 
 type limitListener struct {
 	net.Listener
 
 	slots *slots
+	// Every scoped listener's together (nil: a trusted or admin listener's, not bound by them)
+	total *slots
 	done  chan struct{}
 	once  sync.Once
 }
@@ -232,7 +242,7 @@ func (l *limitListener) Accept() (net.Conn, error) {
 		return nil, net.ErrClosed
 	}
 
-	if !total.wait(l.done) {
+	if l.total != nil && !l.total.wait(l.done) {
 		l.slots.give()
 
 		return nil, net.ErrClosed
@@ -241,7 +251,10 @@ func (l *limitListener) Accept() (net.Conn, error) {
 	conn, err := l.Listener.Accept()
 	if err != nil {
 		l.slots.give()
-		total.give()
+
+		if l.total != nil {
+			l.total.give()
+		}
 
 		return nil, err
 	}
@@ -285,7 +298,9 @@ func (c *limitConn) Close() error {
 			c.listener.slots.give()
 		}
 
-		total.give()
+		if c.listener.total != nil {
+			c.listener.total.give()
+		}
 
 		if c.scoped != nil {
 			c.scoped()
@@ -402,8 +417,8 @@ func closeSoon(w http.ResponseWriter) {
 	_ = conn.Close()
 }
 
-// underlying is a connection under every wrapper of the gate's (a limit, the tracking), TLS's
-// included.
+// underlying is a connection under every wrapper of the gate's (a limit, the tracking). A TLS
+// connection is its own: its CloseWrite sends TLS's close_notify.
 func underlying(c net.Conn) net.Conn {
 	for {
 		w, ok := c.(interface{ wrapped() net.Conn })

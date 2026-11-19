@@ -27,9 +27,9 @@
     "limits": {
       "type": "object",
       "additionalProperties": false,
-      "description": "What every listener's connections may hold together. Changed only by a restart.",
+      "description": "What every scoped listener's connections may hold together (trusted and admin listeners aren't counted). Changed only by a restart.",
       "properties": {
-        "connections": {"type": "integer", "minimum": 16, "maximum": 1048576, "description": "Connections every listener may have open together (default 4096)."}
+        "connections": {"type": "integer", "minimum": 16, "maximum": 1048576, "description": "Connections every scoped listener may have open together (default 4096)."}
       }
     },
     "listeners": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/listener"}}

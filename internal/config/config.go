@@ -73,7 +73,7 @@ type Config struct {
 	// ShutdownGrace is how long a stopping YorvoGate waits for requests and streams to end before it
 	// closes them ("8s"; from 0s to 10m; by default 8s, under Docker's 10-second stop timeout).
 	ShutdownGrace string `yaml:"shutdown_grace"`
-	// Limits is what every listener's connections may hold together.
+	// Limits is what every scoped listener's connections may hold together.
 	Limits Limits `yaml:"limits"`
 
 	lowest, highest route.Version
@@ -186,10 +186,11 @@ type Listener struct {
 	Limits ListenerLimits `yaml:"limits"`
 }
 
-// Limits is the process's: what every listener's connections may hold together.
+// Limits is the process's: what every scoped listener's connections may hold together.
 type Limits struct {
-	// Connections is how many connections every listener may have open together (by default
-	// 4096): a bound on file descriptors, whatever the number of scopes.
+	// Connections is how many connections every scoped listener may have open together (by
+	// default 4096): a bound on file descriptors, whatever the number of scopes. Trusted listeners and
+	// the admin listener aren't counted, so an operator and the monitoring are answered at the bound.
 	Connections int `yaml:"connections"`
 }
 

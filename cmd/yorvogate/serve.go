@@ -250,7 +250,12 @@ func (p *process) openOn(l config.Listener, raw net.Listener) error {
 
 	// Its connections tracked, upgraded ones (streams) included, so a stop or a reload can close
 	// them; TLS on top
-	tracked := gate.Track(gate.LimitListener(raw, gate.MaxConnections))
+	limit := gate.LimitListener
+	if l.Mode == config.Scoped {
+		limit = gate.ScopedLimitListener
+	}
+
+	tracked := gate.Track(limit(raw, gate.MaxConnections))
 
 	var listener net.Listener = tracked
 	if files := p.certificates.For(l.Name); files != nil {
