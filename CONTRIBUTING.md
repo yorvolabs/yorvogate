@@ -52,7 +52,7 @@ docker compose -f compose.dev.yaml run --rm go make build && test/conformance/ru
 
 ## A new Docker major
 
-A new major is certified by review, not by its API version: it may change what fields and query keys YorvoGate already allows mean (ARC-0047 was one such change).
+A new major is certified by review, not by its API version: it may change what fields and query keys YorvoGate already allows mean, with the same names and types.
 
 1. **Do every step of [a new Docker API version](#a-new-docker-api-version)** for its first API version.
 2. **Read the new major's handlers** (in moby's source, at the major's first release tag) for every endpoint YorvoGate allows on a scoped listener. Look for a field or query key whose meaning changed, not only the added ones `apidiff` lists. Write what was read, and what changed, in the PR.
