@@ -267,6 +267,9 @@ func (s *Spool) spoolFile() (*os.File, error) {
 // deadline on the connection (deadline), or, where the connection can't take one, the stream is
 // closed when the time passes.
 type stalled struct {
+	// Set once it has failed the read for a stall
+	tripped atomic.Bool
+
 	r        io.Reader
 	deadline func(time.Time) error
 	timer    *time.Timer
@@ -297,6 +300,8 @@ func (s *stalled) Read(p []byte) (int, error) {
 	if s.timer != nil {
 		select {
 		case <-s.fired:
+			s.tripped.Store(true)
+
 			return n, errStalled
 		default:
 		}
@@ -307,10 +312,22 @@ func (s *stalled) Read(p []byte) (int, error) {
 	}
 
 	if err != nil && errors.Is(err, os.ErrDeadlineExceeded) {
+		s.tripped.Store(true)
+
 		return n, errStalled
 	}
 
 	return n, err
+}
+
+// stalledKey holds, in a forwarded request's context, its body's stall timeout: Docker's error is
+// then told from the body's stopping.
+type stalledKey struct{}
+
+// stalledBody is a request body forwarded as it comes, failing once it stops arriving.
+type stalledBody struct {
+	*stalled
+	io.Closer
 }
 
 // stop ends the timeout: the connection's deadline goes, for what's left of the request.

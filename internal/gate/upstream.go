@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -98,6 +99,14 @@ func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
 		// Logs, attach, events and pulls are streams: each piece is passed on as it comes.
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			// The client's body stopped arriving: the client's doing, not Docker's (the server ends
+			// the request when its body's read fails, so the error here may be only that)
+			if body, ok := r.Context().Value(stalledKey{}).(*stalled); errors.Is(err, errStalled) || ok && body.tripped.Load() {
+				answerRefusal(w, refuse(http.StatusBadRequest, CodeBodyStalled, at(inBody, ""), nothingAllowed, "the request's body stopped arriving (nothing for %v)", loadStall))
+
+				return
+			}
+
 			log.Error("Docker didn't answer", "method", r.Method, "path", r.URL.Path, "error", err)
 
 			if failed, ok := r.Context().Value(dockerFailedKey{}).(func(error)); ok {

@@ -535,7 +535,17 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			return out, decision, nil
 		case sendsArchive[req.Endpoint.Name]:
 			// An archive put into one of its containers goes as it comes: YorvoGate doesn't read it.
+			// A body that stops arriving (nothing for loadStall) ends the request, so a silent client
+			// can't hold Docker's connection; a slow one is held by limits.requests.
 			out.Header.Set("Content-Type", "application/x-tar")
+
+			body := newStalled(r.Body, r.Body.Close, readDeadline(r.Context()))
+			if h := heldOf(r.Context()); h != nil {
+				h.add(body.stop)
+			}
+
+			out.Body = stalledBody{body, r.Body}
+			out = out.WithContext(context.WithValue(out.Context(), stalledKey{}, body))
 
 			return out, decision, nil
 		}

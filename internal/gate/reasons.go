@@ -34,6 +34,7 @@ const (
 	CodeBodyInvalid     Code = "body.invalid"
 	CodeBodyTooLarge    Code = "body.too-large"
 	CodeBodyUnreadable  Code = "body.unreadable"
+	CodeBodyStalled     Code = "body.stalled"
 	CodeFieldNotAllowed Code = "body.field-not-allowed"
 
 	CodeHeaderTwice       Code = "header.twice"
@@ -103,6 +104,7 @@ var Codes = map[Code]string{
 	CodeBodyInvalid:     "The body isn't one value of what Docker reads there.",
 	CodeBodyTooLarge:    "The body is larger than body_limit.",
 	CodeBodyUnreadable:  "The body couldn't be read (it stopped, or came too slowly).",
+	CodeBodyStalled:     "A body forwarded as it comes (an archive put into a container) stopped arriving.",
 	CodeFieldNotAllowed: "A field of the body is set that a scope may not set.",
 
 	CodeHeaderTwice:       "A header YorvoGate reads or forwards is given more than once.",

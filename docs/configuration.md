@@ -504,6 +504,7 @@ A refusal that collects several problems (a container's, network's or volume's c
 | `body.field-not-allowed` | A field of the body is set that a scope may not set. |
 | `body.invalid` | The body isn't one value of what Docker reads there. |
 | `body.missing` | The endpoint takes a body, and none came. |
+| `body.stalled` | A body forwarded as it comes (an archive put into a container) stopped arriving. |
 | `body.too-large` | The body is larger than body_limit. |
 | `body.unexpected` | The endpoint takes no body, and one came. |
 | `body.unreadable` | The body couldn't be read (it stopped, or came too slowly). |

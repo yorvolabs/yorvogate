@@ -385,3 +385,48 @@ func TestALoweredLimitKeepsRequestsInFlight(t *testing.T) {
 		t.Fatalf("jane under the lowered limit: %d", status)
 	}
 }
+
+// A body forwarded as it comes (an archive put into a container) that stops arriving ends its
+// request: refused as stalled, Docker's connection closed, the scope's slot given back.
+func TestAnArchiveThatStopsArrivingIsEnded(t *testing.T) {
+	old := loadStall
+	loadStall = 200 * time.Millisecond
+
+	defer func() { loadStall = old }()
+
+	d := startDocker(t)
+	server := gate(t, d, "sites")
+
+	body, sending := io.Pipe()
+	defer sending.Close()
+
+	go func() { _, _ = sending.Write([]byte("the first bytes of a tar")) }()
+
+	req, _ := http.NewRequest("PUT", server.URL+"/v1.56/containers/jane-php-1/archive?path=%2Ftmp", body)
+	req.Header.Set("Content-Type", "application/x-tar")
+
+	for k, v := range asJane {
+		req.Header.Set(k, v)
+	}
+
+	started := time.Now()
+
+	res, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+
+	answer, _ := io.ReadAll(res.Body)
+
+	var refused struct{ Code string }
+	_ = json.Unmarshal(answer, &refused)
+
+	if res.StatusCode != http.StatusBadRequest || refused.Code != string(CodeBodyStalled) {
+		t.Fatalf("%d %s", res.StatusCode, answer)
+	}
+
+	if took := time.Since(started); took > 5*time.Second {
+		t.Fatalf("ended after %v", took)
+	}
+}
