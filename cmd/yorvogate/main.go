@@ -2,11 +2,12 @@
 //
 //	yorvogate serve --config /etc/yorvogate/yorvogate.yaml
 //	yorvogate check --config /etc/yorvogate/yorvogate.yaml
-//	yorvogate version
+//	yorvogate version [--json]
 package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -35,7 +36,7 @@ func main() {
 
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: yorvogate serve|check|version [--config FILE] [--docker (check)]")
+		fmt.Fprintln(stderr, "usage: yorvogate serve|check|version [--config FILE] [--docker (check)] [--json (version)]")
 
 		return 2
 	}
@@ -45,6 +46,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	path := flags.String("config", "/etc/yorvogate/yorvogate.yaml", "the configuration file")
 	docker := flags.Bool("docker", false, "check: also read Docker's defaults, through the configuration's upstream")
+	asJSON := flags.Bool("json", false, "version: as JSON, with the Docker API versions this build serves")
 
 	if err := flags.Parse(args[1:]); err != nil {
 		return 2
@@ -52,6 +54,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	switch command {
 	case "version":
+		if *asJSON {
+			return printVersion(stdout, stderr)
+		}
+
 		fmt.Fprintln(stdout, "yorvogate", version)
 
 		return 0
@@ -504,4 +510,28 @@ func listen(l config.Listener) (net.Listener, error) {
 	}
 
 	return gate.Listen(network[1], gid)
+}
+
+// versionInfo is `yorvogate version --json` (yorvogate-version.v1.schema.json): the build's version
+// and the Docker API versions it serves, which CI's nightly job compares with Docker's newest.
+type versionInfo struct {
+	Version string `json:"version"`
+	API     struct {
+		Min string `json:"min"`
+		Max string `json:"max"`
+	} `json:"api"`
+}
+
+func printVersion(stdout, stderr io.Writer) int {
+	var info versionInfo
+	info.Version = version
+	info.API.Min, info.API.Max = config.Lowest.String(), config.Highest.String()
+
+	if err := json.NewEncoder(stdout).Encode(info); err != nil {
+		fmt.Fprintln(stderr, "yorvogate:", err)
+
+		return 1
+	}
+
+	return 0
 }

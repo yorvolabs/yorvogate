@@ -235,3 +235,34 @@ func tlsFiles(t *testing.T) string {
 
 	return dir
 }
+
+// SUPPORT.md names the Docker majors .github/docker-majors lists: the release notes take theirs from
+// the file, so the two can't say different things.
+func TestSupportNamesTheCertifiedMajors(t *testing.T) {
+	listed, err := os.ReadFile("../../.github/docker-majors")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var majors []string
+
+	for line := range strings.SplitSeq(string(listed), "\n") {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			majors = append(majors, line)
+		}
+	}
+
+	if len(majors) == 0 {
+		t.Fatal(".github/docker-majors lists no major")
+	}
+
+	support, err := os.ReadFile("../../SUPPORT.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "**Certified Docker Engine majors:** " + strings.Join(majors, ", ") + "\n"
+	if !strings.Contains(string(support), want) {
+		t.Fatalf("SUPPORT.md doesn't say %q", want)
+	}
+}

@@ -1,0 +1,5 @@
+# The Docker Engine majors this branch is certified for, one per line: tested on each one's newest
+# patch nightly (docker-latest.yaml) and reviewed against its API handlers. Each release's notes name
+# them, and SUPPORT.md must say the same (TestSupportNamesTheCertifiedMajors). Certifying a major is a
+# reviewed PR adding its line (CONTRIBUTING.md, "A new Docker major").
+29

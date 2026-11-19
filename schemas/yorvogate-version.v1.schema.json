@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yorvolabs/yorvogate/schemas/yorvogate-version.v1.schema.json",
+  "title": "YorvoGate version, format 1",
+  "description": "What `yorvogate version --json` prints: the build's version and the Docker API versions it serves (docs/configuration.md#formats-and-versions). Open for additions at every level (ADR-0005, amendment 1).",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["version", "api"],
+  "properties": {
+    "version": {"type": "string", "description": "The release's version (0.4.0), or dev for a build that isn't one."},
+    "api": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["min", "max"],
+      "description": "The Docker API versions this build serves: a client negotiates within them, whatever Docker's own are.",
+      "properties": {
+        "min": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+        "max": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"}
+      }
+    }
+  }
+}

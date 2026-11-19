@@ -142,8 +142,12 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           DIGEST: ${{ steps.image.outputs.digest }}
         run: |
-          # The changelog's section for the version, and the image by digest
+          # The changelog's section for the version, the Docker majors it's certified for, and the
+          # image by digest
           awk -v v="$VERSION" '/^## \[/{ if (found) exit; if (index($0, "## [" v "]")) { found=1; next } } found' CHANGELOG.md > notes.md
+          majors=$(grep -Ev '^(#|$)' .github/docker-majors | paste -sd, - | sed 's/,/, /g')
+          [ -n "$majors" ] || { echo "::error::.github/docker-majors names no major."; exit 1; }
+          printf '\n**Certified for Docker Engine:** %s (see SUPPORT.md)\n' "$majors" >> notes.md
           printf '\n**Image:** `%s@%s`\n' "$IMAGE" "$DIGEST" >> notes.md
           prerelease=
           case "$VERSION" in *-*) prerelease=--prerelease ;; esac
