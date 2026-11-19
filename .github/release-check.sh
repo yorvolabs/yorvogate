@@ -37,6 +37,12 @@ fi
 
 commit=$(git rev-parse "refs/tags/$tag^{commit}")
 
+# The commit this run was started for (the tag moved since, and a newer run has it)
+if [ -n "${GITHUB_SHA:-}" ] && [ "$commit" != "$GITHUB_SHA" ]; then
+	echo "::error::The tag $tag is now on $commit, not on $GITHUB_SHA, which this run was started for: a newer run releases it, if it may be."
+	exit 1
+fi
+
 if ! git merge-base --is-ancestor "$commit" origin/main; then
 	echo "::error::The tag's commit $commit isn't on main."
 	exit 1
