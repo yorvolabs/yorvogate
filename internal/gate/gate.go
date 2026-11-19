@@ -59,7 +59,10 @@ type Gate struct {
 	dropped *sync.Map
 	// How long its recent decisions took, each endpoint's: a refusal is held as long (refusals.go)
 	decisions *decisionTimes
-	log       *slog.Logger
+	// What each scope holds on the listener: requests in flight, and (a token or mTLS listener's)
+	// connections (limits.go)
+	requests, connections *scopeCounts
+	log                   *slog.Logger
 	// The process's metrics (nil: none counted)
 	metrics *Metrics
 }
@@ -120,6 +123,7 @@ func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.
 	g := &Gate{
 		config: c, listener: l, upstream: upstream, registry: scopes, defaults: defaults, log: log.With("listener", l.Name),
 		inflight: newInflight(), closing: &atomic.Pointer[string]{}, streams: &streams{}, dropped: &sync.Map{}, decisions: &decisionTimes{},
+		requests: newScopeCounts(), connections: newScopeCounts(),
 	}
 	// A trusted listener's own lookups too: scope status lists a scope's taken names
 	g.docker = NewDocker(c.UpstreamSocket())
@@ -191,6 +195,8 @@ type refusal struct {
 	// An authentication failure's cause, logged once the client has its answer (so the answer's time
 	// doesn't depend on it): its fields
 	cause func() []any
+	// The connection is closed after the answer (one past its scope's limit, or another scope's)
+	closes bool
 }
 
 // authFailed is an authentication's refusal: auth.rejected, whatever the cause, logged afterwards.
@@ -240,7 +246,12 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// What the request holds until it's answered (its scope's request slot)
+	slots := &held{}
+	defer slots.release()
+
 	ctx := context.WithValue(withRuntime(r.Context(), g.config), controllerKey{}, http.NewResponseController(w))
+	ctx = context.WithValue(ctx, heldKey{}, slots)
 	r = r.WithContext(context.WithValue(ctx, startKey{}, time.Now()))
 
 	id, fields := requestFields(r)
@@ -269,11 +280,25 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			logged = append(logged, "codes", refused.codes(), "codes_total", refused.total)
 		}
 
-		entry.Warn("refused", append(logged, refused.logged...)...)
-
 		scopeName := ""
 		if decision != nil && decision.scope != nil {
 			scopeName = decision.scope.Name
+		}
+
+		// A scope past its limits is logged within the per-scope and global limits: its refusals can
+		// come by the thousand a second. Every one is counted.
+		write := true
+		if refused.code == CodeScopeRequests || refused.code == CodeScopeConnections {
+			var dropped int
+
+			write, dropped = g.metrics.limitLogged(scopeName, time.Now())
+			if dropped > 0 {
+				g.log.Warn("refused lines dropped", "log_version", LogVersion, "dropped", dropped)
+			}
+		}
+
+		if write {
+			entry.Warn("refused", append(logged, refused.logged...)...)
 		}
 
 		g.metrics.decided(g.listener.Name, g.endpointOf(r, decision), refused, scopeName, sinceStart(r.Context()))
@@ -285,11 +310,18 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// An authentication failure closes its connection: its cause is logged after the answer, and
 		// a next request on the same connection would wait for that, so its time would tell the cause.
 		// (It also bounds what a client that doesn't authenticate can do with one connection.)
-		if refused.cause != nil {
+		if refused.cause != nil || refused.closes {
 			w.Header().Set("Connection", "close")
 		}
 
 		answerRefusal(w, refused)
+
+		// One past its scope's limits is closed at once, not after the server's half-second linger,
+		// in which it would hold one of every scoped listener's connections (a scope reconnecting fast
+		// enough would take them all)
+		if refused.closes {
+			closeSoon(w)
+		}
 
 		// Why authentication failed, once the client has its answer: counted always, logged within
 		// the per-source and global limits (authlimit.go)
@@ -439,6 +471,11 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 
 		entry = entry.With("scope", s.Name)
 
+		// One scope can't starve the others: its requests in flight, and its connections (limits.go)
+		if err := g.limited(r, s.Name); err != nil {
+			return nil, &scoped{scope: s}, err
+		}
+
 		daemon, err := g.defaults.current(g.config)
 		if err != nil {
 			return nil, nil, err
@@ -505,6 +542,10 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			out = out.WithContext(context.WithValue(out.Context(), answerKey{}, decision.answer))
 		}
 
+		if decision.answerStream != nil {
+			out = out.WithContext(context.WithValue(out.Context(), answerStreamKey{}, decision.answerStream))
+		}
+
 		// Docker reads a request's parameters from its body too when the Content-Type says it's a
 		// form, and those win over the query YorvoGate checked. So the Content-Type Docker gets is
 		// YorvoGate's, from what's forwarded, never the client's.
@@ -519,7 +560,17 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 			return out, decision, nil
 		case sendsArchive[req.Endpoint.Name]:
 			// An archive put into one of its containers goes as it comes: YorvoGate doesn't read it.
+			// A body that stops arriving (nothing for loadStall) ends the request, so a silent client
+			// can't hold Docker's connection; a slow one is held by limits.requests.
 			out.Header.Set("Content-Type", "application/x-tar")
+
+			body := newStalled(r.Body, r.Body.Close, readDeadline(r.Context()))
+			if h := heldOf(r.Context()); h != nil {
+				h.add(body.stop)
+			}
+
+			out.Body = stalledBody{body, r.Body}
+			out = out.WithContext(context.WithValue(out.Context(), stalledKey{}, body))
 
 			return out, decision, nil
 		}

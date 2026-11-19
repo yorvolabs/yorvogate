@@ -115,6 +115,9 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 	// One spool for every listener: image loads are bounded across them all, and across reloads
 	p.spool = gate.NewSpool(c)
 
+	// Every listener's connections together (limits.connections: a restart changes it)
+	gate.LimitConnections(c.TotalConnections())
+
 	// Docker's defaults, read while scoped listeners serve: until they're read, and while they're
 	// unsafe, scoped requests are refused.
 	p.defaults = gate.NewDefaults(c)
@@ -151,7 +154,7 @@ func serve(ctx context.Context, path string, log *slog.Logger) error {
 		p.admin = &http.Server{Handler: gate.Admin(p.live, p.metrics, p.defaults, registry, p.spool), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
 
 		go func() {
-			if err := p.admin.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+			if err := p.admin.Serve(gate.LimitListener(listener, gate.MaxConnections)); !errors.Is(err, http.ErrServerClosed) {
 				p.failed <- fmt.Errorf("admin: %w", err)
 			}
 		}()
@@ -247,7 +250,12 @@ func (p *process) openOn(l config.Listener, raw net.Listener) error {
 
 	// Its connections tracked, upgraded ones (streams) included, so a stop or a reload can close
 	// them; TLS on top
-	tracked := gate.Track(gate.LimitListener(raw, gate.MaxConnections))
+	limit := gate.LimitListener
+	if l.Mode == config.Scoped {
+		limit = gate.ScopedLimitListener
+	}
+
+	tracked := gate.Track(limit(raw, gate.MaxConnections))
 
 	var listener net.Listener = tracked
 	if files := p.certificates.For(l.Name); files != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -72,20 +73,40 @@ func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
 				}, true
 			}
 
-			if !ok || res.StatusCode != http.StatusOK {
+			stream, streamed := res.Request.Context().Value(answerStreamKey{}).(func(io.Reader) ([]byte, error))
+
+			if !ok && !streamed || res.StatusCode != http.StatusOK {
 				return nil
 			}
 
-			body, err := io.ReadAll(io.LimitReader(res.Body, 64<<20))
-			_ = res.Body.Close()
+			var changed []byte
 
-			if err != nil {
-				return err
-			}
+			if streamed {
+				// A list of the host's objects: read as it comes, only the scope's kept
+				var err error
 
-			changed, err := change(body)
-			if err != nil {
-				return err
+				changed, err = stream(res.Body)
+				_ = res.Body.Close()
+
+				if err != nil {
+					return err
+				}
+			} else {
+				// One object's: read whole, within its bound
+				body, err := io.ReadAll(io.LimitReader(res.Body, maxAnswer+1))
+				_ = res.Body.Close()
+
+				if err != nil {
+					return err
+				}
+
+				if int64(len(body)) > maxAnswer {
+					return answerTooLarge("over %d bytes", maxAnswer)
+				}
+
+				if changed, err = change(body); err != nil {
+					return err
+				}
 			}
 
 			res.Body = io.NopCloser(bytes.NewReader(changed))
@@ -98,6 +119,23 @@ func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
 		// Logs, attach, events and pulls are streams: each piece is passed on as it comes.
 		FlushInterval: -1,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			// An answer YorvoGate doesn't pass on (too large): refused, saying so
+			var refused *refusal
+			if errors.As(err, &refused) {
+				log.Warn("Docker's answer not passed on", "method", r.Method, "path", r.URL.Path, "code", refused.code, "reason", refused.reason)
+				answerRefusal(w, refused)
+
+				return
+			}
+
+			// The client's body stopped arriving: the client's doing, not Docker's (the server ends
+			// the request when its body's read fails, so the error here may be only that)
+			if body, ok := r.Context().Value(stalledKey{}).(*stalled); errors.Is(err, errStalled) || ok && body.tripped.Load() {
+				answerRefusal(w, refuse(http.StatusBadRequest, CodeBodyStalled, at(inBody, ""), nothingAllowed, "the request's body stopped arriving (nothing for %v)", loadStall))
+
+				return
+			}
+
 			log.Error("Docker didn't answer", "method", r.Method, "path", r.URL.Path, "error", err)
 
 			if failed, ok := r.Context().Value(dockerFailedKey{}).(func(error)); ok {
@@ -176,6 +214,12 @@ func versionAnswer(body []byte, lowest, highest route.Version) ([]byte, error) {
 
 // answerKey carries, in a forwarded request's context, the change a rule makes to Docker's answer.
 type answerKey struct{}
+
+// answerStreamKey carries the change a rule makes to Docker's answer as it's read.
+type answerStreamKey struct{}
+
+// maxAnswer bounds an answer of one object's that a rule changes (an inspection, info): kilobytes.
+var maxAnswer int64 = 16 << 20
 
 // Forward sends an allowed request to Docker, and its answer back. An HTTP upgrade (attach, exec)
 // becomes a stream both ways once Docker accepts it.

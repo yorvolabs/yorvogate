@@ -34,6 +34,7 @@ const (
 	CodeBodyInvalid     Code = "body.invalid"
 	CodeBodyTooLarge    Code = "body.too-large"
 	CodeBodyUnreadable  Code = "body.unreadable"
+	CodeBodyStalled     Code = "body.stalled"
 	CodeFieldNotAllowed Code = "body.field-not-allowed"
 
 	CodeHeaderTwice       Code = "header.twice"
@@ -62,6 +63,10 @@ const (
 	CodePlatform   Code = "policy.platform"
 	CodeImage      Code = "policy.image"
 
+	CodeScopeRequests        Code = "scope.too-many-requests"
+	CodeScopeConnections     Code = "scope.too-many-connections"
+	CodeScopeConnectionBound Code = "scope.connection-bound"
+
 	CodeLoadTooLarge   Code = "load.too-large"
 	CodeLoadSpoolFull  Code = "load.spool-full"
 	CodeLoadBusy       Code = "load.busy"
@@ -75,6 +80,7 @@ const (
 	CodeDefaultsUnsafe    Code = "daemon.defaults-unsafe"
 	CodeDaemonUnknown     Code = "daemon.unavailable"
 	CodeDockerUnreachable Code = "daemon.unreachable"
+	CodeAnswerTooLarge    Code = "daemon.answer-too-large"
 )
 
 // Codes are the codes and what each means: the configuration docs' table (docs/configuration.md#reason-codes).
@@ -99,6 +105,7 @@ var Codes = map[Code]string{
 	CodeBodyInvalid:     "The body isn't one value of what Docker reads there.",
 	CodeBodyTooLarge:    "The body is larger than body_limit.",
 	CodeBodyUnreadable:  "The body couldn't be read (it stopped, or came too slowly).",
+	CodeBodyStalled:     "A body forwarded as it comes (an archive put into a container) stopped arriving.",
 	CodeFieldNotAllowed: "A field of the body is set that a scope may not set.",
 
 	CodeHeaderTwice:       "A header YorvoGate reads or forwards is given more than once.",
@@ -127,6 +134,10 @@ var Codes = map[Code]string{
 	CodePlatform:   "A platform that isn't the host's, nor one the listener allows.",
 	CodeImage:      "An image reference that isn't valid, or missing.",
 
+	CodeScopeRequests:        "The scope has as many requests in flight as the listener allows (limits.requests): retry when one ends (Retry-After).",
+	CodeScopeConnections:     "The scope has as many connections open as the listener allows (limits.connections): use one of them. The connection is closed.",
+	CodeScopeConnectionBound: "The connection is another scope's: a connection is the scope of its first request. The connection is closed.",
+
 	CodeLoadTooLarge:   "The image archive is larger than load_limit, or than the spool (spool.limit).",
 	CodeLoadSpoolFull:  "The image spool is full now: retry (Retry-After).",
 	CodeLoadBusy:       "Too many image loads at once: retry (Retry-After).",
@@ -140,6 +151,7 @@ var Codes = map[Code]string{
 	CodeDefaultsUnsafe:    "Docker's defaults would widen what scopes may do (or couldn't be read).",
 	CodeDaemonUnknown:     "Something of Docker's own that a check needs couldn't be read (its platform).",
 	CodeDockerUnreachable: "Docker didn't answer a request YorvoGate forwarded.",
+	CodeAnswerTooLarge:    "Docker's answer is larger than YorvoGate passes on (an image of its list over 1 MiB, the scope's list over 64 MiB, another answer over 16 MiB).",
 }
 
 // problem is one of the reasons a request is refused: its code, where it is, what's allowed there,

@@ -9,7 +9,7 @@
   "properties": {
     "time": {"type": "string"},
     "level": {"enum": ["DEBUG", "INFO", "WARN", "ERROR"], "x-list": "closed", "description": "Closed: the levels."},
-    "msg": {"type": "string", "x-list": "open", "examples": ["allowed", "refused", "auth failed", "stream opened", "stream closed", "configuration reloaded", "configuration not reloaded", "stopping", "stopped"]},
+    "msg": {"type": "string", "x-list": "open", "examples": ["allowed", "refused", "auth failed", "stream opened", "stream closed", "configuration reloaded", "configuration not reloaded", "stopping", "stopped", "auth failed lines dropped", "refused lines dropped"]},
     "log_version": {"const": 1},
     "request_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
     "client_request_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},

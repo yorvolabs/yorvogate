@@ -25,7 +25,7 @@ jobs:
   conformance:
     name: Conformance (a real Docker, real Compose; ${{ matrix.store }} image store, ${{ matrix.daemon }} daemon)
     runs-on: ubuntu-26.04
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -102,3 +102,20 @@ jobs:
         run: test/conformance/run.sh
       - name: The gate's logs are the log schema's, and carry the codes the attacks call for
         run: docker compose -f compose.dev.yaml run --rm -T -e YGC_LOGS=/src/test/conformance/out go go test -count=1 -run TestConformanceLogs ./cmd/yorvogate/
+      # The roadmap's load test (0.4-d): one scope's 1,000 slow uploads, or 1,000 connections that send
+      # nothing, don't move another's p99; on one leg (what it measures isn't the store's or the
+      # daemon's), against the gate the suite ran
+      - name: Set up Go (the load test's)
+        if: matrix.store == 'containerd' && matrix.daemon == 'default'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: test/load/go.mod
+          cache: false
+      - name: One scope can't starve another
+        if: matrix.store == 'containerd' && matrix.daemon == 'default'
+        working-directory: test/load
+        env:
+          CGO_ENABLED: '0'
+          YGL_GATE: ${{ github.workspace }}/bin/yorvogate
+          YGL_DOCKER: /var/run/docker.sock
+        run: go test -count=1 -v -timeout 30m ./

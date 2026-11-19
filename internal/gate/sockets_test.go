@@ -28,6 +28,13 @@ const (
 // its sockets' folder.
 func boundGate(t *testing.T, d *docker, group string) (*Sockets, string, string) {
 	t.Helper()
+
+	return boundGateWith(t, d, group, "")
+}
+
+// boundGateWith is boundGate, its listener given more keys (", limits: {connections: 2}").
+func boundGateWith(t *testing.T, d *docker, group, more string) (*Sockets, string, string) {
+	t.Helper()
 	scopes := t.TempDir()
 
 	// A socket's path is at most 107 bytes: a short folder of its own
@@ -45,6 +52,8 @@ func boundGate(t *testing.T, d *docker, group string) (*Sockets, string, string)
 	if group != "" {
 		listener += ", socket_group: '" + group + "'"
 	}
+
+	listener += more
 
 	c, err := config.Parse([]byte("version: 1\nupstream: unix://" + d.socket + "\nlisteners:\n" + listener + "}\n"))
 	if err != nil {
