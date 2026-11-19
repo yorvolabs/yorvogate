@@ -1,12 +1,24 @@
-<!-- Thanks for contributing! For a bigger change, please link the issue where the approach was agreed. -->
+<!-- Thanks for contributing! For a bigger change, please link the issue where the approach was agreed.
+The title is the squashed commit's subject: imperative, at most 72 characters, with references at the
+end in parentheses, e.g. "Bound image loads with a shared spool (0.4-d1)". This description is its
+body. -->
 
-## What and why
+## Why
 
-<!-- What changes, and why. Link the issue, e.g. "Fixes #123". -->
+<!-- The problem, and why this is the way to solve it. -->
 
-## How it was tested
+## What changes
 
-<!-- The tests you added (a hostile case for every rule), and anything you checked against a real Docker. -->
+<!-- What behaves differently, as bullets, rather than which files changed. -->
+
+## Tested
+
+<!-- What ran: the tests you added (a hostile case for every rule), the checks, anything you checked
+against a real Docker. And what didn't, with why. -->
+
+## Refs
+
+<!-- The issue, roadmap item or finding, e.g. "Fixes #123", "0.4-d2", "RT-04". -->
 
 ## Checklist
 

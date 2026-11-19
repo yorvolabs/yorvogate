@@ -1,0 +1,4 @@
+# Who must approve a change to what releases YorvoGate (ADR-0010 §6). It binds once the main branch's
+# ruleset requires a code owner's review.
+/.github/release-signers @dpoposki
+/.github/workflows/ @dpoposki

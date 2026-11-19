@@ -1,0 +1,7 @@
+# Who may sign YorvoGate's release tags: git's allowed-signers format (ssh-keygen(1), ALLOWED SIGNERS),
+# one line per key: <principal> namespaces="git" <key type> <public key>
+# The Release workflow releases only a tag signed by one of these keys, as main lists them
+# (.github/release-check.sh): a tag's own commit can't add its signer.
+#
+# NO KEY YET: the maintainer adds his signing key's public half here, in a pull request of its own.
+# Until then every release is refused.
