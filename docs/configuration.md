@@ -24,6 +24,7 @@ state_file: /var/lib/yorvogate/state.json  # scopes' last valid claims, kept acr
 #   ratio: 16                           # what an archive may decompress to: at most 16 times its size (0: off)
 #   unpacked: 34359738368               # ...and at most this, whatever its size (by default 4 × load_limit)
 # daemon: {without_lsm: true}           # accept a Docker with neither AppArmor nor SELinux (see Docker's defaults)
+# shutdown_grace: 8s                    # how long a stop waits for requests and streams (0s to 10m; see Stopping)
 
 listeners:                              # at least one
   - name: orchestrator                  # lowercase letters, digits and dashes; in logs
@@ -436,6 +437,30 @@ GET /_yorvogate/v1/scopes/<name>?listener=<scoped listener>&absent
 - The answer is open for additions: a release may add optional fields within version 1 (0.4 added `taken`), so ignore the fields you don't know. Validate with the schema of the release you run.
 - `taken` (only when it's `loaded`, and only when there are any): the containers, networks and volumes under the scope's prefixes that carry another owner's label, each with its `kind`, `name` and `owner` (`scope <name>`, or `<label>=<value>` of an owner no scope has now). Another scope made them before this one's file was valid: a shorter prefix's scope while this one didn't exist yet (jane creating `jane-shop-web-1` before site `jane-shop`), or a scope since removed. The scope can't create those names: its create is refused as taken (409), without saying whose. **Treat `taken` as a conflict to stop on, not a state to wait out**: it doesn't clear by itself. Decide what to do with the other owner's objects (through a trusted listener), or give the scope other names. If the names can't be listed, the answer is 502, never one without them. `check --docker` warns of them too.
 
+## Reloading the configuration
+
+`SIGHUP` reads the configuration file again, then rescans the scope folders (as it always did). A file the same as the one in effect (by its SHA-256) is left at that: nothing is logged or counted, so a `SIGHUP` sent only to rescan the scopes stays quiet. Another file is checked as `yorvogate check` does without `--docker`: its format, every listener, the TLS files, the scope folders and the spool's folder. Then:
+
+- **It's valid:** it's in effect for the next request of every listener, and logged as `configuration reloaded`, with its `sha256` and the listeners `added`, `removed`, `moved` and `changed`. A request being answered finishes under the configuration it began with; none is decided by half of each.
+- **It isn't, or it changes what only a restart can** (below): it's refused and logged as `configuration not reloaded` with the reason, and the running configuration stays. The scope folders are still rescanned.
+
+`/readyz`'s `config_sha256` and the `yorvogate_config_info` metric say which file is in effect, and `yorvogate_config_last_reload_success` whether the last reload was taken: an orchestrator that edited the file can check it took. `SIGHUP`s that arrive during a reload make one more after it.
+
+What a reload changes:
+
+- **Policies and limits**, on every listener: `allow`, `containers`, `pulls`, `builder_apparmor_profiles`, `allow_privileged_builders`, `clients`; and `api`, `body_limit`, `load_limit`, `daemon`, `spool`'s `limit`, `loads`, `ratio` and `unpacked`, `admin.scope_labels`, `shutdown_grace`. A stream already open (attach, exec) goes on: it was allowed under the policy it began with. To end streams, restart YorvoGate, or revoke the credential they came with.
+- **Credentials:** a trusted listener's `clients` pin removed, or a certificate whose CA is no longer in `client_ca`, ends the requests and streams that came with it (`by: revoked`), as a scope file's change does.
+- **Trusted listeners**, added and removed. A trusted listener whose `address`, `socket_group`, `tls` or `plaintext` changes is moved: it's closed, its connections and streams with it (`by: reload`), and opened again. One renamed is one removed and one added.
+- **Spool limits lowered** below what loads in flight hold: those loads finish, and new ones wait for their turn, or are told to retry, until what's held is under the new limits.
+
+What needs a restart (a reload that changes it is refused): `upstream`, `state_file`, `spool.dir`, the `admin` listener (added, removed, its `address` or `socket_group`); and every scoped listener's layout: adding or removing one, and its `name`, `mode`, `address`, `scope_sockets`, `scopes`, `socket_group`, `tls` and `require_peer_uids`. Scoped listeners' claims are decided together, by listener, so they stay as they started.
+
+## Stopping
+
+On `SIGTERM` or `SIGINT`, YorvoGate stops accepting at once: every listener closes, and a unix socket's file goes, so a client fails at once rather than waiting. `/readyz` answers 503 with `"draining": true`, and the admin listener answers until the end. Requests being answered and open streams then have `shutdown_grace` (8 seconds by default) to end on their own. When it's over, what's still open is closed: each stream is logged as `stream closed` with `by: shutdown`, and an image load being checked is cancelled, its spooled file removed. Then YorvoGate exits 0. A second `SIGTERM` or `SIGINT` ends the wait at once.
+
+Docker and Compose give a container 10 seconds to stop before they kill it. Keep `shutdown_grace` under the container's stop timeout (Compose's `stop_grace_period`), or raise that with it: a process killed mid-drain logs nothing of the streams it had.
+
 ## Formats and versions
 
 The configuration and the scope files each say their format: `version: 1` (YAML) and `"version": 1` (JSON). YorvoGate refuses a version it doesn't read, so a file written for a newer format fails at once, saying so, instead of being half-understood. Each format has a JSON Schema, published with every release (`yorvogate-config.v1.schema.json`, `yorvogate-scope.v1.schema.json`; and for what YorvoGate gives, `yorvogate-scope-status.v1.schema.json` for the [scope status](#scope-status) answer, `yorvogate-refusal.v1.schema.json` for [a refusal](#what-a-refusal-says), `yorvogate-log.v1.schema.json` for [the log](#logs) and `yorvogate-readiness.v1.schema.json` for [`/readyz`](#monitoring)) and kept in [`schemas/`](../schemas): an orchestrator can check what it writes before YorvoGate reads it.
@@ -586,7 +611,7 @@ The optional `admin` listener answers an operator's monitoring, never Docker's A
   {"ready": false, "checks": {"docker": "ok", "defaults": "ok", "api_versions": "Docker serves API 1.57 to 1.60, YorvoGate 1.44 to 1.56: no version is both's", "scopes": "ok", "spool": "ok"}}
   ```
 
-  The checks: Docker answers its `_ping` (asked at most once a second, whatever scrapes), its defaults are read and safe, its API versions overlap YorvoGate's, every scopes folder can be read, the spool's folder can be written. Use it to route and to alert. **Never restart on it**: a Docker that's down, or whose defaults are unsafe, isn't fixed by restarting YorvoGate.
+  The checks: Docker answers its `_ping` (asked at most once a second, whatever scrapes), its defaults are read and safe, its API versions overlap YorvoGate's, every scopes folder can be read, the spool's folder can be written. The answer also has `config_sha256`, the SHA-256 of the configuration file in effect (see [reloading](#reloading-the-configuration)), and `"draining": true` once YorvoGate is [stopping](#stopping), when it's never ready. Use it to route and to alert. **Never restart on it**: a Docker that's down, or whose defaults are unsafe, isn't fixed by restarting YorvoGate.
 - **`/metrics`**, in Prometheus's text format:
 
 | Metric | Type | Labels |
@@ -603,6 +628,9 @@ The optional `admin` listener answers an operator's monitoring, never Docker's A
 | `yorvogate_scopes` | gauge | `listener`, `state` (`loaded`, `refused`, `reserved`) |
 | `yorvogate_docker_up`, `yorvogate_docker_defaults_safe` | gauge | — |
 | `yorvogate_build_info` | gauge | `version`, `api_min`, `api_max` |
+| `yorvogate_config_reloads_total` | counter | `result` (`reloaded`, `refused`) |
+| `yorvogate_config_last_reload_success` | gauge | — (1 before any reload) |
+| `yorvogate_config_info` | gauge | `sha256`: the configuration file in effect |
 
 Every label's values are bounded, so the series don't grow with traffic. Without `scope_labels`, they don't grow with scopes either. With it, refusals are counted per scope and code, which is what to look at per site. To scrape the unix socket, give Prometheus the socket (or a sidecar such as socat), or use loopback TCP on the host. Alerts worth having: `yorvogate_docker_up == 0`, `yorvogate_docker_defaults_safe == 0`, a rise of `yorvogate_refusals_total` for a code, and `/readyz` failing for minutes.
 
@@ -618,14 +646,14 @@ One JSON line per decision on standard error, in a published format ([schema](..
 {"time":"…","level":"WARN","msg":"refused","log_version":1,"request_id":"5ffb2dfacc1b6c5b769473a8fffb9d0a","source":"uid=1000","method":"POST","path":"/v1.56/containers/create","listener":"sites","scope":"jane","status":403,"code":"policy.capability","reason":"container.create jane-php-1: adding the capability SYS_ADMIN isn't allowed (allowed: NET_BIND_SERVICE, CHOWN)","decision_ms":1.9}
 ```
 
-- `msg`: `allowed` or `refused` for a decision, `auth failed` for why an authentication failed (below), `stream opened` and `stream closed` for a stream.
+- `msg`: `allowed` or `refused` for a decision, `auth failed` for why an authentication failed (below), `stream opened` and `stream closed` for a stream; `configuration reloaded` and `configuration not reloaded` for a [reload](#reloading-the-configuration), `stopping` and `stopped` for a [stop](#stopping).
 - `request_id`: the request's ID, also in its answer's `X-Request-Id` header. A client's own `X-Request-Id` (1 to 64 of `A-Z a-z 0-9 . _ -`) is logged as `client_request_id`, so an orchestrator can find its operations. It's never the gate's ID, so one client can't make its lines look like another's.
 - `source`: where it came from. Over TCP, the peer's IP address and port. On a unix socket, `uid=<n>`, the connecting user as the kernel reports it.
 - `listener`, `method`, `path` (cut to 256 bytes), `endpoint`, `scope` (the authenticated scope), the headers that weren't forwarded (`headers_not_forwarded`, names only).
 - `decision_ms`: how long YorvoGate took to decide, a refusal's hold included (Docker's own time isn't in it).
 - For a refusal: its `status`, `code` ([reason codes](#reason-codes)), `codes` when it collected several problems (the first 32) with `codes_total`, and `reason`.
 - **`auth failed`** follows an authentication's refusal, written after the client has its answer, so the answer's timing doesn't depend on the cause. `auth_failure` is one of `no-credentials`, `unknown-scope`, `scope-file-invalid`, `wrong-token`, `token-expired`, `peer-not-allowed`, `names-another`, `certificate-not-pinned`, `certificate-expired` and `token-on-certificate-listener`, with `claimed_scope` (cut to 64) and `source`. A client is told none of it: its answer is always `auth.rejected`, and the connection is closed (`Connection: close`), so a next request on it can't time the logging. A token is never logged, in any line.
-- **Streams** (a request upgraded to a connection of its own: attach, exec, a builder's dial-stdio): `stream opened`, then `stream closed` with `duration_ms`, `bytes_in`, `bytes_out` and `by`. `by` is `ended` (the client or Docker closed it: the two can't be told apart) or `revoked` (its scope no longer allows it). A `shutdown` value comes with draining streams at shutdown (0.4-c). Followed logs are an ordinary answer, logged as `allowed`.
+- **Streams** (a request upgraded to a connection of its own: attach, exec, a builder's dial-stdio): `stream opened`, then `stream closed` with `duration_ms`, `bytes_in`, `bytes_out` and `by`. `by` is `ended` (the client or Docker closed it: the two can't be told apart), `revoked` (its scope or credential no longer allows it), `shutdown` (YorvoGate stopped: see [stopping](#stopping)) or `reload` (a reload removed or moved its listener). Followed logs are an ordinary answer, logged as `allowed`.
 - Values a client chose are JSON-escaped, so a line can't be split or forged, and cut short.
 
 To keep refusals apart, for an audit trail or alerts, filter them where the log is shipped. For example `jq -c 'select(.msg == "refused" or .msg == "auth failed")'`, or with journald, `journalctl -u yorvogate -o cat | jq -c 'select(.level == "WARN")'`. Every refusal and every authentication failure is a WARN line, and nothing else is.
