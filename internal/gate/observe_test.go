@@ -166,7 +166,7 @@ func TestMetrics(t *testing.T) {
 		send(t, server, "POST", "/v1.56/containers/create?name=jane-x", encode(set(compose(), "HostConfig.Privileged", true)), asJane)
 		send(t, server, "GET", "/v1.56/containers/json", "", map[string]string{"X-YorvoGate-Scope": "jane", "X-YorvoGate-Token": "wrong"})
 
-		admin := httptest.NewServer(Admin(g.config, m, defaults, g.registry, g.spool))
+		admin := httptest.NewServer(Admin(NewLive(g.config, ""), m, defaults, g.registry, g.spool))
 		t.Cleanup(admin.Close)
 
 		res, err := http.Get(admin.URL + "/metrics")
@@ -230,7 +230,7 @@ func TestReadiness(t *testing.T) {
 	log, _ := checkedLog(t)
 	server, defaults := gateAndDefaults(t, d, "sites", log)
 	g := server.Config.Handler.(*Gate)
-	admin := httptest.NewServer(Admin(g.config, NewMetrics(false), defaults, g.registry, g.spool))
+	admin := httptest.NewServer(Admin(NewLive(g.config, ""), NewMetrics(false), defaults, g.registry, g.spool))
 	t.Cleanup(admin.Close)
 
 	ready := func() (int, Readiness) {
@@ -359,14 +359,14 @@ func TestOneRequestDockerDropsIsntDockerDown(t *testing.T) {
 
 	defaults.Suspect(io.ErrUnexpectedEOF) // Docker's _ping answers
 
-	if _, err := defaults.current(); err != nil {
+	if _, err := defaults.current(defaults.config.Load()); err != nil {
 		t.Errorf("a dropped request marked Docker down: %v", err)
 	}
 
 	// But a refused dial is Docker gone
 	defaults.Suspect(&net.OpError{Op: "dial", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)})
 
-	if _, err := defaults.current(); err == nil {
+	if _, err := defaults.current(defaults.config.Load()); err == nil {
 		t.Error("a refused dial left Docker up")
 	}
 }

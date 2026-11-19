@@ -8,10 +8,12 @@
   "required": ["ready", "checks"],
   "properties": {
     "ready": {"type": "boolean"},
+    "config_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$", "description": "The SHA-256 of the configuration file in effect: an edit took when it's the edited file's."},
+    "draining": {"type": "boolean", "description": "true while the process stops: not ready, whatever the checks say."},
     "checks": {
       "type": "object",
       "additionalProperties": {"type": "string", "description": "ok, or why not."},
-      "description": "Each check, ok or why not: docker, defaults, api_versions, scopes, spool (an open set)."
+      "description": "Each check, ok or why not: docker, defaults, api_versions, scopes, spool, listeners (an open set)."
     }
   }
 }

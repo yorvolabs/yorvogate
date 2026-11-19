@@ -677,6 +677,39 @@ if [ "$listener" = mtls ]; then
 	works "the newly pinned one" tlsas jane-unpinned docker rm -f ygc-jane-mtls
 fi
 
+say "== Reloading the configuration (SIGHUP)"
+# reload: SIGHUP, then whether the gate logs "configuration WHAT" (reloaded, not reloaded) within 5 s
+reload() {
+	mark=$(wc -l < "$dir/yorvogate.log")
+	kill -HUP "$gate"
+	i=0
+	while ! tail -n "+$((mark + 1))" "$dir/yorvogate.log" | grep -q "\"msg\":\"configuration $1\"" && [ $i -lt 50 ]; do
+		sleep 0.1
+		i=$((i + 1))
+	done
+	tail -n "+$((mark + 1))" "$dir/yorvogate.log" | grep -q "\"msg\":\"configuration $1\""
+}
+orchestrator() { env DOCKER_HOST=tcp://127.0.0.1:2380 docker "$@"; }
+cp "$dir/yorvogate.yaml" "$dir/yorvogate.yaml.before"
+works "the orchestrator: docker version (system: read)" orchestrator version
+refused "the orchestrator: docker ps, before the reload" "isn't allowed on this listener" orchestrator ps
+# The orchestrator's groups changed, nothing else: system read for containers read
+sed '/name: orchestrator/,/allow:/s|allow: {system: read}|allow: {containers: read}|' "$dir/yorvogate.yaml.before" > "$dir/yorvogate.yaml"
+if reload reloaded; then ok "the edited configuration is reloaded"; else ko "the edited configuration is reloaded" "$(tail -3 "$dir/yorvogate.log")"; fi
+works "the orchestrator: docker ps, after the reload" orchestrator ps
+refused "the orchestrator: docker version, no longer allowed" "isn't allowed on this listener" orchestrator version
+# A scope each leg still has here (sockets: blog's file is gone; mtls: jane's certificate unpinned)
+unchanged=jane
+[ "$listener" = mtls ] && unchanged=blog
+works "$unchanged, on a listener the reload didn't change" as "$unchanged" docker ps
+# One that isn't valid is refused, and the reloaded one stays
+printf 'colour: blue\n' >> "$dir/yorvogate.yaml"
+if reload "not reloaded"; then ok "a configuration that isn't valid isn't reloaded"; else ko "a configuration that isn't valid isn't reloaded" "$(tail -3 "$dir/yorvogate.log")"; fi
+works "the orchestrator: still the reloaded policy" orchestrator ps
+cp "$dir/yorvogate.yaml.before" "$dir/yorvogate.yaml"
+if reload reloaded; then ok "the first configuration, reloaded again"; else ko "the first configuration, reloaded again" "$(tail -3 "$dir/yorvogate.log")"; fi
+works "the orchestrator: docker version again" orchestrator version
+
 say "== A Docker newer than the gate"
 # A gate that accepts at most API 1.50, in front of a Docker with a newer one: the CLI negotiates the
 # version the gate advertises, and works. Without the clamp it would ask for Docker's and be refused.
@@ -689,7 +722,28 @@ sleep 1
 negotiated=$(DOCKER_HOST=tcp://127.0.0.1:2386 DOCKER_CONFIG="$dir/jane" docker version --format '{{.Client.APIVersion}}' 2>&1)
 if [ "$negotiated" = 1.50 ]; then ok "the CLI negotiates the gate's 1.50"; else ko "the CLI negotiates the gate's 1.50" "$negotiated"; fi
 works "jane: docker ps, at the gate's version" env DOCKER_HOST=tcp://127.0.0.1:2386 DOCKER_CONFIG="$dir/jane" docker ps
-kill "$old" 2>/dev/null
+
+say "== A stop drains, then closes the streams still open"
+# That gate stops (SIGTERM) with a stream of jane's open: it's closed at the grace's end (the default,
+# 8 s), logged by: shutdown, and the gate exits 0 within the 10 s Docker would give its container. The container is jane's by its name and label, made straight.
+# Without -i, the CLI sends nothing more once the exec starts, while Docker's side runs on: the gate
+# must close Docker's side too, or the stream would last until the command ends.
+direct run -d --name ygc-jane-drain --label com.docker.compose.project=ygc-jane alpine:3.22 sleep 300 >/dev/null
+DOCKER_HOST=tcp://127.0.0.1:2386 DOCKER_CONFIG="$dir/jane" docker exec ygc-jane-drain sleep 60 >/dev/null 2>&1 &
+drained=$!
+sleep 2
+if alive "$drained"; then ok "jane's exec streams, before the stop"; else ko "jane's exec streams, before the stop"; fi
+stopping=$(date +%s)
+kill -TERM "$old"
+if gone "$drained"; then ok "the stream is closed at the grace's end"; else ko "the stream is closed at the grace's end"; fi
+if wait "$old"; then ok "the gate exits 0"; else ko "the gate exits 0" "$(tail -3 "$dir/yorvogate-old.log")"; fi
+took=$(($(date +%s) - stopping))
+if [ "$took" -lt 10 ]; then ok "within 10 s of SIGTERM, with the default grace ($took s)"; else ko "within 10 s of SIGTERM, with the default grace" "$took s"; fi
+if grep '"msg":"stream closed"' "$dir/yorvogate-old.log" | grep -q '"by":"shutdown"'; then ok "the stream is logged as closed by shutdown"; else ko "the stream is logged as closed by shutdown" "$(grep stream "$dir/yorvogate-old.log" | tail -3)"; fi
+if grep -q '"msg":"stopped"' "$dir/yorvogate-old.log"; then ok "the gate logs it stopped"; else ko "the gate logs it stopped" "$(tail -3 "$dir/yorvogate-old.log")"; fi
+kill "$drained" 2>/dev/null
+direct rm -f ygc-jane-drain >/dev/null
+keep_log "$dir/yorvogate-old.log" "suite-$YGC_LISTENER-older-gate"
 
 say ""
 keep_log "$dir/yorvogate.log" "suite-$YGC_LISTENER"

@@ -27,7 +27,6 @@ type Upstream struct {
 // asks for a version the gate serves, whatever version Docker itself has.
 func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
 	socket := c.UpstreamSocket()
-	lowest, highest := c.Versions()
 
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	transport := &http.Transport{
@@ -52,6 +51,9 @@ func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
 		// A rule may change Docker's answer before the client sees it (a list or an inspection with
 		// other scopes' objects left out).
 		ModifyResponse: func(res *http.Response) error {
+			// The API versions of the request's configuration (a reload may change them)
+			lowest, highest := configOf(res.Request.Context(), c).Versions()
+
 			if v := res.Header.Get("Api-Version"); v != "" {
 				res.Header.Set("Api-Version", clamp(v, highest))
 			}

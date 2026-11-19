@@ -114,7 +114,7 @@ A scope is a file in the scoped listener's folder, written by your orchestrator 
 }
 ```
 
-Scope files are read again every 2 seconds and on `SIGHUP`: adding or removing a scope needs no restart, and an orchestrator can wait for its write to be in effect with [scope status](docs/configuration.md#scope-status) instead of sleeping. [docs/configuration.md](docs/configuration.md) has every setting; [docs/threat-model.md](docs/threat-model.md) what YorvoGate holds and what it doesn't.
+Scope files are read again every 2 seconds and on `SIGHUP`: adding or removing a scope needs no restart, and an orchestrator can wait for its write to be in effect with [scope status](docs/configuration.md#scope-status) instead of sleeping. `SIGHUP` also reloads the configuration: policies, limits and trusted listeners change without a restart ([reloading](docs/configuration.md#reloading-the-configuration)), and a stop gives requests and streams a grace to end ([stopping](docs/configuration.md#stopping)). [docs/configuration.md](docs/configuration.md) has every setting; [docs/threat-model.md](docs/threat-model.md) what YorvoGate holds and what it doesn't.
 
 ```bash
 yorvogate check --config /etc/yorvogate/yorvogate.yaml   # the configuration and every scope file

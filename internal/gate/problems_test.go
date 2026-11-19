@@ -416,7 +416,7 @@ func TestAllowedIsThePolicyNotTheState(t *testing.T) {
 	for _, held := range []int64{0, 1, 400 << 10, 1<<20 - 1, 1 << 20} {
 		spool := NewSpool(c)
 
-		other := &reservation{spool: spool, scope: "zulu"}
+		other := &reservation{spool: spool, scope: "zulu", limit: c.Spool.Limit}
 		if held > 0 {
 			if err := other.reserve(held); err != nil {
 				t.Fatal(err)
@@ -424,7 +424,7 @@ func TestAllowedIsThePolicyNotTheState(t *testing.T) {
 		}
 
 		for _, asked := range []int64{1, 600 << 10, 1 << 20, 1<<20 + 1} {
-			own := &reservation{spool: spool, scope: "jane"}
+			own := &reservation{spool: spool, scope: "jane", limit: c.Spool.Limit}
 
 			var r *refusal
 			if !errors.As(own.reserve(asked), &r) {

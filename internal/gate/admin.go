@@ -70,12 +70,18 @@ func (p *pinger) check(ctx context.Context, d *Docker) error {
 type Readiness struct {
 	Ready  bool              `json:"ready"`
 	Checks map[string]string `json:"checks"`
+	// The SHA-256 of the configuration in effect, so an orchestrator sees its edit took (or didn't)
+	ConfigSHA256 string `json:"config_sha256,omitempty"`
+	// The process is stopping: not ready, whatever the checks say
+	Draining bool `json:"draining,omitempty"`
 }
 
 // Ready says whether scoped requests can be served now, and each check's state: from what Watch read
 // last, and a _ping at most a second old.
-func (d *Defaults) Ready(ctx context.Context, c *config.Config, registry *scope.Registry) Readiness {
-	r := Readiness{Ready: true, Checks: map[string]string{}}
+func (d *Defaults) Ready(ctx context.Context, live *Live, registry *scope.Registry) Readiness {
+	rt := live.Load()
+	c := rt.Config
+	r := Readiness{Ready: !live.Draining(), Checks: map[string]string{}, ConfigSHA256: rt.SHA256, Draining: live.Draining()}
 	set := func(check, why string) {
 		if why == "" {
 			r.Checks[check] = "ok"
@@ -92,7 +98,7 @@ func (d *Defaults) Ready(ctx context.Context, c *config.Config, registry *scope.
 		set("docker", "")
 	}
 
-	state := d.state.Load()
+	state, _ := d.judged(c)
 
 	switch {
 	case !needsSpool(c):
@@ -135,6 +141,7 @@ func (d *Defaults) Ready(ctx context.Context, c *config.Config, registry *scope.
 	}
 
 	set("spool", spool)
+	set("listeners", live.unopenedWhy())
 
 	return r
 }
@@ -179,8 +186,8 @@ type pingError struct{ status string }
 func (e *pingError) Error() string { return "_ping answered " + e.status }
 
 // Admin is the admin listener's handler.
-func Admin(c *config.Config, m *Metrics, d *Defaults, registry *scope.Registry, spool *Spool) http.Handler {
-	m.gauges = append(m.gauges, processGauges(c, d, registry, spool)...)
+func Admin(live *Live, m *Metrics, d *Defaults, registry *scope.Registry, spool *Spool) http.Handler {
+	m.gauges = append(m.gauges, processGauges(live, d, registry, spool)...)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
@@ -192,7 +199,7 @@ func Admin(c *config.Config, m *Metrics, d *Defaults, registry *scope.Registry, 
 		_, _ = w.Write([]byte("ok\n"))
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
-		ready := d.Ready(r.Context(), c, registry)
+		ready := d.Ready(r.Context(), live, registry)
 
 		w.Header().Set("Content-Type", "application/json")
 		if !ready.Ready {
@@ -206,7 +213,7 @@ func Admin(c *config.Config, m *Metrics, d *Defaults, registry *scope.Registry, 
 }
 
 // processGauges are the gauges read from the process's state when the metrics are written.
-func processGauges(c *config.Config, d *Defaults, registry *scope.Registry, spool *Spool) []gauge {
+func processGauges(live *Live, d *Defaults, registry *scope.Registry, spool *Spool) []gauge {
 	bit := func(b bool) float64 {
 		if b {
 			return 1
@@ -215,11 +222,14 @@ func processGauges(c *config.Config, d *Defaults, registry *scope.Registry, spoo
 		return 0
 	}
 
-	lowest, highest := c.Versions()
-
 	return []gauge{
 		{"yorvogate_build_info", "YorvoGate's version and the API versions it serves.", func() []sample {
+			lowest, highest := live.Load().Config.Versions()
+
 			return []sample{{labelsOf("version", Version, "api_min", lowest.String(), "api_max", highest.String()), 1}}
+		}},
+		{"yorvogate_config_info", "The configuration in effect, by its file's SHA-256.", func() []sample {
+			return []sample{{labelsOf("sha256", live.Load().SHA256), 1}}
 		}},
 		{"yorvogate_docker_up", "Whether YorvoGate's last read of Docker reached it.", func() []sample {
 			s := d.state.Load()
@@ -227,7 +237,7 @@ func processGauges(c *config.Config, d *Defaults, registry *scope.Registry, spoo
 			return []sample{{"", bit(s != nil && s.reached && !d.down.Load())}}
 		}},
 		{"yorvogate_docker_defaults_safe", "Whether Docker's defaults are read and safe (scoped requests are refused otherwise).", func() []sample {
-			s := d.state.Load()
+			s, _ := d.judged(live.Load().Config)
 
 			return []sample{{"", bit(s != nil && len(s.unsafe) == 0)}}
 		}},
@@ -236,22 +246,25 @@ func processGauges(c *config.Config, d *Defaults, registry *scope.Registry, spoo
 				return nil
 			}
 
-			spool.mu.Lock()
-			defer spool.mu.Unlock()
+			used, _ := spool.Used()
+			limit := live.Load().Config.Spool.Limit
 
-			return []sample{{labelsOf("of", "used"), float64(spool.reserved)}, {labelsOf("of", "limit"), float64(spool.limit)}}
+			return []sample{{labelsOf("of", "used"), float64(used)}, {labelsOf("of", "limit"), float64(limit)}}
 		}},
 		{"yorvogate_spool_loads", "Image loads in flight, and how many may be.", func() []sample {
 			if spool == nil {
 				return nil
 			}
 
-			return []sample{{labelsOf("of", "used"), float64(len(spool.global))}, {labelsOf("of", "limit"), float64(cap(spool.global))}}
+			_, used := spool.Used()
+			limit := live.Load().Config.Spool.Loads
+
+			return []sample{{labelsOf("of", "used"), float64(used)}, {labelsOf("of", "limit"), float64(limit)}}
 		}},
 		{"yorvogate_scopes", "Scopes by state, on each scoped listener.", func() []sample {
 			var out []sample
 
-			for _, l := range c.Listeners {
+			for _, l := range live.Load().Config.Listeners {
 				if l.Mode != config.Scoped {
 					continue
 				}

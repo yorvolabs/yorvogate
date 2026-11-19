@@ -81,10 +81,10 @@ listeners:
 		t.Fatal(err)
 	}
 
-	defaults := NewDefaults(c)
+	allows := runtimeAllowed(c)
 
 	for runtime, allowed := range map[string]bool{"runc": true, "runsc": true, "kata": false, "crun": false, "": false} {
-		if defaults.runtime(runtime) != allowed {
+		if allows(runtime) != allowed {
 			t.Errorf("%q: allowed %v", runtime, !allowed)
 		}
 	}
