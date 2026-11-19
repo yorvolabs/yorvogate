@@ -1,12 +1,25 @@
-<!-- Thanks for contributing! For a bigger change, please link the issue where the approach was agreed. -->
+<!-- Thanks for contributing! For a bigger change, please link the issue where the approach was agreed.
+The title is the squashed commit's subject: imperative, at most 72 characters, saying what the code
+does, e.g. "Bound image loads with a shared spool". This description is its body. Both are public:
+nothing internal (plan or finding codes, who reviewed or decided) in either. -->
 
-## What and why
+## Why
 
-<!-- What changes, and why. Link the issue, e.g. "Fixes #123". -->
+<!-- The problem, and why this is the way to solve it. -->
 
-## How it was tested
+## What changes
 
-<!-- The tests you added (a hostile case for every rule), and anything you checked against a real Docker. -->
+<!-- What behaves differently, as bullets, rather than which files changed. -->
+
+## Tested
+
+<!-- What ran: the tests you added (a hostile case for every rule), the checks, anything you checked
+against a real Docker. And what didn't, with why. -->
+
+## Refs
+
+<!-- What a reader can open: an issue or pull request ("Fixes #123"), a published advisory, an RFC,
+upstream docs. Leave it out when there's none. -->
 
 ## Checklist
 

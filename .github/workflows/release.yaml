@@ -1,7 +1,8 @@
 ---
 name: Release
 
-# A version tag (v1.2.3) on main makes a release, once CI has passed on its commit:
+# A version tag (v1.2.3, or v1.2.3-rc.1) on main, signed by a key in .github/release-signers, makes a
+# release once CI has passed on its commit:
 #   - the image, ghcr.io/yorvolabs/yorvogate:<version>, for x86_64 and arm64, with its SBOM and build
 #     provenance, scanned (no fixable high or critical flaw), and signed with Sigstore (keyless: the
 #     signature says this workflow made it, for this tag), pushed by its digest and tagged only then;
@@ -12,7 +13,7 @@ on:
   push:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+      - 'v[0-9]+.[0-9]+.[0-9]+-rc.[0-9]+'
 
 permissions:
   contents: read
@@ -22,18 +23,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: Release
+  # Whether the tag may be released, in a job of its own with read permissions only: no step that can
+  # publish (a registry login, a signature, the GitHub release) starts before it passes.
+  check:
+    name: Check the tag
     if: github.repository == 'yorvolabs/yorvogate'
     runs-on: ubuntu-26.04
-    timeout-minutes: 60
+    timeout-minutes: 40
     permissions:
-      contents: write   # the GitHub release
+      contents: read
       actions: read     # CI's run on the tagged commit
-      packages: write   # the image on ghcr.io
-      id-token: write   # Sigstore's keyless signing: this workflow's identity
-    env:
-      IMAGE: ghcr.io/yorvolabs/yorvogate
+    outputs:
+      version: ${{ steps.checked.outputs.version }}
+      commit: ${{ steps.checked.outputs.commit }}
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,14 +43,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: The version, from a tag on main
-        id: version
+      - name: Signed by a release signer, on main, in the changelog
+        id: checked
         run: |
-          version=${GITHUB_REF_NAME#v}
-          echo "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' || { echo "::error::$GITHUB_REF_NAME isn't a version."; exit 1; }
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::$GITHUB_REF_NAME isn't on main."; exit 1; }
-          grep -q "^## \[$version\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no section for $version."; exit 1; }
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          .github/release-check.sh "$GITHUB_REF_NAME"
+          {
+            echo "version=${GITHUB_REF_NAME#v}"
+            echo "commit=$GITHUB_SHA"
+          } >> "$GITHUB_OUTPUT"
 
       - name: CI passed on it
         # A tag alone makes no release: CI's run on the commit, as it was pushed to main, must have
@@ -66,6 +68,34 @@ jobs:
           done
           [ "$status $conclusion" = "completed success" ] || { echo "::error::CI's run on $GITHUB_SHA: $status, $conclusion ($url). No release without it."; exit 1; }
           echo "CI passed: $url"
+
+  release:
+    name: Release
+    needs: check
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    permissions:
+      contents: write   # the GitHub release
+      packages: write   # the image on ghcr.io
+      id-token: write   # Sigstore's keyless signing: this workflow's identity
+    env:
+      IMAGE: ghcr.io/yorvolabs/yorvogate
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The tag could have moved since it was checked.
+      - name: Still the commit checked
+        env:
+          CHECKED: ${{ needs.check.outputs.commit }}
+        run: |
+          if [ "$(git rev-parse HEAD)" != "$CHECKED" ] || [ "$(git rev-parse "$GITHUB_REF^{commit}")" != "$CHECKED" ]; then
+            echo "::error::$GITHUB_REF has moved since $CHECKED was checked: a newer run releases it, if it may be."
+            exit 1
+          fi
 
       - name: Set up QEMU (arm64)
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -87,7 +117,7 @@ jobs:
           platforms: linux/amd64,linux/arm64
           pull: true
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          build-args: VERSION=${{ steps.version.outputs.version }}
+          build-args: VERSION=${{ needs.check.outputs.version }}
           # How it was built, and what's in it, attached to the image. mode=max records every build
           # arg in the provenance, which anyone can read: VERSION is the only one there may be.
           provenance: mode=max
@@ -122,7 +152,7 @@ jobs:
         # The version names exactly the image scanned and signed: tagged as it is (one source, so the
         # index is copied unchanged), then read back. Another digest under the tag is a failed release.
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.check.outputs.version }}
           DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           docker buildx imagetools create --tag "$IMAGE:$VERSION" "$IMAGE@$DIGEST"
@@ -131,7 +161,7 @@ jobs:
 
       - name: The binaries, their checksums, signed
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.check.outputs.version }}
         run: |
           HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose -f compose.dev.yaml run --rm go make dist VERSION="$VERSION"
           cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
@@ -139,7 +169,7 @@ jobs:
       - name: The GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.check.outputs.version }}
           DIGEST: ${{ steps.image.outputs.digest }}
         run: |
           # The changelog's section for the version, the Docker majors it's certified for, and the
@@ -158,7 +188,7 @@ jobs:
       - name: The release's files
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.check.outputs.version }}
         run: |
           gh release download "v$VERSION" --dir published
           test/dist.sh published "$VERSION"

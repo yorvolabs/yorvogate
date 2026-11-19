@@ -37,6 +37,37 @@ docker compose -f compose.dev.yaml run --rm go make build && test/conformance/ru
 - **The differential suite passing** (`make differential`, in `make check`): an endpoint a scope may send needs a base request in `test/differential/corpus_test.go`, and a rule that refuses needs an attack. The suite's first build compiles moby's daemon, which takes a few minutes, once. See `test/differential/README.md`.
 - **CodeQL's findings answered.** A pull request's CodeQL job fails on a finding at error severity: fix it. An alert that isn't a defect may be dismissed, but only with its reason written in the dismissal (why it can't happen, or what makes it safe), and never by the author of the pull request that raised it.
 
+## Branches, pull requests and releases
+
+The same conventions hold across YorvoLabs' repositories.
+
+### Pull requests
+
+Pull requests are squashed: the title becomes the commit's subject on `main`, followed by `(#N)`, and the description its body.
+
+- **The title** is one imperative sentence of at most 72 characters, without a final period, that says what the code does, e.g. "Bound image loads with a shared spool". No `feat:`-style prefixes: only Dependabot's `chore:` stays, so dependency updates can be filtered.
+- **Nothing internal in public text.** Titles, descriptions, commit messages, branch names, tag messages, release notes and the changelog say what the code changes and why, for a reader outside the project. They carry no internal plan or finding codes, no names of who decided, reviewed or approved what, and no paths outside the repository.
+- **The description** follows the [template](.github/pull_request_template.md): **Why**, **What changes** (as behavior, not files), **Tested** (what ran, and what didn't, with why), **Refs**: only what a reader can open (issues and pull requests, published advisories, RFCs, upstream docs), or left out.
+- A release's pull request is titled `Release X.Y.Z`, and the one that moves `main` on to the next minor `Start X.Y`.
+- **Commits on a branch** are free-form, since they're squashed away. `Co-authored-by` is the only trailer, for a human co-author.
+
+### Branches
+
+- `<kind>/<slug>`, where the kind is `feat`, `fix`, `docs`, `chore`, `ci` or `security`, and the slug is lowercase with hyphens and describes the change: `feat/per-scope-limits`, `fix/image-list-size`.
+- A release is prepared on `chore/release-X.Y.Z`. `release/` is kept for maintenance branches (below).
+- **A fix of an embargoed vulnerability** is developed in the repository's private security advisory fork, never on a public branch. Until the advisory is published, its title, description and branch describe the change neutrally: no advisory ID, and no description of the exploit. The changelog's Security entry and the advisory ID are added at the release.
+
+### Tags and versions
+
+- **A release tag** is `vX.Y.Z` or `vX.Y.Z-rc.N`, and nothing else: no other pre-release labels. It's annotated, signed with SSH (`git tag -s v0.4.0 -m "YorvoGate 0.4.0"`), on a commit of `main` that passed CI. The Release workflow refuses any other tag, and one that isn't signed by a key in [`.github/release-signers`](.github/release-signers) as `main` lists it ([`release-check.sh`](.github/release-check.sh), in a job of its own before any step that can publish). Changes to that file and to the workflows need the maintainer's review ([`CODEOWNERS`](.github/CODEOWNERS)). Tags are signed with SSH keys (`git config gpg.format ssh`, and `git config user.signingkey` with the public key's path); a key is added to the file in a pull request of its own.
+- **Other tags** live under a namespace and never start with `v`, e.g. `bench/0.4.0`.
+- **Before 1.0,** a minor may break things, and a patch only fixes. The changelog's Breaking entries say what to change.
+- **Releases come from `main`.** Only when an older minor needs a fix after `main` has moved on is a `release/X.Y` branch created, from `vX.Y.0`'s line: the fix lands on `main` first, then is cherry-picked (`git cherry-pick -x`), and the patch is tagged there. The Release workflow accepts tags on `main` only until the first such branch is needed.
+
+### The changelog
+
+[`CHANGELOG.md`](CHANGELOG.md) follows [Keep a Changelog 1.1](https://keepachangelog.com/en/1.1.0/): `## [Unreleased]`, then `## [X.Y.Z] - YYYY-MM-DD` for each release, newest first. In the pull request titled `Release X.Y.Z`, move `[Unreleased]` under the version. The GitHub release is titled `YorvoGate X.Y.Z`, with the version's section as its notes (and the image's digest, and the Docker majors it's certified for), and is marked a pre-release for an `-rc.N`.
+
 ## A new Docker API version
 
 1. **List what changed:** `go run ./tools/apidiff <old> <new>` (versions of `github.com/moby/moby/api`, e.g. `v1.55.0 v1.56.1`). It lists every endpoint, query parameter, header and request-body field added, removed or changed, with YorvoGate's decision on each, and exits 1 while any is **UNDECIDED**. `-propose` adds what to ask a model of each undecided row: a model may propose, a maintainer decides. See [tools/apidiff](tools/apidiff/README.md).

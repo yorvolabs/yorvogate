@@ -35,6 +35,7 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 - **A refusal's message names the element it's about** where it named only the field: `HostConfig.Mounts[0].BindOptions isn't allowed`, `Privileged: privileged containers, published ports and devices aren't allowed`. Problems of a body's map (endpoints, log options) are in the keys' order, so the same request is always refused with the same first code. Messages are for people, and may change; `code` and `problems` are the contract.
 - **Create and update check limits the same way.** On `container.update`, a limit left out stays the container's own (as Docker keeps it), and a limit given is checked as on create.
 - **A container that joins another of its scope's containers** (`PidMode`, `IpcMode` or `NetworkMode` `container:<name>`, or `VolumesFrom`) names it to Docker by the ID YorvoGate checked, not by its name.
+- **A release tag must be signed by a key in `.github/release-signers`**, and be `vX.Y.Z` or `vX.Y.Z-rc.N`: the Release workflow checks it in a job of its own, before any step that can publish. A keyless signature says the workflow made an artifact, not that the maintainer released it; this says the second. Contributing's "Branches, pull requests and releases" has the conventions.
 - The conformance suite runs on Quire Server's gate configuration at `f556195`, and a nightly job fails when the file on Quire Server's main differs from the pinned copy.
 
 ### Fixed
