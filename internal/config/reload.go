@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -103,13 +104,15 @@ func Compare(running, next *Config) (Reload, error) {
 		return fmt.Errorf("%s can't change while YorvoGate serves: restart it to change that (the running configuration is kept)", key)
 	}
 
-	for key, class := range configKeys {
+	for _, key := range sorted(configKeys) {
+		class := configKeys[key]
 		if class == restart && !reflect.DeepEqual(field(running, key), field(next, key)) {
 			return r, restartOnly(key)
 		}
 	}
 
-	for key, class := range spoolKeys {
+	for _, key := range sorted(spoolKeys) {
+		class := spoolKeys[key]
 		if class == restart && !reflect.DeepEqual(field(&running.Spool, key), field(&next.Spool, key)) {
 			return r, restartOnly("spool." + key)
 		}
@@ -119,7 +122,8 @@ func Compare(running, next *Config) (Reload, error) {
 	case (running.Admin == nil) != (next.Admin == nil):
 		return r, restartOnly("admin")
 	case running.Admin != nil:
-		for key, class := range adminKeys {
+		for _, key := range sorted(adminKeys) {
+			class := adminKeys[key]
 			if class == restart && !reflect.DeepEqual(field(running.Admin, key), field(next.Admin, key)) {
 				return r, restartOnly("admin." + key)
 			}
@@ -138,7 +142,8 @@ func Compare(running, next *Config) (Reload, error) {
 				return r, restartOnly("listener " + name + " (a scoped listener added or removed)")
 			}
 
-			for key, class := range listenerKeys {
+			for _, key := range sorted(listenerKeys) {
+				class := listenerKeys[key]
 				if class != reloadable && !reflect.DeepEqual(field(o, key), field(n, key)) {
 					return r, restartOnly("listener " + name + "'s " + key)
 				}
@@ -159,7 +164,8 @@ func Compare(running, next *Config) (Reload, error) {
 		default:
 			moved := false
 
-			for key, class := range listenerKeys {
+			for _, key := range sorted(listenerKeys) {
+				class := listenerKeys[key]
 				if class == transport && !reflect.DeepEqual(field(o, key), field(n, key)) {
 					moved = true
 				}
@@ -175,6 +181,12 @@ func Compare(running, next *Config) (Reload, error) {
 	}
 
 	return r, nil
+}
+
+// sorted is a classification's keys, in order: a reload that changes several restart-only keys is
+// refused for the same one each time.
+func sorted(keys map[string]keyClass) []string {
+	return slices.Sorted(maps.Keys(keys))
 }
 
 func byName(listeners []Listener) map[string]*Listener {
