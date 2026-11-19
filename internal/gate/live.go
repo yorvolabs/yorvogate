@@ -24,6 +24,11 @@ func (l *Live) Unopened(why string) {
 	l.unopened.Store(&why)
 }
 
+// AllOpen says whether every listener of the configuration in effect is open.
+func (l *Live) AllOpen() bool {
+	return l.unopenedWhy() == ""
+}
+
 func (l *Live) unopenedWhy() string {
 	if why := l.unopened.Load(); why != nil {
 		return *why

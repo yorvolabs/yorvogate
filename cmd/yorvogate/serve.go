@@ -313,8 +313,9 @@ func (p *process) reload() {
 
 	sha := digest(content)
 
-	// The file in effect, unchanged: SIGHUP is a rescan of the scopes, as it always was
-	if sha == running.SHA256 {
+	// The file in effect, unchanged, its listeners open: SIGHUP is a rescan of the scopes, as it
+	// always was
+	if sha == running.SHA256 && p.live.AllOpen() {
 		return
 	}
 

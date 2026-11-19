@@ -840,6 +840,23 @@ func TestAMoveThatCantReopenIsUndone(t *testing.T) {
 			if tc.ready && code != http.StatusOK || !tc.ready && (code != http.StatusServiceUnavailable || !strings.Contains(body, "couldn't be opened again")) {
 				t.Errorf("readiness: %d %s", code, body)
 			}
+
+			if tc.ready {
+				return
+			}
+
+			// The file in effect written back: a SIGHUP opens what isn't open, though the file is the same
+			r.write(t, first)
+			hup(t)
+			r.log.wait(t, 1, msg("configuration reloaded"))
+
+			if code, body := status(t, over(admin), "/readyz"); code != http.StatusOK {
+				t.Errorf("readiness once it's open again: %d %s", code, body)
+			}
+
+			if res, err := (&http.Client{Timeout: 2 * time.Second}).Get("http://" + ops + "/v1.56/_ping"); err != nil || res.StatusCode != http.StatusOK {
+				t.Errorf("ops, open again: %v %v", res, err)
+			}
 		})
 	}
 }
