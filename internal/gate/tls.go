@@ -25,9 +25,10 @@ import (
 // scan, and swapped in only when they load. A pair or a CA that doesn't load keeps the last good
 // one, so a listener never falls back to no client verification.
 type TLSFiles struct {
-	listener config.Listener
-	current  atomic.Pointer[tlsState]
-	failed   string // the last reload's error, logged once
+	// The listener as the configuration in effect has it (a reload changes its clients in place)
+	config  atomic.Pointer[config.Listener]
+	current atomic.Pointer[tlsState]
+	failed  string // the last reload's error, logged once
 }
 
 type tlsState struct {
@@ -47,7 +48,7 @@ func SPKI(c *x509.Certificate) [sha256.Size]byte {
 // read loads the listener's files. Client CAs related to those of a listener of the other trust level
 // (others, by name) aren't loaded: see apart.
 func (t *TLSFiles) read(others map[string]*tlsState) (*tlsState, error) {
-	files := t.listener.TLS
+	files := t.listener().TLS
 	st := &tlsState{}
 
 	var err error
@@ -184,7 +185,8 @@ func (t *TLSFiles) verify(cs tls.ConnectionState) error {
 		return errors.New("the client certificate isn't for client authentication (extended key usage clientAuth)")
 	}
 
-	if t.listener.Mode != config.Trusted {
+	l := t.listener()
+	if l.Mode != config.Trusted {
 		return nil
 	}
 
@@ -194,18 +196,32 @@ func (t *TLSFiles) verify(cs tls.ConnectionState) error {
 		}
 	}
 
-	if len(t.listener.Clients) == 0 {
-		return nil
+	if !clientListed(l, SPKI(leaf)) {
+		return errors.New("the client certificate's public key isn't one of the listener's clients")
 	}
 
-	key := SPKI(leaf)
-	for _, c := range t.listener.Clients {
+	return nil
+}
+
+// clientListed says whether a trusted listener takes a client certificate's public key: it lists it in
+// clients, or lists none.
+func clientListed(l *config.Listener, key [sha256.Size]byte) bool {
+	if len(l.Clients) == 0 {
+		return true
+	}
+
+	for _, c := range l.Clients {
 		if c.SHA256 == hex.EncodeToString(key[:]) {
-			return nil
+			return true
 		}
 	}
 
-	return errors.New("the client certificate's public key isn't one of the listener's clients")
+	return false
+}
+
+// listener is the listener as the configuration in effect has it.
+func (t *TLSFiles) listener() *config.Listener {
+	return t.config.Load()
 }
 
 // credential is what a client certificate was taken with: its public key, and each chain it was
@@ -244,11 +260,16 @@ func credentialOf(cs *tls.ConnectionState) (credential, bool) {
 
 // admits says whether a client certificate, verified at its connection's handshake, still opens the
 // listener now: one of its chains ends at a CA still in client_ca, and none of that chain's
-// certificates has expired; on a scoped listener, its scope (s) still pins it. Each request is
-// checked with it, and each stream at each scan: a connection kept alive, or a stream, outlives
-// its handshake.
+// certificates has expired; on a scoped listener, its scope (s) still pins it, and on a trusted one,
+// clients still lists it (a reload may remove it). Each request is checked with it, and each stream
+// at each scan and reload: a connection kept alive, or a stream, outlives its handshake.
 func (t *TLSFiles) admits(c credential, s *scope.Scope) bool {
-	if t == nil || t.listener.Mode == config.Scoped && (s == nil || !s.Pinned(c.key)) {
+	if t == nil {
+		return false
+	}
+
+	l := t.listener()
+	if l.Mode == config.Scoped && (s == nil || !s.Pinned(c.key)) || l.Mode == config.Trusted && !clientListed(l, c.key) {
 		return false
 	}
 
@@ -284,7 +305,8 @@ func LoadTLS(c *config.Config, log *slog.Logger) (*TLS, error) {
 			continue
 		}
 
-		t := &TLSFiles{listener: l}
+		t := &TLSFiles{}
+		t.config.Store(&l)
 
 		st, err := t.read(set.others(l))
 		if err != nil {
@@ -320,7 +342,7 @@ func (s *TLS) others(l config.Listener) map[string]*tlsState {
 	others := map[string]*tlsState{}
 
 	for name, t := range s.files {
-		if st := t.current.Load(); t.listener.Mode != l.Mode && name != l.Name && st.pool != nil {
+		if st := t.current.Load(); t.listener().Mode != l.Mode && name != l.Name && st.pool != nil {
 			others[name] = st
 		}
 	}
@@ -332,7 +354,7 @@ func (s *TLS) others(l config.Listener) map[string]*tlsState {
 // keeps the last good files, and is logged at error level once.
 func (s *TLS) Reload() {
 	for name, t := range s.files {
-		st, err := t.read(s.others(t.listener))
+		st, err := t.read(s.others(*t.listener()))
 		if err != nil {
 			if t.failed != err.Error() {
 				s.log.Error("tls files: kept the last good ones", "listener", name, "error", err)
@@ -352,6 +374,47 @@ func (s *TLS) Reload() {
 		s.log.Info("tls files: read again", "listener", name, "expires", st.leaf.NotAfter)
 		s.expiring(name, st)
 	}
+}
+
+// Reconfigure takes a reloaded configuration (one LoadTLS has checked): a listener whose TLS is the
+// same keeps its files, with its listener as the new configuration has it (a trusted listener's
+// clients); a listener added or moved (its tls changed) gets its files read, and is given back to be
+// opened with them; a listener without tls now has none.
+func (s *TLS) Reconfigure(c *config.Config, moved []string) error {
+	keep := map[string]bool{}
+
+	for _, l := range c.Listeners {
+		if l.TLS == nil {
+			continue
+		}
+
+		keep[l.Name] = true
+
+		if t, ok := s.files[l.Name]; ok && !slices.Contains(moved, l.Name) {
+			t.config.Store(&l)
+
+			continue
+		}
+
+		t := &TLSFiles{}
+		t.config.Store(&l)
+
+		st, err := t.read(s.others(l))
+		if err != nil {
+			return fmt.Errorf("listener %s: %w", l.Name, err)
+		}
+
+		t.current.Store(st)
+		s.files[l.Name] = t
+	}
+
+	for name := range s.files {
+		if !keep[name] {
+			delete(s.files, name)
+		}
+	}
+
+	return nil
 }
 
 func sameFiles(a, b [3][]byte) bool {

@@ -21,10 +21,12 @@ type Metrics struct {
 	mu sync.Mutex
 
 	scopeLabels bool
-	counters    map[string]map[labels]float64
-	histograms  map[string]map[labels]*histogram
-	streams     map[string]int64
-	gauges      []gauge
+	// Whether the last reload was taken (1 until one is refused)
+	reloaded   bool
+	counters   map[string]map[labels]float64
+	histograms map[string]map[labels]*histogram
+	streams    map[string]int64
+	gauges     []gauge
 
 	authLog *authLimiter
 }
@@ -77,24 +79,50 @@ type sample struct {
 
 // The metrics' names and what each counts (HELP), in the order they're written.
 var metricHelp = map[string]string{
-	"yorvogate_requests_total":         "Decisions on Docker requests, by listener, endpoint and outcome.",
-	"yorvogate_refusals_total":         "Refusals, by listener and reason code (and scope, with admin.scope_labels).",
-	"yorvogate_auth_failures_total":    "Authentication failures, by listener and cause.",
-	"yorvogate_docker_errors_total":    "Requests Docker didn't answer, by listener.",
-	"yorvogate_decision_seconds":       "How long YorvoGate took to decide, a refusal's hold included, by listener.",
-	"yorvogate_docker_seconds":         "How long Docker took to answer a forwarded request (its headers; streams excluded), by listener.",
-	"yorvogate_streams_open":           "Streams open (requests upgraded to a connection), by listener.",
-	"yorvogate_auth_log_dropped_total": "auth failed log lines dropped by the per-source and global limits.",
+	"yorvogate_requests_total":             "Decisions on Docker requests, by listener, endpoint and outcome.",
+	"yorvogate_refusals_total":             "Refusals, by listener and reason code (and scope, with admin.scope_labels).",
+	"yorvogate_auth_failures_total":        "Authentication failures, by listener and cause.",
+	"yorvogate_docker_errors_total":        "Requests Docker didn't answer, by listener.",
+	"yorvogate_decision_seconds":           "How long YorvoGate took to decide, a refusal's hold included, by listener.",
+	"yorvogate_docker_seconds":             "How long Docker took to answer a forwarded request (its headers; streams excluded), by listener.",
+	"yorvogate_streams_open":               "Streams open (requests upgraded to a connection), by listener.",
+	"yorvogate_auth_log_dropped_total":     "auth failed log lines dropped by the per-source and global limits.",
+	"yorvogate_config_reloads_total":       "Reloads of the configuration (SIGHUP), by result: reloaded or refused.",
+	"yorvogate_config_last_reload_success": "Whether the last reload of the configuration was taken (1 before any).",
 }
 
 // NewMetrics are a process's metrics.
 func NewMetrics(scopeLabels bool) *Metrics {
 	return &Metrics{
 		scopeLabels: scopeLabels,
+		reloaded:    true,
 		counters:    map[string]map[labels]float64{},
 		histograms:  map[string]map[labels]*histogram{},
 		streams:     map[string]int64{},
 		authLog:     newAuthLimiter(),
+	}
+}
+
+// Reloaded counts a reload of the configuration, taken or refused; a taken one may change
+// admin.scope_labels.
+func (m *Metrics) Reloaded(taken, scopeLabels bool) {
+	if m == nil {
+		return
+	}
+
+	result := "refused"
+	if taken {
+		result = "reloaded"
+	}
+
+	m.add("yorvogate_config_reloads_total", labelsOf("result", result), 1)
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.reloaded = taken
+	if taken {
+		m.scopeLabels = scopeLabels
 	}
 }
 
@@ -235,6 +263,7 @@ func (m *Metrics) Write(w io.Writer) error {
 	}
 
 	streams := maps.Clone(m.streams)
+	reloaded := m.reloaded
 	gauges := slices.Clone(m.gauges)
 	m.mu.Unlock()
 
@@ -263,7 +292,7 @@ func (m *Metrics) Write(w io.Writer) error {
 		}
 	}
 
-	for _, name := range []string{"yorvogate_requests_total", "yorvogate_refusals_total", "yorvogate_auth_failures_total", "yorvogate_docker_errors_total", "yorvogate_auth_log_dropped_total"} {
+	for _, name := range []string{"yorvogate_requests_total", "yorvogate_refusals_total", "yorvogate_auth_failures_total", "yorvogate_docker_errors_total", "yorvogate_auth_log_dropped_total", "yorvogate_config_reloads_total"} {
 		family(name, "counter", metricHelp[name])
 
 		for _, l := range slices.Sorted(maps.Keys(counters[name])) {
@@ -301,6 +330,14 @@ func (m *Metrics) Write(w io.Writer) error {
 
 	for _, listener := range slices.Sorted(maps.Keys(streams)) {
 		line("yorvogate_streams_open", labelsOf("listener", listener), float64(streams[listener]))
+	}
+
+	family("yorvogate_config_last_reload_success", "gauge", metricHelp["yorvogate_config_last_reload_success"])
+
+	if reloaded {
+		line("yorvogate_config_last_reload_success", "", 1)
+	} else {
+		line("yorvogate_config_last_reload_success", "", 0)
 	}
 
 	for _, g := range gauges {

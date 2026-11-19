@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/yorvolabs/yorvogate/internal/route"
 	"go.yaml.in/yaml/v3"
@@ -69,8 +70,21 @@ type Config struct {
 	Admin *Admin `yaml:"admin"`
 	// Daemon is what YorvoGate accepts of Docker's own defaults.
 	Daemon Daemon `yaml:"daemon"`
+	// ShutdownGrace is how long a stopping YorvoGate waits for requests and streams to end before it
+	// closes them ("8s"; from 0s to 10m; by default 8s, under Docker's 10-second stop timeout).
+	ShutdownGrace string `yaml:"shutdown_grace"`
 
 	lowest, highest route.Version
+	grace           time.Duration
+}
+
+// DefaultShutdownGrace is how long a stop waits by default: under the 10 seconds Docker (and Compose)
+// give a container before they kill it, so the streams it closes are logged.
+const DefaultShutdownGrace = 8 * time.Second
+
+// Grace is how long a stop waits for requests and streams to end.
+func (c *Config) Grace() time.Duration {
+	return c.grace
 }
 
 // Daemon is what YorvoGate accepts of Docker's own defaults, which it reads while it serves.
@@ -338,6 +352,16 @@ func (c *Config) check() error {
 
 	if err := c.Spool.settle(c); err != nil {
 		return err
+	}
+
+	c.grace = DefaultShutdownGrace
+	if c.ShutdownGrace != "" {
+		d, err := time.ParseDuration(c.ShutdownGrace)
+		if err != nil || d < 0 || d > 10*time.Minute {
+			return fmt.Errorf("shutdown_grace: %q must be a duration from 0s to 10m (\"8s\")", c.ShutdownGrace)
+		}
+
+		c.grace = d
 	}
 
 	if c.Admin != nil {

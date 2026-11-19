@@ -33,13 +33,17 @@ const (
 var downRetry = time.Second
 
 // Defaults is what YorvoGate last read of Docker's defaults, shared by every scoped listener.
+//
+// What Docker said is judged against a configuration (its scoped listeners' runtimes,
+// daemon.without_lsm, the API versions it serves): a request's own, so a reload judges the last read
+// again, without asking Docker.
 type Defaults struct {
-	docker  *Docker
-	runtime func(string) bool
-	noLSM   bool
-	state   atomic.Pointer[daemonState]
-	// The API versions the gate serves, to tell whether Docker's overlap
-	lowest, highest string
+	docker *Docker
+	// The configuration in effect, for Watch's reads and their logs
+	config atomic.Pointer[config.Config]
+	state  atomic.Pointer[daemonState]
+	// The last read judged against another configuration than its own, kept for the next request
+	rejudged atomic.Pointer[daemonState]
 	// Bumped when Docker is found down: a read begun before isn't kept (it may be the Docker before
 	// a restart)
 	generation atomic.Uint64
@@ -63,11 +67,35 @@ type daemonState struct {
 	apiMismatch    string
 	// Whether this read reached Docker at all
 	reached bool
+	// What Docker said, and the configuration it was judged against
+	info   dockerInfo
+	config *config.Config
+	// The read this one judges again (nil: it's a read)
+	of *daemonState
 }
 
 // NewDefaults reads Docker's defaults for a configuration's scoped listeners: a default runtime is
 // allowed when it's runc or each scoped listener lists it.
 func NewDefaults(c *config.Config) *Defaults {
+	d := &Defaults{docker: NewDocker(c.UpstreamSocket()), nudge: make(chan struct{}, 1)}
+	d.config.Store(c)
+
+	return d
+}
+
+// Reconfigure takes a reloaded configuration: Watch reads and logs by it from now on (at once).
+func (d *Defaults) Reconfigure(c *config.Config) {
+	d.config.Store(c)
+
+	select {
+	case d.nudge <- struct{}{}:
+	default:
+	}
+}
+
+// runtimeAllowed tells whether Docker's default runtime may be a configuration's: runc, or one each
+// scoped listener lists.
+func runtimeAllowed(c *config.Config) func(string) bool {
 	var lists [][]string
 
 	for _, l := range c.Listeners {
@@ -76,18 +104,41 @@ func NewDefaults(c *config.Config) *Defaults {
 		}
 	}
 
-	lowest, highest := c.Versions()
-
-	return &Defaults{
-		docker:  NewDocker(c.UpstreamSocket()),
-		lowest:  lowest.String(),
-		highest: highest.String(),
-		nudge:   make(chan struct{}, 1),
-		noLSM:   c.Daemon.WithoutLSM,
-		runtime: func(r string) bool {
-			return r == "runc" || !slices.ContainsFunc(lists, func(l []string) bool { return !slices.Contains(l, r) })
-		},
+	return func(r string) bool {
+		return r == "runc" || !slices.ContainsFunc(lists, func(l []string) bool { return !slices.Contains(l, r) })
 	}
+}
+
+// judgedBy judges what Docker said against a configuration.
+func judgedBy(info dockerInfo, apiMin, apiMax string, c *config.Config) *daemonState {
+	state := judge(info, runtimeAllowed(c), c.Daemon.WithoutLSM)
+	state.reached, state.info, state.config = true, info, c
+	state.apiMin, state.apiMax = apiMin, apiMax
+
+	lowest, highest := c.Versions()
+	if apiMax != "" && (older(apiMax, lowest.String()) || older(highest.String(), apiMin)) {
+		state.apiMismatch = fmt.Sprintf("Docker serves API %s to %s, YorvoGate %s to %s: no version is both's", apiMin, apiMax, lowest, highest)
+	}
+
+	return state
+}
+
+// judged is the last read, judged against c (a request's configuration), and whether there's one.
+func (d *Defaults) judged(c *config.Config) (*daemonState, bool) {
+	state := d.state.Load()
+	if state == nil || !state.reached || state.config == c {
+		return state, state != nil
+	}
+
+	if again := d.rejudged.Load(); again != nil && again.of == state && again.config == c {
+		return again, true
+	}
+
+	again := judgedBy(state.info, state.apiMin, state.apiMax, c)
+	again.of = state
+	d.rejudged.Store(again)
+
+	return again, true
 }
 
 // dockerInfo is what YorvoGate reads of Docker's /info.
@@ -109,13 +160,14 @@ func (d *Defaults) Read(ctx context.Context) *daemonState {
 		err = errors.New("no /info from Docker")
 	}
 
-	state := &daemonState{}
+	c := d.config.Load()
+
+	state := &daemonState{config: c}
 	if err != nil {
 		state.unsafe = []string{fmt.Sprintf("they couldn't be read (%v)", err)}
 	} else {
-		state = judge(info, d.runtime, d.noLSM)
-		state.reached = true
-		d.versions(ctx, state)
+		apiMin, apiMax := d.versions(ctx)
+		state = judgedBy(info, apiMin, apiMax, c)
 	}
 
 	if d.generation.Load() == generation {
@@ -129,25 +181,23 @@ func (d *Defaults) Read(ctx context.Context) *daemonState {
 	return state
 }
 
-// versions notes Docker's API versions, and whether they overlap the gate's (ARC-0004).
-func (d *Defaults) versions(ctx context.Context, state *daemonState) {
+// versions reads Docker's API versions, to tell whether they overlap the gate's (ARC-0004): none
+// when they can't be read.
+func (d *Defaults) versions(ctx context.Context) (apiMin, apiMax string) {
 	var v struct {
 		APIVersion    string `json:"ApiVersion"`
 		MinAPIVersion string
 	}
 
 	if found, err := d.docker.fetch(ctx, config.Lowest.String(), "/version", &v); err != nil || !found || v.APIVersion == "" {
-		return
+		return "", ""
 	}
 
-	state.apiMin, state.apiMax = v.MinAPIVersion, v.APIVersion
-	if state.apiMin == "" {
-		state.apiMin = state.apiMax
+	if v.MinAPIVersion == "" {
+		return v.APIVersion, v.APIVersion
 	}
 
-	if older(state.apiMax, d.lowest) || older(d.highest, state.apiMin) {
-		state.apiMismatch = fmt.Sprintf("Docker serves API %s to %s, YorvoGate %s to %s: no version is both's", state.apiMin, state.apiMax, d.lowest, d.highest)
-	}
+	return v.MinAPIVersion, v.APIVersion
 }
 
 // older tells whether API version a is older than b ("1.44" < "1.56").
@@ -260,10 +310,10 @@ func (d *Defaults) Watch(ctx context.Context, log *slog.Logger) {
 	}
 }
 
-// current is the last read of Docker's defaults, or why a scope's requests are refused now: they're
-// unsafe, or haven't been read.
-func (d *Defaults) current() (*daemonState, error) {
-	state := d.state.Load()
+// current is the last read of Docker's defaults, judged against a request's configuration, or why a
+// scope's requests are refused now: they're unsafe, or haven't been read.
+func (d *Defaults) current(c *config.Config) (*daemonState, error) {
+	state, _ := d.judged(c)
 	if state == nil && d.down.Load() {
 		return nil, refuse(http.StatusServiceUnavailable, CodeDefaultsUnread, nowhere, nothingAllowed, "Docker didn't answer: scoped requests wait until its defaults are read again")
 	}

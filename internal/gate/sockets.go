@@ -318,10 +318,10 @@ func (s *Sockets) serve(name string) error {
 		return err
 	}
 
-	t := &tracked{Listener: listener, conns: map[*trackedConn]struct{}{}}
+	t := newTracked(listener)
 	server := NewServer(s.gate)
 	server.BaseContext = func(net.Listener) context.Context {
-		return context.WithValue(context.Background(), boundKey{}, name)
+		return context.WithValue(t.ctx, boundKey{}, name)
 	}
 
 	s.open[name] = &boundSocket{server: server, listener: t}
@@ -343,26 +343,42 @@ func (s *Sockets) serve(name string) error {
 // Shutdown closes every socket: requests that are being answered may finish until the context
 // ends; streams are closed then.
 func (s *Sockets) Shutdown(ctx context.Context) {
+	s.Drain(ctx, "shutdown")
+}
+
+// Drain stops accepting at once (every socket's file goes), waits until the listener's requests and
+// streams have ended or the context ends, then closes what's still open, its streams logged with why.
+func (s *Sockets) Drain(ctx context.Context, why string) {
 	s.mu.Lock()
 	s.stopped = true
 	open := s.open
 	s.open = map[string]*boundSocket{}
 	s.mu.Unlock()
 
-	var wg sync.WaitGroup
-
 	for _, socket := range open {
-		wg.Add(1)
+		// Closing its listener removes its file: a client fails at once, rather than waiting; and
+		// its keep-alive connections take no new request
+		socket.listener.stop()
 
-		go func() {
-			defer wg.Done()
-
-			_ = socket.server.Shutdown(ctx)
-			socket.close()
-		}()
+		go func() { _ = socket.server.Shutdown(ctx) }()
 	}
 
-	wg.Wait()
+	_ = s.gate.Idle(ctx)
+	s.gate.Closing(why)
+
+	for _, socket := range open {
+		socket.close()
+	}
+
+	settle(s.gate)
+}
+
+// settle waits a little for the listener's handlers, their connections closed, to log their end.
+func settle(g *Gate) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_ = g.Idle(ctx)
 }
 
 // close stops a socket at once: its file goes, and every connection on it (streams included) is
@@ -372,14 +388,53 @@ func (b *boundSocket) close() {
 	b.listener.closeAll()
 }
 
+// Tracked is a listener that knows the connections it accepted, upgraded ones (streams) included,
+// and can close them all.
+type Tracked struct{ *tracked }
+
+// Track tracks a listener's connections.
+func Track(l net.Listener) *Tracked {
+	return &Tracked{newTracked(l)}
+}
+
+// Context is what the server's requests' contexts come from (http.Server.BaseContext): it ends when
+// the connections are closed, and with it every request, streams included.
+func (t *Tracked) Context(net.Listener) context.Context {
+	return t.ctx
+}
+
+// Drain stops accepting at once, waits until the gate's requests and streams have ended or the
+// context ends, then closes every connection, its streams logged with why ("shutdown", "reload").
+// The server's own Shutdown or Close is the caller's.
+func (t *Tracked) Drain(ctx context.Context, g *Gate, why string) {
+	t.stop()
+	_ = g.Idle(ctx)
+	g.Closing(why)
+	t.closeAll()
+	settle(g)
+}
+
 // tracked is a listener that knows its connections, including those an upgrade took from the HTTP
 // server (attach, exec, BuildKit's dial-stdio), so closing a socket closes them too.
+//
+// Closing them ends its requests' contexts too: a stream's other half, Docker's, is closed only when
+// its request's context ends (a client that sends nothing more, as an exec without stdin, would
+// otherwise leave it open until Docker's side ends).
 type tracked struct {
 	net.Listener
 
 	mu     sync.Mutex
 	conns  map[*trackedConn]struct{}
 	closed bool
+
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
+func newTracked(l net.Listener) *tracked {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	return &tracked{Listener: l, conns: map[*trackedConn]struct{}{}, ctx: ctx, cancel: cancel}
 }
 
 func (t *tracked) Accept() (net.Conn, error) {
@@ -403,6 +458,18 @@ func (t *tracked) Accept() (net.Conn, error) {
 	return tc, nil
 }
 
+// Closed says whether it was closed on purpose (a Serve that ends then hasn't failed).
+func (t *Tracked) Closed() bool { return t.isClosed() }
+
+// stop stops accepting: the connections it accepted stay open.
+func (t *tracked) stop() {
+	t.mu.Lock()
+	t.closed = true
+	t.mu.Unlock()
+
+	_ = t.Listener.Close()
+}
+
 func (t *tracked) isClosed() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -422,6 +489,8 @@ func (t *tracked) closeAll() {
 	for c := range conns {
 		_ = c.Conn.Close()
 	}
+
+	t.cancel()
 }
 
 type trackedConn struct {

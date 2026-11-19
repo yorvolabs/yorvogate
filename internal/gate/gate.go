@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yorvolabs/yorvogate/internal/config"
@@ -32,10 +33,17 @@ const (
 	TokenHeader = "X-Yorvogate-Token"
 )
 
-// Gate handles one listener's requests.
+// Gate handles one listener's requests. Each request is decided by a copy of it made for the
+// configuration in effect when it came (live): its config and listener are that configuration's,
+// and what's shared across requests is behind pointers.
 type Gate struct {
 	config   *config.Config
 	listener config.Listener
+	// The process's configuration in effect (nil: config and listener stay as made)
+	live *Live
+	// Requests being handled, and why its connections are being closed, if they are
+	inflight *inflight
+	closing  *atomic.Pointer[string]
 	registry *scope.Registry
 	scopes   *scope.Store
 	docker   *Docker
@@ -44,13 +52,13 @@ type Gate struct {
 	// Docker's defaults as last read: while they're unsafe, or unread, every scoped request is refused
 	defaults *Defaults
 	// A token or mTLS listener's requests being answered, ended when their allowance goes
-	streams streams
+	streams *streams
 	// An mTLS listener's files: whose CAs, as last read, its client certificates must still chain to
 	tls *TLSFiles
 	// The headers a scope sent that weren't forwarded, each warned of once
-	dropped sync.Map
+	dropped *sync.Map
 	// How long its recent decisions took, each endpoint's: a refusal is held as long (refusals.go)
-	decisions decisionTimes
+	decisions *decisionTimes
 	log       *slog.Logger
 	// The process's metrics (nil: none counted)
 	metrics *Metrics
@@ -109,7 +117,10 @@ func Registry(c *config.Config) *scope.Registry {
 // New makes the handler of a listener; a scoped one's scopes are the registry's, and its image loads
 // the process's spool.
 func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.Registry, defaults *Defaults, spool *Spool, log *slog.Logger) *Gate {
-	g := &Gate{config: c, listener: l, upstream: upstream, registry: scopes, defaults: defaults, log: log.With("listener", l.Name)}
+	g := &Gate{
+		config: c, listener: l, upstream: upstream, registry: scopes, defaults: defaults, log: log.With("listener", l.Name),
+		inflight: newInflight(), closing: &atomic.Pointer[string]{}, streams: &streams{}, dropped: &sync.Map{}, decisions: &decisionTimes{},
+	}
 	// A trusted listener's own lookups too: scope status lists a scope's taken names
 	g.docker = NewDocker(c.UpstreamSocket())
 	g.docker.onDown = defaults.Suspect
@@ -120,6 +131,43 @@ func New(c *config.Config, l config.Listener, upstream *Upstream, scopes *scope.
 	}
 
 	return g
+}
+
+// Follow decides each request by the configuration in effect when it comes, not the one the gate
+// was made with.
+func (g *Gate) Follow(live *Live) {
+	g.live = live
+}
+
+// now is the gate as the configuration in effect has it, for one request; false when the
+// configuration has no listener of its name now (it was removed: its connections are being closed).
+func (g *Gate) now() (*Gate, bool) {
+	if g.live == nil {
+		return g, true
+	}
+
+	rt := g.live.Load()
+
+	l, ok := rt.Listener(g.listener.Name)
+	if !ok {
+		return g, false
+	}
+
+	view := *g
+	view.config, view.listener = rt.Config, l
+
+	return &view, true
+}
+
+// Closing says why the listener's connections are about to be closed ("shutdown", "reload"): its
+// streams ended by it are logged with that reason.
+func (g *Gate) Closing(why string) {
+	g.closing.Store(&why)
+}
+
+// Idle waits until no request of the listener's is being handled, or the context ends.
+func (g *Gate) Idle(ctx context.Context) error {
+	return g.inflight.wait(ctx)
 }
 
 // UseTLS gives an mTLS listener's gate the files its listener serves: without them, its client
@@ -183,7 +231,16 @@ func (r *refusal) codes() []Code {
 
 // ServeHTTP decides on a request, and forwards it if it's allowed.
 func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := context.WithValue(r.Context(), controllerKey{}, http.NewResponseController(w))
+	defer g.inflight.begin()()
+
+	g, ok := g.now()
+	if !ok {
+		answerRefusal(w, refuse(http.StatusServiceUnavailable, CodeUndecided, nowhere, nothingAllowed, "the listener was removed by a reload"))
+
+		return
+	}
+
+	ctx := context.WithValue(withRuntime(r.Context(), g.config), controllerKey{}, http.NewResponseController(w))
 	r = r.WithContext(context.WithValue(ctx, startKey{}, time.Now()))
 
 	id, fields := requestFields(r)
@@ -382,7 +439,7 @@ func (g *Gate) decided(r *http.Request, entry *slog.Logger) (*http.Request, *sco
 
 		entry = entry.With("scope", s.Name)
 
-		daemon, err := g.defaults.current()
+		daemon, err := g.defaults.current(g.config)
 		if err != nil {
 			return nil, nil, err
 		}

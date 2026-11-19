@@ -9,7 +9,7 @@
   "properties": {
     "time": {"type": "string"},
     "level": {"enum": ["DEBUG", "INFO", "WARN", "ERROR"], "x-list": "closed", "description": "Closed: the levels."},
-    "msg": {"type": "string", "x-list": "open", "examples": ["allowed", "refused", "auth failed", "stream opened", "stream closed"]},
+    "msg": {"type": "string", "x-list": "open", "examples": ["allowed", "refused", "auth failed", "stream opened", "stream closed", "configuration reloaded", "configuration not reloaded", "stopping", "stopped"]},
     "log_version": {"const": 1},
     "request_id": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
     "client_request_id": {"type": "string", "pattern": "^[A-Za-z0-9._-]{1,64}$"},
@@ -31,7 +31,7 @@
     "duration_ms": {"type": "number", "minimum": 0},
     "bytes_in": {"type": "integer", "minimum": 0},
     "bytes_out": {"type": "integer", "minimum": 0},
-    "by": {"type": "string", "x-list": "open", "examples": ["ended", "revoked"], "description": "ended: by the client or Docker; revoked: its scope no longer allows it. A shutdown value comes with 0.4-c."}
+    "by": {"type": "string", "x-list": "open", "examples": ["ended", "revoked", "shutdown", "reload"], "description": "ended: by the client or Docker; revoked: its scope or credential no longer allows it; shutdown: YorvoGate stopped; reload: a reload removed or moved its listener."}
   },
   "allOf": [
     {"if": {"properties": {"msg": {"enum": ["allowed", "refused"]}}, "required": ["msg"]},

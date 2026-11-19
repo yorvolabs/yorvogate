@@ -12,7 +12,8 @@ import (
 
 // A stream (a request upgraded to a connection of its own: attach, exec, a builder's dial-stdio) is
 // logged when it opens and when it closes, with how long it lasted, the bytes each way, and whether
-// it ended or was ended because its scope no longer allows it (revoked).
+// it ended, was ended because its scope no longer allows it (revoked), or was closed by YorvoGate
+// stopping (shutdown) or by a reload that removed or moved its listener (reload).
 
 // counted is a response writer whose hijacked connection counts its bytes.
 type counted struct {
@@ -61,8 +62,13 @@ func (g *Gate) forwardStream(w http.ResponseWriter, forward *http.Request, log f
 	g.upstream.Forward(c, forward)
 
 	by := "ended"
-	if errors.Is(context.Cause(forward.Context()), errRevoked) {
+
+	switch why := g.closing.Load(); {
+	case errors.Is(context.Cause(forward.Context()), errRevoked):
 		by = "revoked"
+	case why != nil:
+		// Its listener closed it: YorvoGate stopping, or a reload that removed or moved the listener
+		by = *why
 	}
 
 	log("stream closed", "duration_ms", float64(time.Since(started).Microseconds())/1000, "bytes_in", c.in.Load(), "bytes_out", c.out.Load(), "by", by)

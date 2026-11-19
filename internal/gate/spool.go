@@ -19,14 +19,19 @@ import (
 // The spool is where image archives are kept while they're checked, shared by every scope of every
 // listener: in one folder, within one budget of bytes, a few loads at a time (spool.loads), each
 // scope one at a time. A load waits a bounded time for its turn, then is told to retry.
+//
+// Its limits (spool.limit, spool.loads) are each request's configuration's, so a reload changes
+// them in place: loads in flight keep their turn and their bytes, and new ones wait, or are told to
+// retry, until what's held is under the new limits.
 type Spool struct {
 	dir    string
-	limit  int64
-	global chan struct{}
 	scopes *loadLimiter
 
 	mu       sync.Mutex
 	reserved int64
+	// Loads holding a turn, and what's closed (and replaced) each time one ends, for those waiting
+	active int
+	freed  chan struct{}
 }
 
 // How long a load waits for its turn, and how long its upload may go silent; how long checking an
@@ -72,7 +77,15 @@ const spoolPrefix = "yorvogate-load-"
 // shares, so its bounds hold across listeners (and, once the configuration can be reloaded, across
 // reloads: a reload must update its limits in place, never make another).
 func NewSpool(c *config.Config) *Spool {
-	return &Spool{dir: c.Spool.Dir, limit: c.Spool.Limit, global: make(chan struct{}, c.Spool.Loads), scopes: newLoadLimiter()}
+	return &Spool{dir: c.Spool.Dir, scopes: newLoadLimiter(), freed: make(chan struct{})}
+}
+
+// Used is what loads in flight hold: bytes, and turns.
+func (s *Spool) Used() (int64, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.reserved, s.active
 }
 
 // needsSpool is whether a configuration has a scoped listener, whose scopes may load images.
@@ -148,9 +161,9 @@ func spoolError(dir string, err error) error {
 	return fmt.Errorf("spool.dir %s: %w (image loads are kept there while they're checked: mount a volume there, or set spool.dir)", dir, err)
 }
 
-// turn waits for the scope's turn to load, and a free one of spool.loads, at most loadWait (or until
-// the client goes). It gives the function that ends the turn.
-func (s *Spool) turn(ctx context.Context, scope string) (func(), error) {
+// turn waits for the scope's turn to load, and a free one of loads (the request's spool.loads), at
+// most loadWait (or until the client goes). It gives the function that ends the turn.
+func (s *Spool) turn(ctx context.Context, scope string, loads int) (func(), error) {
 	timer := time.NewTimer(loadWait)
 	defer timer.Stop()
 
@@ -166,19 +179,40 @@ func (s *Spool) turn(ctx context.Context, scope string) (func(), error) {
 		return nil, busy()
 	}
 
-	select {
-	case s.global <- struct{}{}:
-	case <-timer.C:
-		release()
+	for {
+		s.mu.Lock()
 
-		return nil, busy()
-	case <-ctx.Done():
-		release()
+		if s.active < loads {
+			s.active++
+			s.mu.Unlock()
 
-		return nil, busy()
+			break
+		}
+
+		freed := s.freed
+		s.mu.Unlock()
+
+		select {
+		case <-freed:
+		case <-timer.C:
+			release()
+
+			return nil, busy()
+		case <-ctx.Done():
+			release()
+
+			return nil, busy()
+		}
 	}
 
-	return func() { <-s.global; release() }, nil
+	return func() {
+		s.mu.Lock()
+		s.active--
+		close(s.freed)
+		s.freed = make(chan struct{})
+		s.mu.Unlock()
+		release()
+	}, nil
 }
 
 // reservation is one load's share of the spool's budget.
@@ -186,6 +220,8 @@ type reservation struct {
 	spool *Spool
 	scope string
 	held  int64
+	// The request's spool.limit
+	limit int64
 }
 
 // reserve takes n more bytes of the budget for the load, or says why it can't: the spool is full
@@ -195,7 +231,7 @@ func (r *reservation) reserve(n int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.reserved+n <= s.limit {
+	if s.reserved+n <= r.limit {
 		s.reserved += n
 		r.held += n
 		onReserve(r.scope, r.held)
@@ -203,8 +239,8 @@ func (r *reservation) reserve(n int64) error {
 		return nil
 	}
 
-	if r.held+n > s.limit || s.reserved == r.held {
-		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, at(inBody, ""), allowAtMost(s.limit, "bytes"), "image.load: the archive is larger than the image spool (spool.limit, %d bytes)", s.limit)
+	if r.held+n > r.limit || s.reserved == r.held {
+		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, at(inBody, ""), allowAtMost(r.limit, "bytes"), "image.load: the archive is larger than the image spool (spool.limit, %d bytes)", r.limit)
 	}
 
 	full := refuse(http.StatusServiceUnavailable, CodeLoadSpoolFull, nowhere, nothingAllowed, "image.load: the image spool is full: retry")

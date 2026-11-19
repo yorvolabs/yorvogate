@@ -116,13 +116,13 @@ func (s *scoped) load() (err error) {
 		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, at(inBody, ""), allowAtMost(s.loadLimit, "bytes"), "image.load: the archive is larger than %d bytes", s.loadLimit)
 	}
 
-	if s.length > s.spool.limit {
-		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, at(inBody, ""), allowAtMost(s.spool.limit, "bytes"), "image.load: the archive is larger than the image spool (spool.limit, %d bytes)", s.spool.limit)
+	if s.length > s.spoolConfig.Limit {
+		return refuse(http.StatusRequestEntityTooLarge, CodeLoadTooLarge, at(inBody, ""), allowAtMost(s.spoolConfig.Limit, "bytes"), "image.load: the archive is larger than the image spool (spool.limit, %d bytes)", s.spoolConfig.Limit)
 	}
 
-	held := &reservation{spool: s.spool, scope: s.scope.Name}
+	held := &reservation{spool: s.spool, scope: s.scope.Name, limit: s.spoolConfig.Limit}
 
-	release, err := s.spool.turn(s.ctx, s.scope.Name)
+	release, err := s.spool.turn(s.ctx, s.scope.Name, s.spoolConfig.Loads)
 	if err != nil {
 		return err
 	}
