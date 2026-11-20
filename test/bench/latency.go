@@ -125,7 +125,7 @@ func latency(o options, d *http.Client, tmp string, loadImages func() error) ([]
 		return nil, err
 	}
 
-	row, err := measureRequest(request{"GET /images/json", 200, listImages}, paths)
+	row, err := measureRequest(request{"GET /images/json", 20, listImages}, paths)
 	if err != nil {
 		return nil, fmt.Errorf("GET /images/json: %w\n%s", err, g.lastLog())
 	}
@@ -302,17 +302,14 @@ func execSample(p path, _ int) (time.Duration, error) {
 }
 
 // listImages: through the gate, the scope's list of a host's 10,000 images (the gate filters it as
-// it reads Docker's); direct, Docker's own filter for the scope's namespace.
+// it reads Docker's); direct, the same request unfiltered. The gate can't hand Docker a filter (a
+// scope also sees the images in no protected namespace, such as alpine), so Docker builds its whole
+// list either way, and the difference is the gate's reading and filtering of it.
 func listImages(p path, _ int) (time.Duration, error) {
-	query := ""
-	if p.name == "direct" {
-		query = "?filters=" + url.QueryEscape(`{"reference":["bench/`+p.owner+`/*"]}`)
-	}
-
 	var n int
 
 	took, err := timed(func() error {
-		answer, err := must(p.client, "GET", api+"/images/json"+query, nil)
+		answer, err := must(p.client, "GET", api+"/images/json", nil)
 		if err == nil {
 			var listed []json.RawMessage
 			err = json.Unmarshal(answer, &listed)
@@ -322,8 +319,10 @@ func listImages(p path, _ int) (time.Duration, error) {
 		return err
 	})
 
-	// The scope's 10, and its alpine where it has one
-	if err == nil && n != imagesPerScope && n != imagesPerScope+1 {
+	// Direct, all of them; through the gate, the scope's 10, and its alpine where it has one
+	if err == nil && p.name == "direct" && n < hostImages {
+		err = fmt.Errorf("listed %d images, want the host's %d", n, hostImages)
+	} else if err == nil && p.name != "direct" && n != imagesPerScope && n != imagesPerScope+1 {
 		err = fmt.Errorf("listed %d images, want the scope's %d", n, imagesPerScope)
 	}
 

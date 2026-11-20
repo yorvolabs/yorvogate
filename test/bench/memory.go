@@ -12,14 +12,16 @@ import (
 	"time"
 )
 
-// B, memory: a host of 10,000 images, 10 scopes of 10 each, and 100 filtered image lists at once (10
-// per scope) through the token listener. The gate reads Docker's list one image at a time and keeps
+// B, memory: a host of 10,000 images, 10 scopes of 10 each, and 10 filtered image lists at once (one
+// per scope) through the token listener. Each makes Docker build its whole list: at 100 at once,
+// Docker 29's containerd image store stopped answering before the gate's memory said anything. The gate reads Docker's list one image at a time and keeps
 // only the scope's, so its memory should follow the scopes' lists, not the host's.
 
 const (
 	hostImages     = 10000
 	imagesScopes   = 10
 	imagesPerScope = 10
+	concurrent     = 10
 )
 
 // loadImages loads the 10,000 images (sharing one small layer) straight into Docker.
@@ -159,7 +161,7 @@ func memory(o options, d *http.Client, loaded time.Duration) (*Memory, error) {
 		var wg sync.WaitGroup
 
 		for s, c := range clients {
-			for range 100 / imagesScopes {
+			for range concurrent / imagesScopes {
 				wg.Go(func() {
 					d, err := listImages(tokenPath(c, "t"+scopeName(s)), 0)
 
@@ -187,7 +189,7 @@ func memory(o options, d *http.Client, loaded time.Duration) (*Memory, error) {
 	_, peak := g.memory()
 
 	return &Memory{
-		HostImages: hostImages, Scopes: imagesScopes, PerScope: imagesPerScope, Concurrent: 100, Rounds: rounds,
+		HostImages: hostImages, Scopes: imagesScopes, PerScope: imagesPerScope, Concurrent: concurrent, Rounds: rounds,
 		LoadSeconds: loaded.Seconds(),
 		IdleRSS:     mib(idle), PeakRSS: mib(peak), IdleHeap: mib(idleHeap), PeakHeap: mib(peakHeap.Load()),
 		List: stats(took),

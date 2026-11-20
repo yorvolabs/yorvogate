@@ -1,6 +1,6 @@
 // Command bench measures YorvoGate's overhead and how it scales with scopes, through the built gate
 // and a real Docker (README.md): A, the latency of the common requests through the gate and straight
-// to Docker; B, the gate's memory under 100 concurrent image lists of a 10,000-image host; C, a
+// to Docker; B, the gate's memory under 10 concurrent image lists of a 10,000-image host; C, a
 // request's cost, check's and serve's, at 1 to 10,000 scopes. It writes results.json and results.md,
 // and with -baseline says which figures regressed past their thresholds (with -fail, it fails on one).
 //

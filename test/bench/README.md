@@ -24,7 +24,7 @@ It acts on Docker as a client would. It pulls `alpine:3.22`, and creates contain
 ## What it measures
 
 - **A, latency.** Each request is sent through a scope's socket, through the token listener, and straight to Docker, the three in turn with the order rotating, so the machine's noise falls on each alike. Each row gives p50 and p99 of each, what the gate adds at p50, and the gate's p50 as a multiple of Docker's.
-- **B, memory** (full run). Docker holds 10,000 images. Ten scopes of ten images each list theirs, 100 lists at once, ten times. B gives the gate's resident memory (VmRSS, and VmHWM at its peak) and its Go heap, read from the admin listener's `go_memstats_heap_alloc_bytes`.
+- **B, memory** (full run). Docker holds 10,000 images. Ten scopes of ten images each list theirs, all ten at once, ten times. B gives the gate's resident memory (VmRSS, and VmHWM at its peak) and its Go heap, read from the admin listener's `go_memstats_heap_alloc_bytes`.
 - **C, scaling.** The gate with 1 to 10,000 scopes on each of two scoped listeners. It times `check` and `serve` (until every listener and socket is open), and records the memory once up. Up to 100 scopes, spread over them all, send in turn a request they may not make, decided without Docker, on a token listener and on their own sockets, each over a kept connection, so the timing is the gate's work and not a connection's opening. At the most scopes, it also times how long a changed scope file takes to be in effect.
 
 The gate runs with `GOMEMLIMIT=200MiB`, as the configuration guide advises under a 256 MiB memory limit.
