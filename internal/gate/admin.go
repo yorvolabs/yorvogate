@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"runtime/metrics"
 	"sync"
 	"syscall"
 	"time"
@@ -222,7 +223,7 @@ func processGauges(live *Live, d *Defaults, registry *scope.Registry, spool *Spo
 		return 0
 	}
 
-	return []gauge{
+	gauges := []gauge{
 		{"yorvogate_build_info", "YorvoGate's version and the API versions it serves.", func() []sample {
 			lowest, highest := live.Load().Config.Versions()
 
@@ -286,5 +287,33 @@ func processGauges(live *Live, d *Defaults, registry *scope.Registry, spool *Spo
 
 			return out
 		}},
+	}
+
+	return append(gauges, runtimeGauges()...)
+}
+
+// runtimeGauges are Go's own, under the names Prometheus's Go client gives them, read from
+// runtime/metrics (which, unlike runtime.ReadMemStats, doesn't stop the world): what GOMEMLIMIT is
+// set against, and what a benchmark reads the heap from.
+func runtimeGauges() []gauge {
+	read := func(name string) func() []sample {
+		return func() []sample {
+			s := []metrics.Sample{{Name: name}}
+			metrics.Read(s)
+
+			if s[0].Value.Kind() != metrics.KindUint64 {
+				return nil
+			}
+
+			return []sample{{"", float64(s[0].Value.Uint64())}}
+		}
+	}
+
+	return []gauge{
+		{"go_goroutines", "Goroutines that exist.", read("/sched/goroutines:goroutines")},
+		{"go_memstats_heap_alloc_bytes", "Bytes of the heap's live and not yet collected objects.", read("/memory/classes/heap/objects:bytes")},
+		{"go_memstats_sys_bytes", "Bytes of memory the Go runtime has from the operating system.", read("/memory/classes/total:bytes")},
+		{"go_gc_heap_goal_bytes", "The heap size the next collection aims for.", read("/gc/heap/goal:bytes")},
+		{"go_gc_gomemlimit_bytes", "The Go runtime's memory limit (GOMEMLIMIT; the largest int64 when unset).", read("/gc/gomemlimit:bytes")},
 	}
 }
