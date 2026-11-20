@@ -129,7 +129,7 @@ func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 		"a name with spaces":             strings.Replace(valid, "name: sites", "name: my sites", 1),
 		"an address without a port":      strings.Replace(valid, "tcp://127.0.0.1:2375", "tcp://127.0.0.1", 1),
 		"an http address":                strings.Replace(valid, "tcp://127.0.0.1:2375", "http://127.0.0.1:2375", 1),
-		"a version newer than known":     valid + "api: {max: '1.57'}\n",
+		"a version newer than known":     valid + "api: {max: '1.58'}\n",
 		"a version older than known":     valid + "api: {min: '1.40'}\n",
 		"min above max":                  valid + "api: {min: '1.50', max: '1.45'}\n",
 		"a version that isn't one":       valid + "api: {min: 'latest'}\n",

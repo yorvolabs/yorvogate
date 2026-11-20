@@ -12,7 +12,7 @@ import (
 // the gate serves; an older Docker keeps its own, never one it can't serve, even below the gate's
 // lowest (its clients are then refused by the gate, saying why). The minimum is the newer of the two.
 func TestTheAdvertisedAPIVersionIsOneTheGateServes(t *testing.T) {
-	for daemon, want := range map[string]string{"1.57": "1.56", "2.0": "1.56", "1.56": "1.56", "1.50": "1.50", "1.40": "1.40", "garbage": "garbage"} {
+	for daemon, want := range map[string]string{"1.58": "1.57", "2.0": "1.57", "1.57": "1.57", "1.56": "1.56", "1.50": "1.50", "1.40": "1.40", "garbage": "garbage"} {
 		d := startDocker(t)
 		d.mu.Lock()
 		d.api = daemon
@@ -75,7 +75,7 @@ func TestADockerOlderThanTheGate(t *testing.T) {
 
 	server := gate(t, d, "sites")
 
-	if status, answer := send(t, server, "GET", "/v1.40/version", "", asJane); status != http.StatusBadRequest || !strings.Contains(message(t, answer), "API version 1.40 isn't supported (1.44 to 1.56)") {
+	if status, answer := send(t, server, "GET", "/v1.40/version", "", asJane); status != http.StatusBadRequest || !strings.Contains(message(t, answer), "API version 1.40 isn't supported (1.44 to 1.57)") {
 		t.Errorf("%d %s", status, answer)
 	}
 }

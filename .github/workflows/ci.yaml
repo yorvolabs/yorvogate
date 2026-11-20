@@ -70,8 +70,8 @@ jobs:
     permissions:
       contents: read
     with:
-      docker_version: 29.9.2
-      docker_api: '1.56'
+      docker_version: 29.10.0
+      docker_api: '1.57'
       # The benchmark's baseline is of this Engine, on this runner: only this call runs it
       bench: true
 
@@ -172,8 +172,8 @@ jobs:
     env:
       # The Engine whose code the suite's recorder is (test/differential/go.mod pins moby at its
       # commit): the two move together
-      DOCKER_VERSION: 29.9.2
-      DOCKER_API: '1.56'
+      DOCKER_VERSION: 29.10.0
+      DOCKER_API: '1.57'
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

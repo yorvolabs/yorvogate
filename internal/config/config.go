@@ -23,7 +23,7 @@ import (
 )
 
 // Highest is the newest Docker API version this build understands (github.com/moby/moby/api's).
-var Highest = route.Version{Major: 1, Minor: 56}
+var Highest = route.Version{Major: 1, Minor: 57}
 
 // Lowest is the oldest it accepts: what Docker Engine 29 still serves.
 var Lowest = route.Version{Major: 1, Minor: 44}

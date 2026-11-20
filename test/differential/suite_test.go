@@ -85,7 +85,7 @@ func TestWhatDockerReadsIsWhatTheGateDecided(t *testing.T) {
 	}
 
 	// Each base at the newest and the oldest API version the gate serves: Docker's defaults differ
-	for _, version := range []string{"1.56", "1.44"} {
+	for _, version := range []string{"1.57", "1.44"} {
 		for _, b := range bases {
 			base := atVersion(b.req(t), version)
 			want := s.send(base)

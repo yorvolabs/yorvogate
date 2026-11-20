@@ -6,7 +6,7 @@ It's a module of its own, so moby's daemon and its dependencies never enter Yorv
 
 ## The Engine it mirrors
 
-`go.mod` pins `github.com/moby/moby/v2` at **`v2.0.0-beta.28.0.20261020165307-0367cbeb49b9`**: commit 0367cbe, tag `docker-v29.9.2`. That's the Docker Engine CI installs (`DOCKER_VERSION` in `.github/workflows/ci.yaml`). The module tag `v2.0.0-beta.28` is 232 commits older, so it isn't that Engine.
+`go.mod` pins `github.com/moby/moby/v2` at **`v2.0.0-beta.31`**: commit 06db173, tag `docker-v29.10.0` (the module tag is on the same commit). That's the Docker Engine CI installs (`DOCKER_VERSION` in `.github/workflows/ci.yaml`). A module tag isn't always an Engine's commit: check the hash, and pin the commit's pseudo-version when they differ.
 
 **When CI's Engine moves, this pin moves with it**, in the same pull request: `go get github.com/moby/moby/v2@<the new Engine tag's commit>`, then check that the stand-ins' cited lines still hold. Dependabot leaves moby/v2 alone for that reason. A `go mod tidy` run while nothing imports moby puts back the newest moby, not this pin: check `go.mod` after one.
 

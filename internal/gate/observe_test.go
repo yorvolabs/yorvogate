@@ -269,7 +269,7 @@ func TestReadiness(t *testing.T) {
 
 	// Docker's API versions all above the gate's
 	d.mu.Lock()
-	d.api, d.apiMin = "1.60", "1.57"
+	d.api, d.apiMin = "1.61", "1.58"
 	d.mu.Unlock()
 	defaults.Read(context.Background())
 
