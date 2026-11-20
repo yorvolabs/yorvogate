@@ -14,8 +14,9 @@ cd test/bench
 go run . -gate ../../bin/yorvogate -docker /var/run/docker.sock
 ```
 
-- `-full` is the full run: more samples, scopes at 1, 100, 1,000, 4,000 and 10,000, a 1 GiB image load, and B's 10,000 images. It takes hours, most of them Docker's: on a 20-CPU machine, loading the 10,000 images took 27 minutes and removing them over an hour. It needs about 3 GiB of disk beside Docker's. Without it, the quick run takes a few minutes: A without the image requests, and C at 1, 1,000 and 10,000 scopes.
+- `-full` is the full run: more samples, scopes at 1, 100, 1,000, 4,000 and 10,000, a 1 GiB image load, and B's 10,000 images. It takes hours, most of them Docker's: on an 8-CPU Ubuntu machine, the measuring took about 2 hours (33 minutes of it loading the 10,000 images), and removing them about 2 more. It needs about 3 GiB of disk beside Docker's. Without it, the quick run takes a few minutes: A without the image requests, and C at 1, 1,000 and 10,000 scopes.
 - `-out` is where `results.json` and `results.md` go (`out/` by default).
+- `-leave` leaves what the run made in Docker when it ends, skipping that removal. It's for a machine that's thrown away after, such as CI's runner: CI's full run passes it.
 - `-without-lsm` lets the gate accept a Docker without AppArmor or SELinux, such as Docker Desktop's.
 - `-baseline baseline.json` compares the run with the baseline, and marks which figures are gated. `-fail` makes a regression fail the run. CI's pull-request run gives both.
 

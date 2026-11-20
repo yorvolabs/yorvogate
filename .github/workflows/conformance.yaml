@@ -30,8 +30,9 @@ jobs:
   conformance:
     name: Conformance (a real Docker, real Compose; ${{ matrix.store }} image store, ${{ matrix.daemon }} daemon)
     runs-on: ubuntu-26.04
-    # The nightly benchmark's full run takes about half an hour more
-    timeout-minutes: ${{ inputs.bench && 90 || 45 }}
+    # The benchmark's quick run takes about half an hour more; its full run (at night or by hand)
+    # about 2 hours more on an 8-CPU machine, without removing its images (-leave)
+    timeout-minutes: ${{ !inputs.bench && 45 || (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 300 || 90 }}
     strategy:
       fail-fast: false
       matrix:
@@ -140,7 +141,7 @@ jobs:
           OUT: ${{ runner.temp }}/bench
         run: |
           if [ "$FULL" = true ]; then
-            go run . -gate "$GATE" -docker /var/run/docker.sock -out "$OUT" -full -baseline baseline.json
+            go run . -gate "$GATE" -docker /var/run/docker.sock -out "$OUT" -full -leave -baseline baseline.json
           else
             go run . -gate "$GATE" -docker /var/run/docker.sock -out "$OUT" -baseline baseline.json -fail
           fi

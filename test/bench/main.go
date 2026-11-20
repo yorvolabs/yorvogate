@@ -27,6 +27,7 @@ type options struct {
 	binary, docker, out, tmp string
 	withoutLSM               bool
 	full                     bool
+	leave                    bool
 	gateEnv                  []string
 }
 
@@ -57,6 +58,7 @@ func bench() error {
 	flag.StringVar(&o.docker, "docker", "/var/run/docker.sock", "Docker's socket")
 	flag.StringVar(&o.out, "out", "out", "where results.json and results.md go")
 	flag.BoolVar(&o.full, "full", false, "the full run: more samples, every count of scopes, the 1 GiB load and B's 10,000 images")
+	flag.BoolVar(&o.leave, "leave", false, "leave what the run made in Docker when it ends (on a throwaway machine, such as CI's runner)")
 	flag.BoolVar(&o.withoutLSM, "without-lsm", false, "accept a Docker without AppArmor or SELinux (Docker Desktop)")
 	flag.Parse()
 
@@ -135,7 +137,12 @@ func run(o options) (*Results, error) {
 		return nil, err
 	}
 
+	// Removing the full run's 10,000 images takes Docker longer than the measuring
 	defer func() {
+		if o.leave {
+			return
+		}
+
 		if err := clean(d); err != nil {
 			progress("cleaning up: %v", err)
 		}
