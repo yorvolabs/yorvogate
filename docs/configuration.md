@@ -213,11 +213,11 @@ A pull's `platform` is checked: the host's, or one in [`pulls.platforms`](#pulls
 
 ## Endpoint groups (trusted listeners)
 
-`read` allows a group's endpoints that change nothing; `write` allows all of them.
+`read` allows a group's endpoints that change nothing; `write` allows all of them. `_ping` is allowed on every trusted listener, whatever its groups: clients choose their API version from its answer.
 
 | Group | Endpoints |
 |---|---|
-| `system` | `_ping`, `version`, `info`, `events`, `system/df`; `auth` (write) |
+| `system` | `version`, `info`, `events`, `system/df`; `auth` (write) |
 | `containers` | list, create, inspect, logs, stats, start, stop, kill, update, rename, attach, wait, delete, archive… |
 | `exec` | exec create, start, resize, inspect |
 | `images` | list, pull, inspect, history, tag, push, delete, save, load, search, prune, commit |

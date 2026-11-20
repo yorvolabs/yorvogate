@@ -46,6 +46,15 @@ func TestAValidConfiguration(t *testing.T) {
 		t.Error("allow: write allows writes, read only reads, nothing else")
 	}
 
+	// _ping on every trusted listener, whatever its groups; the rest of system only with it
+	noSystem := &Listener{Mode: Trusted, Allow: map[string]string{"containers": "read"}}
+	ping := &route.Endpoint{Name: "system.ping", Group: route.System}
+	version := &route.Endpoint{Name: "system.version", Group: route.System}
+
+	if !noSystem.Allows(ping) || noSystem.Allows(version) {
+		t.Error("allow: _ping on a trusted listener without system, and nothing else of system")
+	}
+
 	for _, edge := range []string{"api: {min: '1.45', max: '1.50'}", "body_limit: 4096", "body_limit: 67108864", "load_limit: 1048576", "load_limit: 274877906944"} {
 		c, err := Parse([]byte(valid + edge + "\n"))
 		if err != nil {

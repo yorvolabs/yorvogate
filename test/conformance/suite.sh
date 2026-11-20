@@ -697,6 +697,8 @@ refused "the orchestrator: docker ps, before the reload" "isn't allowed on this 
 sed '/name: orchestrator/,/allow:/s|allow: {system: read}|allow: {containers: read}|' "$dir/yorvogate.yaml.before" > "$dir/yorvogate.yaml"
 if reload reloaded; then ok "the edited configuration is reloaded"; else ko "the edited configuration is reloaded" "$(tail -3 "$dir/yorvogate.log")"; fi
 works "the orchestrator: docker ps, after the reload" orchestrator ps
+# Clients choose their API version from _ping: it's answered without the system group
+if [ "$(wget -q -T 5 -O- http://127.0.0.1:2380/_ping 2>&1)" = OK ]; then ok "the orchestrator: _ping, without the system group"; else ko "the orchestrator: _ping, without the system group" "$(wget -T 5 -O- http://127.0.0.1:2380/_ping 2>&1)"; fi
 refused "the orchestrator: docker version, no longer allowed" "isn't allowed on this listener" orchestrator version
 # A scope each leg still has here (sockets: blog's file is gone; mtls: jane's certificate unpinned)
 unchanged=jane
