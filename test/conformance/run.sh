@@ -21,7 +21,7 @@ for listener in tokens sockets mtls; do
 		-v "$PWD/bin:/yorvogate:ro" \
 		-v "$PWD/test/conformance:/conformance:ro" \
 		-v "$PWD/test/conformance/out:/out" \
-		docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
+		docker:29.10.0-cli@sha256:34507eb5069d8be82c95dd3b6987d4250fd5fee49b82e2509b7d7a7030740d6d \
 		sh /conformance/suite.sh || status=1
 done
 # Then Quire Server's real use: an orchestrator, sites on their own sockets, builds on rootless
@@ -31,7 +31,7 @@ docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR \
 	-v "$PWD/bin:/yorvogate:ro" \
 	-v "$PWD/test/conformance:/conformance:ro" \
 	-v "$PWD/test/conformance/out:/out" \
-	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
+	docker:29.10.0-cli@sha256:34507eb5069d8be82c95dd3b6987d4250fd5fee49b82e2509b7d7a7030740d6d \
 	sh /conformance/quire.sh || status=1
 # Then a rootless build from docs/configuration.md alone: its listener, scope file and commands
 docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR \
@@ -40,7 +40,7 @@ docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR \
 	-v "$PWD/test/conformance:/conformance:ro" \
 	-v "$PWD/test/conformance/out:/out" \
 	-v "$PWD/docs:/docs:ro" \
-	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
+	docker:29.10.0-cli@sha256:34507eb5069d8be82c95dd3b6987d4250fd5fee49b82e2509b7d7a7030740d6d \
 	sh /conformance/docs.sh || status=1
 # Then an AI agent's socket, as docs/agents.md sets it up: the sockets' folder a volume, so an agent's
 # container can mount its one socket
@@ -50,7 +50,7 @@ docker run --rm -e GITHUB_ACTIONS \
 	-v "$PWD/bin:/yorvogate:ro" \
 	-v "$PWD/test/conformance:/conformance:ro" \
 	-v "$PWD/test/conformance/out:/out" \
-	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
+	docker:29.10.0-cli@sha256:34507eb5069d8be82c95dd3b6987d4250fd5fee49b82e2509b7d7a7030740d6d \
 	sh /conformance/agents.sh || status=1
 docker volume rm ygc-agents >/dev/null 2>&1
 # Then SandboxEscapeBench's gate-relevant escape scenarios, end to end through a scope socket
@@ -59,6 +59,6 @@ docker run --rm -e GITHUB_ACTIONS \
 	-v "$PWD/bin:/yorvogate:ro" \
 	-v "$PWD/test/conformance:/conformance:ro" \
 	-v "$PWD/test/conformance/out:/out" \
-	docker:29.9.2-cli@sha256:5e6baf67325a79f64ed3bed6863954d5e05d0f3d4e57cbdb14809346814bbfdb \
+	docker:29.10.0-cli@sha256:34507eb5069d8be82c95dd3b6987d4250fd5fee49b82e2509b7d7a7030740d6d \
 	sh /conformance/escapes.sh || status=1
 exit $status
