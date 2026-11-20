@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -34,13 +35,15 @@ func newRequestID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// cut shortens a value a client chose to n bytes, marking that it was cut.
+// cut shortens a value a client chose to n bytes, marking that it was cut, with its line breaks
+// written as \r and \n. The JSON log escapes them already; written out, they stay visible in a log
+// read as text, and code scanning sees the value made safe.
 func cut(s string, n int) string {
-	if len(s) <= n {
-		return s
+	if len(s) > n {
+		s = s[:n] + "…"
 	}
 
-	return s[:n] + "…"
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\r", `\r`), "\n", `\n`)
 }
 
 // source is where a request came from: its TCP peer's address, or on a unix socket the peer's user.

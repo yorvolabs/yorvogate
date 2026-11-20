@@ -111,6 +111,18 @@ func TestAuthFailuresAreAnsweredAlikeAndLoggedApart(t *testing.T) {
 	// (checkedLog fails the test on any line holding a token)
 }
 
+func TestCutWritesLineBreaksOut(t *testing.T) {
+	for in, want := range map[string]string{
+		"a\r\nb":                 `a\r\nb`,
+		strings.Repeat("x", 300): strings.Repeat("x", 256) + "…",
+		"/v1.56/containers/json": "/v1.56/containers/json",
+	} {
+		if got := cut(in, 256); got != want {
+			t.Errorf("cut(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // A path and a claimed scope a client chose are cut short in the log, whatever they hold: one line,
 // the schema's (checkedLog), never split.
 func TestUntrustedValuesAreCutInTheLog(t *testing.T) {
