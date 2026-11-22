@@ -23,6 +23,11 @@ const api = "/v1.56"
 // The owner label of every scope's objects, and of the host's that are no scope's.
 const ownerLabel = "org.yorvolabs.bench"
 
+// projectLabel is on what the benchmark makes straight with Docker, as on everything YorvoGate's
+// tests make, so it can be found by it. (The create it measures, composeBody, is left as Compose
+// sends it.)
+const projectLabel = "org.yorvolabs.project"
+
 // Scopes are named site00000, site00001, …: on the token listener a scope's objects are owned by
 // t<name>, on the scope sockets' by s<name>, so the two never share a name.
 func scopeName(i int) string { return fmt.Sprintf("site%05d", i) }

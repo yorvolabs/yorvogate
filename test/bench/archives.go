@@ -53,7 +53,7 @@ func config(diffID, label string) []byte {
 	b, _ := json.Marshal(map[string]any{
 		"architecture": runtime.GOARCH,
 		"os":           "linux",
-		"config":       map[string]any{"Labels": map[string]string{"org.yorvolabs.bench.image": label}},
+		"config":       map[string]any{"Labels": map[string]string{"org.yorvolabs.bench.image": label, projectLabel: "yorvogate"}},
 		"rootfs":       map[string]any{"type": "layers", "diff_ids": []string{diffID}},
 		"created":      "1970-01-01T00:00:00Z",
 	})
