@@ -92,7 +92,7 @@ func createContainer(d *http.Client, owner, name string) (string, error) {
 	answer, err := must(d, "POST", api+"/containers/create?name="+name, map[string]any{
 		"Image":  image,
 		"Cmd":    []string{"sleep", "86400"},
-		"Labels": map[string]string{ownerLabel: owner},
+		"Labels": map[string]string{ownerLabel: owner, projectLabel: "yorvogate"},
 	})
 	if err != nil {
 		return "", err
@@ -138,7 +138,7 @@ func prepareOwner(d *http.Client, owner string) (running string, err error) {
 		return "", err
 	}
 
-	labels := map[string]string{ownerLabel: owner}
+	labels := map[string]string{ownerLabel: owner, projectLabel: "yorvogate"}
 
 	if _, err := must(d, "POST", api+"/networks/create", map[string]any{"Name": owner + "_default", "Labels": labels}); err != nil {
 		return "", err

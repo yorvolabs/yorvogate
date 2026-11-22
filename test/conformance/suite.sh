@@ -191,9 +191,9 @@ direct image inspect alpine:3.22 >/dev/null 2>&1 || direct pull -q alpine:3.22 >
 # one configured as a builder must be (rootless, unprivileged, out of a hardened daemon's
 # no-new-privileges; alpine stands in for BuildKit), and one under no-new-privileges, which rootless
 # BuildKit can't run under
-direct run -d --name ygc-builder-privileged --privileged alpine:3.22 sleep 600 >/dev/null
-direct run -d --name ygc-builder-rootless --user 1000:1000 --security-opt seccomp=unconfined --security-opt no-new-privileges=false alpine:3.22 sleep 600 >/dev/null
-direct run -d --name ygc-builder-nnp --user 1000:1000 --security-opt seccomp=unconfined --security-opt no-new-privileges alpine:3.22 sleep 600 >/dev/null
+direct run -d --label "$yorvolabs_label" --name ygc-builder-privileged --privileged alpine:3.22 sleep 600 >/dev/null
+direct run -d --label "$yorvolabs_label" --name ygc-builder-rootless --user 1000:1000 --security-opt seccomp=unconfined --security-opt no-new-privileges=false alpine:3.22 sleep 600 >/dev/null
+direct run -d --label "$yorvolabs_label" --name ygc-builder-nnp --user 1000:1000 --security-opt seccomp=unconfined --security-opt no-new-privileges alpine:3.22 sleep 600 >/dev/null
 
 # A tenant's project: hardened, its own network and volume
 project() {
@@ -208,8 +208,13 @@ services:
     mem_limit: 64m
     pids_limit: 64
     volumes: [data:/data]
+    labels: [$yorvolabs_label]
 volumes:
   data:
+    labels: [$yorvolabs_label]
+networks:
+  default:
+    labels: [$yorvolabs_label]
 EOF
 	printf '%s' "$dir/project-$1/compose.yaml"
 }
@@ -225,6 +230,9 @@ hostile() {
 		case "${4:-}" in *sec*) ;; *) printf '    security_opt: [no-new-privileges:true]\n' ;; esac
 		case "${4:-}" in *net*) ;; *) printf '    network_mode: none\n' ;; esac
 		printf '%b\n' "$2"
+		# On the project's network, declared as the project declares it (its label), or Compose would
+		# take it for another
+		case "${4:-}" in *net*) case "$2" in *networks:*) ;; *) printf 'networks:\n  default:\n    labels: [%s]\n' "$yorvolabs_label" ;; esac ;; esac
 	} > "$file"
 	printf '%s' "$file"
 }
@@ -268,7 +276,7 @@ say "== Image archives, named as Docker names them, holding what they refer to"
 if direct info --format '{{json .DriverStatus}}' | grep -q io.containerd.snapshotter; then containerd=1; else containerd=; fi
 arch=$(direct version -f '{{.Server.Arch}}')
 # docker save's archive of an image jane built: it holds every blob it refers to
-printf 'FROM alpine:3.22\nLABEL ygc=jane-built\n' | direct build -q -t ygc-jane/built:1 - >/dev/null
+printf 'FROM alpine:3.22\nLABEL ygc=jane-built\n' | direct build -q --label "$yorvolabs_label" -t ygc-jane/built:1 - >/dev/null
 direct save -o "$dir/own.tar" ygc-jane/built:1
 works "jane: load its own archive" as jane docker load -q -i "$dir/own.tar"
 # A pulled multi-platform image's archive: on the containerd store its index names platforms it
@@ -285,7 +293,7 @@ if direct save --platform "linux/$arch" -o "$dir/platform.tar" ygc-jane/app:1 2>
 fi
 # buildx --load with an attestation (the containerd store keeps attestations; the classic one doesn't)
 if [ -n "$containerd" ]; then
-	printf 'FROM alpine:3.22\nLABEL ygc=jane-attested\n' | direct buildx build -q --provenance=mode=min --load -t ygc-jane/attested:1 - >/dev/null
+	printf 'FROM alpine:3.22\nLABEL ygc=jane-attested\n' | direct buildx build -q --provenance=mode=min --load --label "$yorvolabs_label" -t ygc-jane/attested:1 - >/dev/null
 	direct save -o "$dir/attested.tar" ygc-jane/attested:1
 	rm -rf "$dir/attested" && mkdir -p "$dir/attested" && tar -xf "$dir/attested.tar" -C "$dir/attested"
 	if grep -rqsE 'attestation-manifest|vnd\.docker\.attestation\.manifest' "$dir/attested/index.json" "$dir/attested/blobs"; then ok "buildx's archive holds an attestation"; else ko "buildx's archive holds an attestation" "$(cat "$dir/attested/index.json")"; fi
@@ -392,7 +400,7 @@ blog_builder=$(as blog docker container inspect ygc-builder-rootless 2>&1)
 if printf '%s' "$blog_builder" | grep -q "No such container"; then ok "another scope's builder doesn't exist for blog"; else ko "blog sees jane's builder" "$blog_builder"; fi
 
 say "== Requests written to slip past (raw HTTP)"
-create='{"Image":"alpine:3.22","Labels":{"com.docker.compose.project":"ygc-jane"},"HostConfig":{"NetworkMode":"none","CapDrop":["ALL"],"SecurityOpt":["no-new-privileges"],"Memory":67108864,"PidsLimit":64%s}}'
+create='{"Image":"alpine:3.22","Labels":{"com.docker.compose.project":"ygc-jane","org.yorvolabs.project":"yorvogate"},"HostConfig":{"NetworkMode":"none","CapDrop":["ALL"],"SecurityOpt":["no-new-privileges"],"Memory":67108864,"PidsLimit":64%s}}'
 # shellcheck disable=SC2059
 status "a lowercase key" 403 jane POST /v1.56/containers/create?name=ygc-jane-evil-1 "$(printf "$create" ',"privileged":true')"
 # shellcheck disable=SC2059
@@ -420,7 +428,7 @@ else
 	ko "the CLI shows the message, and only it" "$output"
 fi
 # An image all of whose names are blog's, run by its ID: by a few of its digits (Docker takes 4), or whole
-printf 'FROM alpine:3.22\nLABEL ygc=blog-only\n' | direct build -q -t ygc-blog/only:1 - >/dev/null
+printf 'FROM alpine:3.22\nLABEL ygc=blog-only\n' | direct build -q --label "$yorvolabs_label" -t ygc-blog/only:1 - >/dev/null
 only=$(direct image inspect ygc-blog/only:1 --format '{{.Id}}' | sed 's/^sha256://')
 short=$(printf '%.6s' "$only")
 # shellcheck disable=SC2059
@@ -627,7 +635,8 @@ if [ "$listener" = mtls ]; then
 	set -- --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt no-new-privileges=false
 	[ -n "$apparmor" ] && set -- "$@" --security-opt "apparmor=$apparmor"
 	direct image inspect "$buildkit" >/dev/null 2>&1 || direct pull -q "$buildkit" >/dev/null
-	direct run -d --name ygc-buildkit-mtls "$@" -v ygc-buildkit-mtls-state:/home/user/.local/share/buildkit "$buildkit" >/dev/null
+	direct volume create --label "$yorvolabs_label" ygc-buildkit-mtls-state >/dev/null
+	direct run -d --label "$yorvolabs_label" --name ygc-buildkit-mtls "$@" -v ygc-buildkit-mtls-state:/home/user/.local/share/buildkit "$buildkit" >/dev/null
 	# mtlsctx COMMAND…: a command whose current context is jane's mTLS one (without DOCKER_HOST, which
 	# the CLI's image sets, and which would win over the context)
 	mtlsctx() { env -u DOCKER_HOST DOCKER_CONFIG="$dir/mtls-context" "$@"; }
@@ -644,7 +653,7 @@ if [ "$listener" = mtls ]; then
 	printf 'FROM scratch\nCOPY hello.txt /hello.txt\n' > "$dir/mtls-build/Dockerfile"
 	# what the gate logs from here on is the build's
 	mark=$(wc -l < "$dir/yorvogate.log")
-	works "buildx build --load (FROM scratch + COPY), over the mTLS context" mtlsctx timeout 120 docker buildx build -q --builder ygc-mtls-builder --load -t ygc-jane/mtls-built:1 "$dir/mtls-build"
+	works "buildx build --load (FROM scratch + COPY), over the mTLS context" mtlsctx timeout 120 docker buildx build -q --builder ygc-mtls-builder --load --label "$yorvolabs_label" -t ygc-jane/mtls-built:1 "$dir/mtls-build"
 	works "jane: the image built over mTLS is there" tlsas jane docker image inspect ygc-jane/mtls-built:1
 	for endpoint in exec.start image.load; do
 		if tail -n "+$((mark + 1))" "$dir/yorvogate.log" | grep '"listener":"tenant-mtls"' | grep '"msg":"allowed"' | grep '"scope":"jane"' | grep -q "\"endpoint\":\"$endpoint\""; then
@@ -658,7 +667,7 @@ if [ "$listener" = mtls ]; then
 	direct volume rm ygc-buildkit-mtls-state >/dev/null 2>&1
 
 	# A scope no longer pinning a certificate: it's refused at once, and its stream ends
-	tlsas jane docker run -d --name ygc-jane-mtls --label com.docker.compose.project=ygc-jane --network none --cap-drop ALL --security-opt no-new-privileges --memory 64m --pids-limit 64 alpine:3.22 sleep 600 >/dev/null
+	tlsas jane docker run -d --name ygc-jane-mtls --label com.docker.compose.project=ygc-jane --label "$yorvolabs_label" --network none --cap-drop ALL --security-opt no-new-privileges --memory 64m --pids-limit 64 alpine:3.22 sleep 600 >/dev/null
 	tlsas jane docker logs -f ygc-jane-mtls > "$dir/mtls-logs.out" 2>&1 &
 	follower=$!
 	sleep 1
@@ -730,7 +739,7 @@ say "== A stop drains, then closes the streams still open"
 # 8 s), logged by: shutdown, and the gate exits 0 within the 10 s Docker would give its container. The container is jane's by its name and label, made straight.
 # Without -i, the CLI sends nothing more once the exec starts, while Docker's side runs on: the gate
 # must close Docker's side too, or the stream would last until the command ends.
-direct run -d --name ygc-jane-drain --label com.docker.compose.project=ygc-jane alpine:3.22 sleep 300 >/dev/null
+direct run -d --name ygc-jane-drain --label com.docker.compose.project=ygc-jane --label "$yorvolabs_label" alpine:3.22 sleep 300 >/dev/null
 DOCKER_HOST=tcp://127.0.0.1:2386 DOCKER_CONFIG="$dir/jane" docker exec ygc-jane-drain sleep 60 >/dev/null 2>&1 &
 drained=$!
 sleep 2

@@ -20,7 +20,7 @@ go run . -gate ../../bin/yorvogate -docker /var/run/docker.sock
 - `-without-lsm` lets the gate accept a Docker without AppArmor or SELinux, such as Docker Desktop's.
 - `-baseline baseline.json` compares the run with the baseline, and marks which figures are gated. `-fail` makes a regression fail the run. CI's pull-request run gives both.
 
-It acts on Docker as a client would. It pulls `alpine:3.22`, and creates containers, networks, volumes and images, all with the label `org.yorvolabs.bench` or named `bench/…`. It removes them before it starts and when it ends. So run it on a Docker you can spare: a test machine, or CI's runner.
+It acts on Docker as a client would. It pulls `alpine:3.22`, and creates containers, networks, volumes and images, all with the label `org.yorvolabs.bench` or named `bench/…`. What it makes straight with Docker also carries `org.yorvolabs.project=yorvogate`. It removes them before it starts and when it ends. So run it on a Docker you can spare: a test machine, or CI's runner.
 
 ## What it measures
 

@@ -89,11 +89,11 @@ direct image inspect "$buildkit" >/dev/null 2>&1 || direct pull -q "$buildkit" >
 DOCKER_CONFIG="$dir/orchestrator" docker context create quire --docker "host=unix://$dir/orchestrator.sock" >/dev/null
 
 say "== The orchestrator (trusted, on a unix socket)"
-works "network create (shared)" orchestrator network create ygq-edge
-works "network create (jane's link)" orchestrator network create ygq-link-jane
+works "network create (shared)" orchestrator network create --label "$yorvolabs_label" ygq-edge
+works "network create (jane's link)" orchestrator network create --label "$yorvolabs_label" ygq-link-jane
 works "network inspect" orchestrator network inspect ygq-edge
-works "network create (the database's own)" orchestrator network create ygq-db
-works "docker run (a database, on its own network)" orchestrator run -d --name ygq-db-jane --network ygq-db alpine:3.22 sleep 600
+works "network create (the database's own)" orchestrator network create --label "$yorvolabs_label" ygq-db
+works "docker run (a database, on its own network)" orchestrator run -d --label "$yorvolabs_label" --name ygq-db-jane --network ygq-db alpine:3.22 sleep 600
 works "exec into the database" orchestrator exec ygq-db-jane sh -c 'echo dump > /tmp/dump.sql'
 works "docker cp out of the database" orchestrator cp ygq-db-jane:/tmp/dump.sql "$dir/dump.sql"
 works "image tag" orchestrator image tag alpine:3.22 ygq-base:1
@@ -103,7 +103,8 @@ works "image inspect" orchestrator image inspect ygq-base:1
 # out of a hardened daemon's no-new-privileges (rootless BuildKit can't map its users under it)
 set -- --security-opt seccomp=unconfined --security-opt systempaths=unconfined --security-opt no-new-privileges=false
 [ -n "$apparmor" ] && set -- "$@" --security-opt "apparmor=$apparmor"
-works "docker run (jane's rootless builder)" orchestrator run -d --name ygq-buildkit-jane "$@" \
+orchestrator volume create --label "$yorvolabs_label" ygq-buildkit-jane-state >/dev/null
+works "docker run (jane's rootless builder)" orchestrator run -d --label "$yorvolabs_label" --name ygq-buildkit-jane "$@" \
 	-v ygq-buildkit-jane-state:/home/user/.local/share/buildkit "$buildkit"
 
 # jane's DOCKER_CONFIG: its "quire" context is its socket, current, and the builder's context
@@ -130,8 +131,9 @@ EOF
 cat > "$dir/jane/site/compose.yaml" <<'EOF'
 services:
   web:
-    build: .
+    build: {context: ., labels: [org.yorvolabs.project=yorvogate]}
     image: quire-sites/ygq-jane/web:1
+    labels: [org.yorvolabs.project=yorvogate]
     command: [sleep, "600"]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -144,10 +146,11 @@ services:
       ygq-link-jane: {}
     volumes: [data:/data]
 networks:
+  default: {labels: [org.yorvolabs.project=yorvogate]}
   ygq-edge: {external: true}
   ygq-link-jane: {external: true}
 volumes:
-  data:
+  data: {labels: [org.yorvolabs.project=yorvogate]}
 EOF
 jane="$dir/jane/site/compose.yaml"
 
@@ -188,9 +191,12 @@ refused "a shell in the builder" "only buildctl dial-stdio" as jane docker exec 
 say "== Sites nested in each other's names (jane, jane-blog)"
 mkdir -p "$dir/jane-blog/site"
 cat > "$dir/jane-blog/site/compose.yaml" <<'EOF'
+networks:
+  default: {labels: [org.yorvolabs.project=yorvogate]}
 services:
   app:
     image: alpine:3.22
+    labels: [org.yorvolabs.project=yorvogate]
     command: [sleep, "600"]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -223,6 +229,7 @@ cat > "$dir/jane_shop/site/compose.yaml" <<'EOF'
 services:
   web:
     image: alpine:3.22
+    labels: [org.yorvolabs.project=yorvogate]
     command: [sleep, "600"]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]

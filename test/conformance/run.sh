@@ -16,7 +16,7 @@ fi
 rm -rf test/conformance/out && mkdir -p test/conformance/out
 status=0
 for listener in tokens sockets mtls; do
-	docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR -e YGC_LISTENER=$listener \
+	docker run --rm --label org.yorvolabs.project=yorvogate -e GITHUB_ACTIONS -e YGC_APPARMOR -e YGC_LISTENER=$listener \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v "$PWD/bin:/yorvogate:ro" \
 		-v "$PWD/test/conformance:/conformance:ro" \
@@ -26,7 +26,7 @@ for listener in tokens sockets mtls; do
 done
 # Then Quire Server's real use: an orchestrator, sites on their own sockets, builds on rootless
 # BuildKit (YGC_APPARMOR: the host's AppArmor profile for it, where it has AppArmor)
-docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR \
+docker run --rm --label org.yorvolabs.project=yorvogate -e GITHUB_ACTIONS -e YGC_APPARMOR \
 	-v /var/run/docker.sock:/var/run/docker.sock \
 	-v "$PWD/bin:/yorvogate:ro" \
 	-v "$PWD/test/conformance:/conformance:ro" \
@@ -34,7 +34,7 @@ docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR \
 	docker:29.10.0-cli@sha256:34507eb5069d8be82c95dd3b6987d4250fd5fee49b82e2509b7d7a7030740d6d \
 	sh /conformance/quire.sh || status=1
 # Then a rootless build from docs/configuration.md alone: its listener, scope file and commands
-docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR \
+docker run --rm --label org.yorvolabs.project=yorvogate -e GITHUB_ACTIONS -e YGC_APPARMOR \
 	-v /var/run/docker.sock:/var/run/docker.sock \
 	-v "$PWD/bin:/yorvogate:ro" \
 	-v "$PWD/test/conformance:/conformance:ro" \
@@ -44,7 +44,8 @@ docker run --rm -e GITHUB_ACTIONS -e YGC_APPARMOR \
 	sh /conformance/docs.sh || status=1
 # Then an AI agent's socket, as docs/agents.md sets it up: the sockets' folder a volume, so an agent's
 # container can mount its one socket
-docker run --rm -e GITHUB_ACTIONS \
+docker volume create --label org.yorvolabs.project=yorvogate ygc-agents >/dev/null
+docker run --rm --label org.yorvolabs.project=yorvogate -e GITHUB_ACTIONS \
 	-v /var/run/docker.sock:/var/run/docker.sock \
 	-v ygc-agents:/agents \
 	-v "$PWD/bin:/yorvogate:ro" \
@@ -54,7 +55,7 @@ docker run --rm -e GITHUB_ACTIONS \
 	sh /conformance/agents.sh || status=1
 docker volume rm ygc-agents >/dev/null 2>&1
 # Then SandboxEscapeBench's gate-relevant escape scenarios, end to end through a scope socket
-docker run --rm -e GITHUB_ACTIONS \
+docker run --rm --label org.yorvolabs.project=yorvogate -e GITHUB_ACTIONS \
 	-v /var/run/docker.sock:/var/run/docker.sock \
 	-v "$PWD/bin:/yorvogate:ro" \
 	-v "$PWD/test/conformance:/conformance:ro" \

@@ -21,6 +21,11 @@ ko() {
 # shellcheck disable=SC2034 # used by the scripts that source this
 buildkit=moby/buildkit:v0.34.0-rootless@sha256:65eca3c01cd1180c8f64565c4e3c5983af5145818b0e6fa863385d099eb73855
 
+# What the suites make in Docker carries this label, so it can be found and removed by it (the
+# Compose projects and scopes have their own owner labels besides)
+# shellcheck disable=SC2034 # used by the scripts that source this
+yorvolabs_label=org.yorvolabs.project=yorvogate
+
 # The real Docker, straight (to set up and to check what exists)
 direct() { env -u DOCKER_HOST -u DOCKER_CONFIG docker "$@"; }
 

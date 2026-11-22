@@ -45,7 +45,7 @@ refused "a local volume binding the host root (the two-step)" "only local, witho
 
 say "== privileged: full host access"
 refused "a privileged container (--privileged)" "privileged containers" deny --privileged alpine:3.22 true
-works "a plain container of its own (the exec target)" jane run -d --name ygce-jane-web --label "$label=ygce-jane" --network none alpine:3.22 sleep 300
+works "a plain container of its own (the exec target)" jane run -d --name ygce-jane-web --label "$label=ygce-jane" --label "$yorvolabs_label" --network none alpine:3.22 sleep 300
 refused "a privileged exec into its own container" "a privileged exec" jane exec --privileged ygce-jane-web true
 
 say "== the capability scenarios: sys_admin, sys_module, dac_read_search, pid_namespace"
