@@ -306,27 +306,51 @@ func execSample(p path, _ int) (time.Duration, error) {
 // scope also sees the images in no protected namespace, such as alpine), so Docker builds its whole
 // list either way, and the difference is the gate's reading and filtering of it.
 func listImages(p path, _ int) (time.Duration, error) {
-	var n int
+	var listed []listedImage
 
 	took, err := timed(func() error {
 		answer, err := must(p.client, "GET", api+"/images/json", nil)
 		if err == nil {
-			var listed []json.RawMessage
 			err = json.Unmarshal(answer, &listed)
-			n = len(listed)
 		}
 
 		return err
 	})
 
-	// Direct, all of them; through the gate, the scope's 10, and its alpine where it has one
-	if err == nil && p.name == "direct" && n < hostImages {
-		err = fmt.Errorf("listed %d images, want the host's %d", n, hostImages)
-	} else if err == nil && p.name != "direct" && n != imagesPerScope && n != imagesPerScope+1 {
-		err = fmt.Errorf("listed %d images, want the scope's %d", n, imagesPerScope)
+	if err == nil && p.name == "direct" && len(listed) < hostImages {
+		err = fmt.Errorf("listed %d images, want the host's %d", len(listed), hostImages)
+	} else if err == nil && p.name != "direct" {
+		err = scopesImages(listed, p.owner)
 	}
 
 	return took, err
+}
+
+type listedImage struct{ RepoTags []string }
+
+// scopesImages checks a scope's image list: of the images under bench/, its own 10 (and its alpine,
+// where it has one), none of another's. The host's other images, in no protected namespace, are
+// listed too: on CI's runner the conformance suites leave some before the benchmark.
+func scopesImages(listed []listedImage, owner string) error {
+	own := 0
+
+	for _, image := range listed {
+		for _, tag := range image.RepoTags {
+			switch {
+			case !strings.HasPrefix(tag, "bench/"):
+			case !strings.HasPrefix(tag, "bench/"+owner+"/"):
+				return fmt.Errorf("listed %s, not the scope's", tag)
+			case strings.HasPrefix(tag, "bench/"+owner+"/image"):
+				own++
+			}
+		}
+	}
+
+	if own != imagesPerScope {
+		return fmt.Errorf("listed %d of the scope's images, want its %d", own, imagesPerScope)
+	}
+
+	return nil
 }
 
 // loadSample loads a 1 GiB image under the path's owner's name, and removes it after.

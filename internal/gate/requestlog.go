@@ -81,10 +81,10 @@ func sinceStart(ctx context.Context) time.Duration {
 // requestFields start a request's log line, and give its ID.
 func requestFields(r *http.Request) (string, []any) {
 	id := newRequestID()
-	fields := []any{"log_version", LogVersion, "request_id", id, "source", source(r), "method", r.Method, "path", cut(r.URL.EscapedPath(), 256)}
+	fields := []any{"log_version", LogVersion, "request_id", id, "source", source(r), "method", cut(r.Method, 256), "path", cut(r.URL.EscapedPath(), 256)}
 
 	if theirs := r.Header.Get(RequestIDHeader); clientRequestID.MatchString(theirs) {
-		fields = append(fields, "client_request_id", theirs)
+		fields = append(fields, "client_request_id", cut(theirs, 64))
 	}
 
 	return id, fields
