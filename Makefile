@@ -10,6 +10,9 @@ FUZZTIME ?= 30s
 EFFICACY ?= 90
 # The packages mutation testing covers (make mutation PACKAGES=./internal/gate)
 PACKAGES ?= ./internal/route ./internal/config ./internal/scope ./internal/gate ./cmd/yorvogate
+# The files mutation testing leaves out, a regexp of their paths, taken as written (CI splits the
+# gate's files across jobs this way)
+EXCLUDE ?=
 
 # The version a release's binaries say they are (make dist VERSION=1.2.3)
 VERSION ?= dev
@@ -71,7 +74,7 @@ mutation:
 	@fail=0; \
 	for p in $(PACKAGES); do \
 		floor=$(EFFICACY); \
-		out=$$(GOFLAGS=-count=1 go run $(GREMLINS) unleash --workers 1 --timeout-coefficient 10 $$p 2>&1); \
+		out=$$(GOFLAGS=-count=1 go run $(GREMLINS) unleash --workers 1 --timeout-coefficient 10 $(if $(value EXCLUDE),--exclude-files '$(value EXCLUDE)') $$p 2>&1); \
 		printf '%s\n' "$$out"; \
 		eff=$$(printf '%s\n' "$$out" | sed -n 's/.*[Tt]est efficacy: \([0-9.]*\)%.*/\1/p' | tail -1); \
 		if [ -z "$$eff" ]; then echo "mutation: $$p: no efficacy reported"; fail=1; continue; fi; \
