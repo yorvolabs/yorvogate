@@ -86,20 +86,14 @@ func TestAuthFailuresAreAnsweredAlikeAndLoggedApart(t *testing.T) {
 			t.Errorf("%s: %s", cause, answer)
 		}
 
-		// The log: this request's auth failed line, with its cause
+		// The log: this request's auth failed line, with its cause. It's written after the answer,
+		// so it may come a moment after the client has it.
 		id := res.Header.Get(RequestIDHeader)
-		var found map[string]any
-
-		for _, l := range lines.Lines() {
-			var line map[string]any
-			if json.Unmarshal([]byte(l), &line) == nil && line["msg"] == "auth failed" && line["request_id"] == id {
-				found = line
-			}
-		}
+		found := lines.waitFor(t, func(line map[string]any) bool {
+			return line["msg"] == "auth failed" && line["request_id"] == id
+		})
 
 		switch {
-		case found == nil:
-			t.Errorf("%s: no auth failed line for request %s", cause, id)
 		case found["auth_failure"] != cause:
 			t.Errorf("%s: logged %v", cause, found["auth_failure"])
 		case header["X-YorvoGate-Scope"] != "" && found["claimed_scope"] != header["X-YorvoGate-Scope"]:
