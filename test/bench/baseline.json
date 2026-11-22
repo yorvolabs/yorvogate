@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "from": [
+    "full run 2026-11-22T13:55:57Z on Intel(R) Xeon(R) 6975P-C (4 CPUs), Docker 29.10.0",
+    "full run 2026-11-22T15:19:24Z on AMD EPYC 7763 64-Core Processor (4 CPUs), Docker 29.10.0",
+    "full run 2026-11-22T15:20:22Z on INTEL(R) XEON(R) PLATINUM 8573C (4 CPUs), Docker 29.10.0"
+  ],
+  "latency": [
+    {
+      "request": "GET /_ping",
+      "listener": "socket",
+      "direct_p50_us": 169.213,
+      "gate_p50_us": 394.104,
+      "ratio": 2.268695878074125
+    },
+    {
+      "request": "GET /_ping",
+      "listener": "token",
+      "direct_p50_us": 169.213,
+      "gate_p50_us": 444.615,
+      "ratio": 2.6176047800484934
+    },
+    {
+      "request": "GET /containers/json",
+      "listener": "socket",
+      "direct_p50_us": 48456.442,
+      "gate_p50_us": 48933.221,
+      "ratio": 1.0098393315794831
+    },
+    {
+      "request": "GET /containers/json",
+      "listener": "token",
+      "direct_p50_us": 48456.442,
+      "gate_p50_us": 49080.084,
+      "ratio": 1.0128701566656504
+    },
+    {
+      "request": "GET /containers/{id}/json",
+      "listener": "socket",
+      "direct_p50_us": 259.456,
+      "gate_p50_us": 839.32,
+      "ratio": 3.234922298963986
+    },
+    {
+      "request": "GET /containers/{id}/json",
+      "listener": "token",
+      "direct_p50_us": 259.456,
+      "gate_p50_us": 901.508,
+      "ratio": 3.474608411445486
+    },
+    {
+      "request": "POST /containers/create",
+      "listener": "socket",
+      "direct_p50_us": 30895.577,
+      "gate_p50_us": 61346.662,
+      "ratio": 1.9856130863003463
+    },
+    {
+      "request": "POST /containers/create",
+      "listener": "token",
+      "direct_p50_us": 30895.577,
+      "gate_p50_us": 61481.015,
+      "ratio": 1.9899617022850875
+    },
+    {
+      "request": "POST /containers/{id}/start",
+      "listener": "socket",
+      "direct_p50_us": 108666.474,
+      "gate_p50_us": 110302.414,
+      "ratio": 1.0121835675438875
+    },
+    {
+      "request": "POST /containers/{id}/start",
+      "listener": "token",
+      "direct_p50_us": 108666.474,
+      "gate_p50_us": 110453.236,
+      "ratio": 1.0123645039835463
+    },
+    {
+      "request": "exec: create, start, read",
+      "listener": "socket",
+      "direct_p50_us": 49197.626,
+      "gate_p50_us": 51668.914,
+      "ratio": 1.0468242016477014
+    },
+    {
+      "request": "exec: create, start, read",
+      "listener": "token",
+      "direct_p50_us": 49197.626,
+      "gate_p50_us": 51941.808,
+      "ratio": 1.0557234476972648
+    },
+    {
+      "request": "POST /images/load (1 GiB)",
+      "listener": "socket",
+      "direct_p50_us": 7302954.302,
+      "gate_p50_us": 7546638.373,
+      "ratio": 1.1827053273192654
+    },
+    {
+      "request": "POST /images/load (1 GiB)",
+      "listener": "token",
+      "direct_p50_us": 7302954.302,
+      "gate_p50_us": 7713332.849,
+      "ratio": 1.208829600811056
+    },
+    {
+      "request": "GET /images/json",
+      "listener": "socket",
+      "direct_p50_us": 19594324.446,
+      "gate_p50_us": 19702639.53,
+      "ratio": 1.005527880499198
+    },
+    {
+      "request": "GET /images/json",
+      "listener": "token",
+      "direct_p50_us": 19594324.446,
+      "gate_p50_us": 19673543.133,
+      "ratio": 1.0059805098315158
+    }
+  ]
+}
