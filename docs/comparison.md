@@ -31,5 +31,5 @@ Each tool is described as its own README describes it, checked on 8 November 202
 
 ## What YorvoGate doesn't do (yet)
 
-- **Podman, Swarm, image signatures, rate limits and read redaction**, which CodesWhat's sockguard covers.
+- **Podman, Swarm, image signatures, rate limits and read redaction**, which CodesWhat's sockguard covers. YorvoGate bounds each scope's requests in flight, connections and image loads ([limits](configuration.md#limits)), not how many requests it sends over time.
 - **`docker build` on Docker's own builder.** A scope builds on a rootless BuildKit builder of its own ([builders](configuration.md#builders)).
