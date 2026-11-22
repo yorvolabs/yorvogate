@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Named cases: Docker 29.9.2's own reading of a request (recorded straight, past the gate) that a
+// Named cases: Docker 29.10.0's own reading of a request (recorded straight, past the gate) that a
 // gate reading differently would let through, and the gate's refusal of it. A moby bump that
 // changes one of these readings fails here by name.
 func TestDockersReadingsTheGateMustNotMiss(t *testing.T) {
@@ -14,7 +14,7 @@ func TestDockersReadingsTheGateMustNotMiss(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		req  request
-		// What Docker 29.9.2 does with it, as its code (mux, httputils, encoding/json) reads it
+		// What Docker 29.10.0 does with it, as its code (mux, httputils, encoding/json) reads it
 		docker kind
 	}{
 		// gorilla/mux matches the decoded path: Docker serves containers%2Fcreate as containers/create

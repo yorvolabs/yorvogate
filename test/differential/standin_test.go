@@ -20,7 +20,7 @@ import (
 // implement. Each reads the request as its moby handler does, with moby's own exported helpers
 // (httputils.ParseForm, RepoTagReference), up to the backend call, and records what that call would
 // be handed. Routed by moby's own mux and version middleware: this router is registered before
-// moby's, and mux takes the first route that matches. Lines are at moby 0367cbe (docker-v29.9.2).
+// moby's, and mux takes the first route that matches. Lines are at moby 06db173 (docker-v29.10.0).
 //
 //	container.prune  daemon/server/router/container/container_routes.go:1261-1276 postContainersPrune
 //	network.prune    daemon/server/router/network/network_routes.go:342-357       postNetworkPrune

@@ -64,14 +64,14 @@ jobs:
         run: docker compose -f compose.dev.yaml run --rm go make fuzz FUZZTIME=${{ github.event_name == 'schedule' && '10m' || '30s' }}
 
   conformance:
-    # The Docker Engine the suite runs against; its CLI, Compose (5.6.1) and buildx (0.38.1) come with
-    # the pinned docker:29.9.2-cli image run.sh uses.
+    # The Docker Engine the suite runs against; its CLI, Compose (5.7.1) and buildx (0.39.0) come with
+    # the pinned docker:29.10.0-cli image run.sh uses.
     uses: ./.github/workflows/conformance.yaml
     permissions:
       contents: read
     with:
-      docker_version: 29.9.2
-      docker_api: '1.56'
+      docker_version: 29.10.0
+      docker_api: '1.57'
       # The benchmark's baseline is of this Engine, on this runner: only this call runs it
       bench: true
 
@@ -172,8 +172,8 @@ jobs:
     env:
       # The Engine whose code the suite's recorder is (test/differential/go.mod pins moby at its
       # commit): the two move together
-      DOCKER_VERSION: 29.9.2
-      DOCKER_API: '1.56'
+      DOCKER_VERSION: 29.10.0
+      DOCKER_API: '1.57'
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

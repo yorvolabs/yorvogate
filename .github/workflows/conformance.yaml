@@ -9,11 +9,11 @@ on:
   workflow_call:
     inputs:
       docker_version:
-        description: The Docker Engine to install (29.9.2)
+        description: The Docker Engine to install (29.10.0)
         required: true
         type: string
       docker_api:
-        description: Its API version, checked when given (1.56)
+        description: Its API version, checked when given (1.57)
         required: false
         type: string
         default: ''

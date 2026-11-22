@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	github.com/docker/go-units v0.5.0
 	github.com/moby/docker-image-spec v1.3.1
-	github.com/moby/moby/api v1.56.1
+	github.com/moby/moby/api v1.57.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.yaml.in/yaml/v3 v3.0.6
 )

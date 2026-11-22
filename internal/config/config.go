@@ -23,7 +23,7 @@ import (
 )
 
 // Highest is the newest Docker API version this build understands (github.com/moby/moby/api's).
-var Highest = route.Version{Major: 1, Minor: 56}
+var Highest = route.Version{Major: 1, Minor: 57}
 
 // Lowest is the oldest it accepts: what Docker Engine 29 still serves.
 var Lowest = route.Version{Major: 1, Minor: 44}
@@ -758,8 +758,14 @@ func (l *Listener) SocketBound() bool {
 	return l.ScopeSockets != ""
 }
 
-// Allows tells whether a trusted listener allows an endpoint.
+// Allows tells whether a trusted listener allows an endpoint. _ping is allowed on every one, as on
+// scoped listeners: clients choose their API version from its answer (the gate's Api-Version), and
+// one refused falls back to its own newest, which an older Docker refuses.
 func (l *Listener) Allows(e *route.Endpoint) bool {
+	if e.Name == "system.ping" {
+		return true
+	}
+
 	access := l.Allow[string(e.Group)]
 
 	return access == "write" || (access == "read" && !e.Write)

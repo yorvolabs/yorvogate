@@ -189,7 +189,7 @@ func variants(b request, fetch string, attack bool) []variant {
 
 	// Versions: none, other spellings, outside what the gate serves
 	version, rest := splitVersion(path)
-	for _, v := range []string{"", "/v0" + version[2:], version + ".0", "/v1.43", "/v1.57", "/V" + version[2:], strings.Replace(version, ".", "..", 1)} {
+	for _, v := range []string{"", "/v0" + version[2:], version + ".0", "/v1.43", "/v1.58", "/V" + version[2:], strings.Replace(version, ".", "..", 1)} {
 		add("version", "["+v+"]", withTarget(b, join(v+rest, query)))
 	}
 

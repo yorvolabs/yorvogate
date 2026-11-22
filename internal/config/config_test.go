@@ -46,6 +46,15 @@ func TestAValidConfiguration(t *testing.T) {
 		t.Error("allow: write allows writes, read only reads, nothing else")
 	}
 
+	// _ping on every trusted listener, whatever its groups; the rest of system only with it
+	noSystem := &Listener{Mode: Trusted, Allow: map[string]string{"containers": "read"}}
+	ping := &route.Endpoint{Name: "system.ping", Group: route.System}
+	version := &route.Endpoint{Name: "system.version", Group: route.System}
+
+	if !noSystem.Allows(ping) || noSystem.Allows(version) {
+		t.Error("allow: _ping on a trusted listener without system, and nothing else of system")
+	}
+
 	for _, edge := range []string{"api: {min: '1.45', max: '1.50'}", "body_limit: 4096", "body_limit: 67108864", "load_limit: 1048576", "load_limit: 274877906944"} {
 		c, err := Parse([]byte(valid + edge + "\n"))
 		if err != nil {
@@ -129,7 +138,7 @@ func TestMistakesAreErrorsNotDefaults(t *testing.T) {
 		"a name with spaces":             strings.Replace(valid, "name: sites", "name: my sites", 1),
 		"an address without a port":      strings.Replace(valid, "tcp://127.0.0.1:2375", "tcp://127.0.0.1", 1),
 		"an http address":                strings.Replace(valid, "tcp://127.0.0.1:2375", "http://127.0.0.1:2375", 1),
-		"a version newer than known":     valid + "api: {max: '1.57'}\n",
+		"a version newer than known":     valid + "api: {max: '1.58'}\n",
 		"a version older than known":     valid + "api: {min: '1.40'}\n",
 		"min above max":                  valid + "api: {min: '1.50', max: '1.45'}\n",
 		"a version that isn't one":       valid + "api: {min: 'latest'}\n",

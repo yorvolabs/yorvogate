@@ -8,7 +8,7 @@ upstream: unix:///var/run/docker.sock   # Docker's socket (required)
 
 api:                                    # Docker API versions accepted (optional)
   min: "1.44"                           # the oldest; 1.44 is the lowest allowed
-  max: "1.56"                           # the newest; at most what this build knows
+  max: "1.57"                           # the newest; at most what this build knows
 
 body_limit: 1048576                     # the largest body read whole, in bytes (4096 to 64 MiB)
 load_limit: 8589934592                  # the largest image archive a scope loads (1 MiB to 256 GiB)
@@ -213,11 +213,11 @@ A pull's `platform` is checked: the host's, or one in [`pulls.platforms`](#pulls
 
 ## Endpoint groups (trusted listeners)
 
-`read` allows a group's endpoints that change nothing; `write` allows all of them.
+`read` allows a group's endpoints that change nothing; `write` allows all of them. `_ping` is allowed on every trusted listener, whatever its groups: clients choose their API version from its answer.
 
 | Group | Endpoints |
 |---|---|
-| `system` | `_ping`, `version`, `info`, `events`, `system/df`; `auth` (write) |
+| `system` | `version`, `info`, `events`, `system/df`; `auth` (write) |
 | `containers` | list, create, inspect, logs, stats, start, stop, kill, update, rename, attach, wait, delete, archive… |
 | `exec` | exec create, start, resize, inspect |
 | `images` | list, pull, inspect, history, tag, push, delete, save, load, search, prune, commit |
@@ -641,7 +641,7 @@ The optional `admin` listener answers an operator's monitoring, never Docker's A
 - **`/readyz`**: 200 when scoped requests can be served now, else 503, with each check and why not ([schema](../schemas/yorvogate-readiness.v1.schema.json)):
 
   ```
-  {"ready": false, "checks": {"docker": "ok", "defaults": "ok", "api_versions": "Docker serves API 1.57 to 1.60, YorvoGate 1.44 to 1.56: no version is both's", "scopes": "ok", "spool": "ok"}}
+  {"ready": false, "checks": {"docker": "ok", "defaults": "ok", "api_versions": "Docker serves API 1.58 to 1.61, YorvoGate 1.44 to 1.57: no version is both's", "scopes": "ok", "spool": "ok"}}
   ```
 
   The checks: Docker answers its `_ping` (asked at most once a second, whatever scrapes), its defaults are read and safe, its API versions overlap YorvoGate's, every scopes folder can be read, the spool's folder can be written, every listener of the configuration in effect is open (`listeners`: see [reloading](#reloading-the-configuration)). The answer also has `config_sha256`, the SHA-256 of the configuration file in effect (see [reloading](#reloading-the-configuration)), and `"draining": true` once YorvoGate is [stopping](#stopping), when it's never ready. Use it to route and to alert. **Never restart on it**: a Docker that's down, or whose defaults are unsafe, isn't fixed by restarting YorvoGate.

@@ -27,6 +27,8 @@ All notable changes to YorvoGate. The format follows [Keep a Changelog](https://
 
 ### Changed
 
+- **`_ping` is answered on every trusted listener,** whatever its groups, as on scoped listeners; it's no longer in the `system` group. Docker's clients choose their API version from its answer: on a listener without `system`, a client newer than the host's Docker fell back to its own newest version, which Docker refused.
+- **Docker API 1.57** (Docker Engine 29.10): YorvoGate serves API versions up to 1.57 (`api.max` defaults to it). The only change from 1.56 is the `Content-type` header of `POST /build` leaving Docker's spec; YorvoGate sets an archive's content type itself, so nothing it allows or refuses changes. CI's conformance runs against Docker Engine 29.10.0, with its CLI, Compose 5.7.1 and buildx 0.39.0.
 - **`SIGHUP` also rereads the configuration,** where it only rescanned the scope folders: a file edited but not meant to take effect yet takes effect at the next one. The scope folders are rescanned whatever the configuration's reload says.
 - **A stop waits `shutdown_grace` (8 s by default), not 30 s:** under the 10 seconds Docker and Compose give a container before they kill it. Set `stop_grace_period` above it to wait longer.
 - **When Docker doesn't answer, YorvoGate reads its defaults again before forwarding anything else.** Until it has, scoped requests are refused (503), and it tries about every second. Before, a Docker restarted with other defaults within the 60-second read was met with the old ones until the next read.

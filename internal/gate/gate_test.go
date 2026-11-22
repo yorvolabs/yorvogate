@@ -838,7 +838,7 @@ func TestMalformedRequestsNeverReachDocker(t *testing.T) {
 	d := startDocker(t)
 	server := gate(t, d, "server")
 
-	for _, path := range []string{"/containers/json", "/v1.57/containers/json", "/v1.56/containers/../json", "/v1.56/containers%2Fjson"} {
+	for _, path := range []string{"/containers/json", "/v1.58/containers/json", "/v1.56/containers/../json", "/v1.56/containers%2Fjson"} {
 		if status, answer := send(t, server, "GET", path, "", nil); status != http.StatusBadRequest {
 			t.Errorf("%s: %d %s", path, status, answer)
 		}

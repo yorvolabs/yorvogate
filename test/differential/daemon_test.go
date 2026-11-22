@@ -45,10 +45,10 @@ import (
 )
 
 // The Engine version the recorder's code is (go.mod pins moby at its commit), and the API versions
-// it serves, as Docker Engine 29.9.2 does.
+// it serves, as Docker Engine 29.10.0 does.
 const (
-	engineVersion = "29.9.2"
-	apiMax        = "1.56"
+	engineVersion = "29.10.0"
+	apiMax        = "1.57"
 	apiMin        = "1.44"
 )
 
@@ -706,7 +706,7 @@ func (v *volumes) Remove(ctx context.Context, name string, options ...opts.Remov
 	return nil
 }
 
-// systems is the system router's backend: Docker's info and version, as Docker 29.9.2 on Ubuntu
+// systems is the system router's backend: Docker's info and version, as Docker 29.10.0 on Ubuntu
 // 26.04 says them.
 type systems struct {
 	systemrouter.Backend

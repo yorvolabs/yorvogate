@@ -122,7 +122,7 @@ func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
 			// An answer YorvoGate doesn't pass on (too large): refused, saying so
 			var refused *refusal
 			if errors.As(err, &refused) {
-				log.Warn("Docker's answer not passed on", "method", r.Method, "path", r.URL.Path, "code", refused.code, "reason", refused.reason)
+				log.Warn("Docker's answer not passed on", "method", r.Method, "path", cut(r.URL.EscapedPath(), 256), "code", refused.code, "reason", refused.reason)
 				answerRefusal(w, refused)
 
 				return
@@ -136,7 +136,7 @@ func NewUpstream(c *config.Config, log *slog.Logger) *Upstream {
 				return
 			}
 
-			log.Error("Docker didn't answer", "method", r.Method, "path", r.URL.Path, "error", err)
+			log.Error("Docker didn't answer", "method", r.Method, "path", cut(r.URL.EscapedPath(), 256), "error", err)
 
 			if failed, ok := r.Context().Value(dockerFailedKey{}).(func(error)); ok {
 				failed(err)
