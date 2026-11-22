@@ -147,16 +147,30 @@ jobs:
       - name: No known flaw with a fix in it
         run: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock:ro aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb image --quiet --db-repository mirror.gcr.io/aquasec/trivy-db,ghcr.io/aquasecurity/trivy-db --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 yorvogate:ci
 
-  # One job per package, side by side: all five in one job outgrew an hour
+  # One job per package, side by side: all five in one job outgrew an hour. The gate's 900 mutants
+  # outgrew 90 minutes, so its files are split three ways by their first letter (about 300 each)
   mutation:
-    name: Mutation testing (${{ matrix.package }})
+    name: Mutation testing (${{ matrix.package }}${{ matrix.files && format(', files {0}', matrix.files) || '' }})
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-26.04
     timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        package: [internal/route, internal/config, internal/scope, internal/gate, cmd/yorvogate]
+        include:
+          - package: internal/route
+          - package: internal/config
+          - package: internal/scope
+          - package: internal/gate
+            files: a to d
+            exclude: '(^|/)[e-z][^/]*\.go$'
+          - package: internal/gate
+            files: e to l
+            exclude: '(^|/)[a-dm-z][^/]*\.go$'
+          - package: internal/gate
+            files: m to z
+            exclude: '(^|/)[a-l][^/]*\.go$'
+          - package: cmd/yorvogate
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -167,7 +181,9 @@ jobs:
           echo "HOST_UID=$(id -u)" >> "$GITHUB_ENV"
           echo "HOST_GID=$(id -g)" >> "$GITHUB_ENV"
       - name: Each package's tests kill at least 90% of their mutants
-        run: docker compose -f compose.dev.yaml run --rm go make mutation PACKAGES=./${{ matrix.package }}
+        env:
+          EXCLUDE: ${{ matrix.exclude }}
+        run: docker compose -f compose.dev.yaml run --rm -e EXCLUDE go make mutation PACKAGES=./${{ matrix.package }}
 
   differential-nightly:
     name: The differential suite against a real Docker

@@ -21,6 +21,7 @@ docker compose -f compose.dev.yaml run --rm go gofmt -w .
 docker compose -f compose.dev.yaml run --rm go make fuzz FUZZTIME=2m   # each fuzz target in turn
 docker compose -f compose.dev.yaml run --rm go make mutation           # each package's tests kill 90% of mutants
 docker compose -f compose.dev.yaml run --rm go make mutation PACKAGES=./internal/gate   # one package
+docker compose -f compose.dev.yaml run --rm go make mutation PACKAGES=./internal/gate EXCLUDE='(^|/)[e-z][^/]*\.go$'   # its files a to d
 docker compose -f compose.dev.yaml run --rm go make build && test/conformance/run.sh
 ```
 
