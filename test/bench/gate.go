@@ -17,7 +17,8 @@ import (
 	"time"
 )
 
-// The API version every request names: the newest YorvoGate serves.
+// The API version every request names: the one baseline.json was measured with, so a change to it
+// comes with a new baseline.
 const api = "/v1.56"
 
 // The owner label of every scope's objects, and of the host's that are no scope's.
