@@ -39,25 +39,50 @@ docker compose -f compose.dev.yaml run --rm go make build && test/conformance/ru
 - **The differential suite passing** (`make differential`, in `make check`): an endpoint a scope may send needs a base request in `test/differential/corpus_test.go`, and a rule that refuses needs an attack. The suite's first build compiles moby's daemon, which takes a few minutes, once. See `test/differential/README.md`.
 - **CodeQL's findings answered.** A pull request's CodeQL job fails on a finding at error severity: fix it. An alert that isn't a defect may be dismissed, but only with its reason written in the dismissal (why it can't happen, or what makes it safe), and never by the author of the pull request that raised it.
 
-## Branches, pull requests and releases
+## Before you open a pull request
 
-The same conventions hold across YorvoLabs' repositories.
+- Tests cover the change, and a fix has a test that fails without it.
+- `make check` passes in the development container.
+- Bodies are read with Docker's own types, unknown fields refused.
+- What YorvoGate allows, refuses or reads is documented in `docs/`.
+- Commits on a branch are free-form, since they're squashed away. `Co-authored-by` is the only trailer, for a human co-author.
 
-### Pull requests
+## Pull requests
 
-Pull requests are squashed: the title becomes the commit's subject on `main`, followed by `(#N)`, and the description its body.
+Pull requests are squashed: the title becomes the commit's subject on `main`, followed by `(#N)`, and the description becomes its body. Write both for the change as a whole, never by copying the branch's commit messages.
 
-- **The title** is one imperative sentence of at most 72 characters, without a final period, that says what the code does, e.g. "Bound image loads with a shared spool". No `feat:`-style prefixes: only Dependabot's `chore:` stays, so dependency updates can be filtered.
-- **Nothing internal in public text.** Titles, descriptions, commit messages, branch names, tag messages, release notes and the changelog say what the code changes and why, for a reader outside the project. They carry no internal plan or finding codes, no names of who decided, reviewed or approved what, and no paths outside the repository.
-- **The description** follows the [template](.github/pull_request_template.md): **Why**, **What changes** (as behavior, not files), **Tested** (what ran, and what didn't, with why), **Refs**: only what a reader can open (issues and pull requests, published advisories, RFCs, upstream docs), or left out.
-- A release's pull request is titled `Release X.Y.Z`, and the one that moves `main` on to the next minor `Start X.Y`.
-- **Commits on a branch** are free-form, since they're squashed away. `Co-authored-by` is the only trailer, for a human co-author.
+**The title** is `<Verb> <what changes>`:
+- It starts with an imperative verb, capitalized, e.g. Add, Fix, Refuse, Let, Make, Move, Remove, Rename, Read, Run, Show, Keep.
+- It names one change, as whoever uses it sees it. No colon, no semicolon and no list of several changes: if it needs a list, the title is the umbrella and the list goes under "What changes".
+- At most 72 characters, with no trailing period, no `feat:`-style prefix, no product name and no version. Only Dependabot's `chore:` stays, so dependency updates can be filtered.
+- A release's pull request is titled exactly `Release X.Y.Z` (or `Release X.Y.Z-rc.N`), and the one that moves `main` on to the next minor exactly `Start X.Y`.
 
-### Branches
+Good: "Refuse a release whose tag isn't signed". Not: "feat: release tags are checked", "Releases: signed tags, checksums and docs".
 
-- `<kind>/<slug>`, where the kind is `feat`, `fix`, `docs`, `chore`, `ci` or `security`, and the slug is lowercase with hyphens and describes the change: `feat/per-scope-limits`, `fix/image-list-size`.
-- A release is prepared on `chore/release-X.Y.Z`. `release/` is kept for maintenance branches (below).
-- **A fix of an embargoed vulnerability** is developed in the repository's private security advisory fork, never on a public branch. Until the advisory is published, its title, description and branch describe the change neutrally: no advisory ID, and no description of the exploit. The changelog's Security entry and the advisory ID are added at the release.
+**The description** has exactly these sections, in this order, and nothing before, between or after them (the template has them):
+- `## Why`: one to three sentences about the problem, for whoever uses it.
+- `## What changes`: one behavior per bullet. A breaking change is the first bullet, starting "Breaking:".
+- `## Tested`: what ran, then `NOT RUN: <what>, because <why>` for anything that didn't.
+- `## Refs`: public links only (issues, pull requests, published advisories, RFCs, upstream docs). Leave the section out when there are none.
+
+A release's pull request uses the same sections: "Why" is `Release X.Y.Z.`, and "What changes" has one bullet per changelog heading.
+
+**Nothing internal in public text.** Titles, descriptions, commit messages, branch names, tag messages, release notes and the changelog say what the code changes and why, for a reader outside the project. They carry no internal tracking codes or decision numbers, no names of who decided, reviewed or approved what, and no paths outside the repository.
+
+**Before you send it, check:**
+1. Does the title start with an imperative verb?
+2. Does the title name one change, with no colon or list?
+3. Is it 72 characters or fewer, with no prefix and no trailing period?
+4. Does the description have exactly Why, What changes, Tested and (when there are any) Refs, in that order, and nothing else?
+5. Is there nothing internal in either?
+
+If the branch gains commits after the pull request is opened, update the title and description so they still describe the whole change.
+
+**Branches** are `<kind>/<slug>`, where the kind is one of `feat`, `fix`, `docs`, `chore`, `ci` or `security`, and the slug is lowercase with hyphens and describes the change, with no internal code. A release is prepared on `chore/release-X.Y.Z`. `release/X.Y` is reserved for maintenance branches.
+
+**A fix of an embargoed vulnerability** is developed in the repository's private security advisory fork, never on a public branch. Until the advisory is published, its title, description and branch describe the change neutrally: no advisory ID, and no description of the exploit. The changelog's Security entry and the advisory ID are added at the release.
+
+## Releases
 
 ### Tags and versions
 
