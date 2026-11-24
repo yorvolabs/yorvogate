@@ -395,7 +395,7 @@ profile yorvogate-buildkit-rootless flags=(unconfined) {
 Each release carries it, in its `SHA256SUMS` (signed, as the [README](../README.md#installing) shows), so take the copy of the version you run:
 
 ```sh
-version=0.3.0
+version=0.4.0
 base=https://github.com/yorvolabs/yorvogate/releases/download/v$version
 curl -fsSLO "$base/yorvogate-buildkit-rootless" -O "$base/SHA256SUMS" -O "$base/SHA256SUMS.sigstore.json"
 # check SHA256SUMS's signature as the README shows, then:
